@@ -14,6 +14,7 @@ import {
   useWidgetPlacement,
   WidgetChrome,
 } from "./WidgetGrid";
+import { StackDots, useWidgetStack } from "./WidgetStack";
 
 /** A list row's height, one line or two, and what a card spends on its padding, label row and the gap under it. */
 export const ROW_HEIGHT = 24;
@@ -51,14 +52,16 @@ export function Card({
 }) {
   const placement = useWidgetPlacement();
   const editClass = useWidgetEditClass();
+  const stack = useWidgetStack();
   return (
     <section
       aria-label={label}
       data-widget={useWidgetId()}
       style={{ height: useCardHeight(), ...placement }}
       className={cx(
-        "rc-overview-card flex min-w-0 flex-col overflow-hidden rounded-xl bg-surface p-3 ring-inset",
+        "rc-overview-card relative flex min-w-0 flex-col overflow-hidden rounded-xl bg-surface p-3 ring-inset",
         editClass ?? "ring-1 ring-border",
+        stack?.turned && "rc-stack-turn",
       )}
     >
       <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
@@ -71,6 +74,7 @@ export function Card({
         </div>
         {children}
       </div>
+      <StackDots />
     </section>
   );
 }
@@ -171,4 +175,19 @@ export function CardRow({
 
 export function CardList({ children }: { children: ReactNode }) {
   return <div className="-mt-1 flex min-h-0 flex-1 flex-col">{children}</div>;
+}
+
+/** A small floating pill for what is happening now: a dot that pings, and how many. */
+export function LivePill({ count, title }: { count: number; title: string }) {
+  return (
+    <Tooltip label={title}>
+      <span className="flex h-[18px] shrink-0 items-center gap-1.5 rounded-full bg-accent/14 px-2 font-medium text-caption text-accent tabular">
+        <span className="relative flex size-1.5">
+          <span className="absolute inset-0 rounded-full bg-accent opacity-60 motion-safe:animate-ping" />
+          <span className="relative size-1.5 rounded-full bg-accent" />
+        </span>
+        {count} live
+      </span>
+    </Tooltip>
+  );
 }

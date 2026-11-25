@@ -4,6 +4,7 @@
  * added back from a gallery of the removed cards. The arrangement lives in `state/widgetLayout.ts`.
  */
 
+import { DropdownMenu } from "radix-ui";
 import {
   type CSSProperties,
   createContext,
@@ -31,6 +32,8 @@ import {
   resizeWidget,
   sameLayout,
   setWidgetLayout,
+  stackMembers,
+  stackWidget,
   useWidgetLayout,
   WIDGET_BLURBS,
   WIDGET_NAMES,
@@ -38,8 +41,9 @@ import {
   type WidgetId,
   type WidgetSlot,
 } from "../state/widgetLayout";
-import { GripVertical, Plus, RotateCcw, SlidersHorizontal, X } from "./icons";
-import { cx, Pill, Tooltip } from "./primitives";
+import { GripVertical, Layers, Plus, RotateCcw, SlidersHorizontal, X } from "./icons";
+import { cx, MenuContent, menuItem, menuLabel, Pill, Tooltip } from "./primitives";
+import { StackContext, type StackState } from "./WidgetStack";
 
 /** The grid's columns for its width: four on a wide window, two on a narrow one, one on a sliver. */
 export function columnsFor(width: number): number {
@@ -70,6 +74,8 @@ export function useWidgetsEditing(): boolean {
 
 interface Frame {
   slot: WidgetSlot;
+  /** The card the place shows now: its own, or one of its stack's. */
+  shown: WidgetId;
   columns: number;
   index: number;
   editing: boolean;
@@ -170,9 +176,11 @@ export function useWidgetEditClass(): string | undefined {
 export function WidgetChrome({ fallback }: { fallback?: ReactNode }) {
   const frame = useContext(FrameContext);
   if (!frame?.editing) return <>{fallback}</>;
-  const name = WIDGET_NAMES[frame.slot.id];
+  const name = WIDGET_NAMES[frame.shown];
+  const stacked = stackMembers(frame.slot).length > 1;
   return (
     <span className="flex shrink-0 items-center gap-0.5">
+      <StackMenu slot={frame.slot} name={name} />
       <Tooltip label="Change the size: wide, tall or both">
         <button
           type="button"
@@ -194,17 +202,96 @@ export function WidgetChrome({ fallback }: { fallback?: ReactNode }) {
           <GripVertical size={12} />
         </button>
       </Tooltip>
-      <Tooltip label="Remove from the overview">
+      <Tooltip label={stacked ? "Remove this card from the stack" : "Remove from the overview"}>
         <button
           type="button"
           aria-label={`Remove ${name}`}
-          onClick={() => setWidgetLayout(removeWidget(getWidgetLayout(), frame.slot.id))}
+          onClick={() => setWidgetLayout(removeWidget(getWidgetLayout(), frame.shown))}
           className="flex size-5 items-center justify-center rounded-sm text-fg-muted hover:bg-fill-subtle hover:text-danger"
         >
           <X size={12} />
         </button>
       </Tooltip>
     </span>
+  );
+}
+
+/** In edit mode, the control that stacks a removed card into this card's place, to take turns with it. */
+function StackMenu({ slot, name }: { slot: WidgetSlot; name: string }) {
+  const hidden = hiddenWidgets(getWidgetLayout());
+  if (!hidden.length) return null;
+  return (
+    <DropdownMenu.Root modal={false}>
+      <Tooltip label="Stack a card here: they take turns">
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label={`Stack a card with ${name}`}
+            className="flex size-5 items-center justify-center rounded-sm text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle"
+          >
+            <Layers size={12} />
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
+      <MenuContent align="end" className="w-[260px]">
+        <div className={menuLabel}>Stack with {name}</div>
+        {hidden.map((id) => (
+          <DropdownMenu.Item
+            key={id}
+            className={menuItem}
+            onSelect={() => setWidgetLayout(stackWidget(getWidgetLayout(), slot.id, id))}
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate">{WIDGET_NAMES[id]}</span>
+              <span className="truncate text-caption text-fg-muted">{WIDGET_BLURBS[id]}</span>
+            </span>
+          </DropdownMenu.Item>
+        ))}
+      </MenuContent>
+    </DropdownMenu.Root>
+  );
+}
+
+/**
+ * One place in the grid: a card, or a stack of cards that take turns. A stack turns to its next
+ * card when its indicator's countdown ends (`StackDots`), and holds still while the pointer or the
+ * focus is on it and in edit mode.
+ */
+function StackPlace({
+  slot,
+  editing,
+  children,
+}: {
+  slot: WidgetSlot;
+  editing: boolean;
+  children: (shown: WidgetId) => ReactNode;
+}) {
+  const members = stackMembers(slot);
+  const [picked, setPicked] = useState<{ at: number; turned: boolean }>({ at: 0, turned: false });
+  const [held, setHeld] = useState(false);
+  const at = picked.at % members.length;
+  const shown = members[at] ?? slot.id;
+  if (members.length < 2) return <>{children(shown)}</>;
+  const stack: StackState = {
+    members,
+    at,
+    turned: picked.turned,
+    paused: held || editing,
+    select: (index) => setPicked({ at: index, turned: true }),
+    advance: () => setPicked((was) => ({ at: (was.at + 1) % members.length, turned: true })),
+  };
+  return (
+    <div
+      className="contents"
+      onMouseOver={() => setHeld(true)}
+      onMouseLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false);
+      }}
+    >
+      <StackContext.Provider value={stack}>{children(shown)}</StackContext.Provider>
+    </div>
   );
 }
 
@@ -353,20 +440,25 @@ export function WidgetGrid({
         aria-label="Activity, usage and recent work"
       >
         {layout.map((slot, index) => (
-          <FrameContext.Provider
-            key={slot.id}
-            value={{
-              slot,
-              columns,
-              index,
-              editing: isEditing,
-              dragging: dragId === slot.id,
-              startDrag: startDrag(slot.id),
-              nudge: nudge(slot.id),
-            }}
-          >
-            {render(slot.id)}
-          </FrameContext.Provider>
+          <StackPlace key={slot.id} slot={slot} editing={isEditing}>
+            {(shown) => (
+              <FrameContext.Provider
+                key={shown}
+                value={{
+                  slot,
+                  shown,
+                  columns,
+                  index,
+                  editing: isEditing,
+                  dragging: dragId === slot.id,
+                  startDrag: startDrag(slot.id),
+                  nudge: nudge(slot.id),
+                }}
+              >
+                {render(shown)}
+              </FrameContext.Provider>
+            )}
+          </StackPlace>
         ))}
         {!isEditing && layout.length === 0 && (
           <div className="col-span-full flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">

@@ -6,7 +6,7 @@
  * and as many rows as its height holds.
  */
 
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import type { UsageRow } from "../acp/rustcode";
 import { count } from "../lib/plural";
 import { useInboxItems } from "../state/inboxRead";
@@ -26,7 +26,9 @@ import {
 } from "../state/widgets";
 import { Card, Nothing, useShownRows } from "./DashboardCard";
 import { ColumnsSkeleton, FigureTileSkeleton, SharesSkeleton, SplitSkeleton } from "./DashboardSkeletons";
+import { HarnessIcon } from "./HarnessIcon";
 import { Bot, CalendarDays, Layers, Sun } from "./icons";
+import { ModelIcon } from "./ModelIcon";
 import { cx, Tooltip } from "./primitives";
 import { shareShade, Tile, TrendPill } from "./StatisticsCharts";
 import { useCardHeight, useWidgetColumns } from "./WidgetGrid";
@@ -256,16 +258,21 @@ function ShareRow({
   part,
   value,
   shade,
+  mark,
 }: {
   name: string;
   part: number;
   value: string;
   shade: string;
+  mark?: ReactNode;
 }) {
   return (
     <div className="flex h-8 min-w-0 shrink-0 flex-col justify-center gap-1">
-      <div className="flex min-w-0 items-baseline justify-between gap-2 text-callout">
-        <span className="truncate text-fg">{name}</span>
+      <div className="flex min-w-0 items-center justify-between gap-2 text-callout">
+        <span className="flex min-w-0 items-center gap-1.5">
+          {mark}
+          <span className="truncate text-fg">{name}</span>
+        </span>
         <span className="shrink-0 text-caption text-fg-muted tabular">{value}</span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-fill-subtle">
@@ -318,6 +325,7 @@ export function ModelsCard({ month }: { month?: UsageRow[] }) {
                 <div>
                   <ShareRow
                     name={share.key}
+                    mark={<ModelIcon name={share.key} size={13} />}
                     part={share.part}
                     shade={shareShade(index)}
                     value={`${sharePercent(share.part)}${priced}`}
@@ -367,6 +375,7 @@ export function HarnessesCard({ month }: { month?: UsageRow[] }) {
             {shares.slice(0, legend).map((share, index) => (
               <li key={share.key} className="flex h-[18px] min-w-0 items-center gap-2 text-callout">
                 <span className="size-2 shrink-0 rounded-full" style={{ background: shareShade(index) }} />
+                <HarnessIcon id={share.key} name={names.get(share.key)} size={13} />
                 <span className="min-w-0 flex-1 truncate text-fg">{names.get(share.key) ?? share.key}</span>
                 <span className="shrink-0 text-caption text-fg-muted tabular">
                   {sharePercent(share.part)}

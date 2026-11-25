@@ -2,7 +2,7 @@
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
 import { isMcpApp, type McpApp, toolCallApp } from "../lib/mcpApp";
-import { modelTitle } from "../lib/modelNames";
+import { MODEL_ALIASES, modelTitle } from "../lib/modelNames";
 import { basename, shortenHome } from "../lib/paths";
 import { stripOutputFence } from "../lib/toolOutput";
 import { arr, bool, type Json, type JsonObject, num, obj, rustcodeMeta, str } from "./jsonrpc";
@@ -393,9 +393,9 @@ export function projectName(cwd: string): string {
   return cwd ? basename(plain) || cwd : "";
 }
 
-/** `provider/model` reads as just the model, and a Claude id or alias as `Opus 5.5`. */
+/** `provider/model` reads as just the model (an alias such as `deepseek/flash` first stands for its model), and a Claude id or alias as `Opus 5.5`. */
 export function modelName(model: string | undefined): string | undefined {
-  const name = model?.split("/").pop();
+  const name = (model && (MODEL_ALIASES[model.toLowerCase()] ?? model))?.split("/").pop();
   return name ? modelTitle(name) : name;
 }
 

@@ -1009,6 +1009,38 @@
 .rc-dash-still .rc-dash-bar {
   animation: none;
 }
+@keyframes rc-stack-turn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+@keyframes rc-stack-fade {
+  from {
+    opacity: 0;
+  }
+}
+.rc-overview-card.rc-stack-turn > .rc-overview-body {
+  animation: rc-stack-turn 320ms var(--ease-snappy);
+}
+@keyframes rc-stack-progress {
+  from {
+    height: 0;
+  }
+  to {
+    height: 100%;
+  }
+}
+.rc-stack-progress {
+  animation-name: rc-stack-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-overview-card.rc-stack-turn > .rc-overview-body {
+    animation: rc-stack-fade 200ms ease-out;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .rc-dash-bar {
     animation: none;
