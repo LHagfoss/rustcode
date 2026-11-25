@@ -36,18 +36,28 @@ installed or launched until the first approved action.
 
 Exact domain entries match only that host; `*.example.org` matches subdomains,
 not the apex. HTTP and HTTPS only; credentials in URLs are refused. Empty lists
-allow nothing. Redirects and page requests, including third-party resources,
-are intercepted using Chrome's [Fetch domain](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/)
-and checked against the current setting. Add resource hosts explicitly if a
-page needs them. This is a browser request policy, not an OS network sandbox.
+allow nothing. Every connection the browser makes, including page loads, third-party
+resources, WebSockets, workers and iframes, goes through a proxy RustCode runs
+on a loopback port for that browser (Chrome's `--proxy-server`, with the
+implicit localhost bypass removed). It opens a connection only to a host on the
+current list, so turning `enabled` off or removing a host takes effect on the
+next connection; a connection already open stays open. WebRTC is limited to
+proxied connections. The page target's requests are also checked by URL with
+Chrome's [Fetch domain](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/),
+which refuses other schemes and URLs with credentials. Add resource hosts
+explicitly if a page needs them. This is a browser request policy, not an OS
+network sandbox: hosts are matched by name, so a listed name that resolves to a
+private address is still reached.
 
 ## Isolation and limits
 
 Chrome runs headless with a separate random profile for each thread below
 `<config>/computer-use/`; it never attaches to an everyday browser. Browser
-state stays within that profile. Profiles are removed when the browser exits
-normally; crashes may leave a directory that can be deleted when RustCode is
-stopped. External harnesses receive a screenshot as an MCP image. On the
+state stays within that profile. A thread's browser closes after 10 minutes
+without a browser call, and when the thread is closed or deleted; the next call
+starts a fresh one with a new profile, so sign-ins do not carry over. Profiles
+are removed when the browser exits. A profile left behind by an engine that
+crashed or was killed is removed the next time any thread starts a browser. External harnesses receive a screenshot as an MCP image. On the
 built-in harness the tool result is a short note, and the image is saved with
 the thread's attachments and shown to the model after the tool batch, like a
 pasted image (a model without image input gets it described by the configured

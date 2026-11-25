@@ -25,6 +25,7 @@ import {
   setLocalIdentity,
   useMachines,
 } from "./machines";
+import { deliverPendingRevocations } from "./revokeEverywhere";
 import { connectionFor } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
 
@@ -268,6 +269,7 @@ async function syncOnce(): Promise<void> {
   const local = connectionFor(LOCAL_HOST);
   let view = await ask(local, {});
   if (!view) return;
+  await deliverPendingRevocations();
 
   // This computer's own rename goes to its engine first, so every peer below hears it.
   const step = reconcileLocalName(useMachines.getState().local, view);

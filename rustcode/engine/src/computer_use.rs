@@ -1,4 +1,5 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
+mod proxy;
 use crate::orchestration::{
     ask_user::Asker,
     tool_socket::{CallAnswer, CallRequest},
@@ -53,9 +54,11 @@ impl Settings {
         {
             return false;
         }
-        let Some(host) = url.host_str() else {
-            return false;
-        };
+        url.host_str().is_some_and(|host| self.allows_host(host))
+    }
+    /// Whether a host (any case) matches an allowlist entry.
+    fn allows_host(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
         self.allowed_domains.iter().any(|entry| {
             let entry = entry.to_ascii_lowercase();
             if let Some(base) = entry.strip_prefix("*.") {
@@ -66,6 +69,26 @@ impl Settings {
         })
     }
 }
+/// The settings, read again only when `config.toml` changes, for checks that
+/// run on every request the browser makes.
+fn current_settings() -> Settings {
+    type Cached = Option<(Option<(std::time::SystemTime, u64)>, Settings)>;
+    static CACHE: Mutex<Cached> = Mutex::new(None);
+    let stamp = crate::config::get_config_dir()
+        .and_then(|dir| std::fs::metadata(dir.join("config.toml")).ok())
+        .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, settings)) = cache.as_ref()
+        && stamp.is_some()
+        && *cached == stamp
+    {
+        return settings.clone();
+    }
+    let settings = Settings::load();
+    *cache = Some((stamp, settings.clone()));
+    settings
+}
+
 pub(crate) fn settings_value() -> Value {
     let settings = Settings::load();
     json!({"enabled": settings.enabled, "allowed_domains": settings.allowed_domains,
@@ -153,9 +176,20 @@ pub fn tools(settings: &Settings) -> Vec<Value> {
 }
 
 type Job = (String, Value, oneshot::Sender<Result<Value, String>>);
+/// A thread's browser closes after this long without a browser call.
+const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// The engine process that owns a profile, written into the profile.
+const OWNER_FILE: &str = "rustcode-owner";
+/// A profile with no owner file is left to a starting browser for this long.
+const UNOWNED_GRACE: Duration = Duration::from_secs(60 * 60);
 struct Browser {
     sender: mpsc::Sender<Job>,
     stop: tokio_util::sync::CancellationToken,
+}
+impl Browser {
+    fn stopped(&self) -> bool {
+        self.sender.is_closed()
+    }
 }
 impl Drop for Browser {
     fn drop(&mut self) {
@@ -245,10 +279,12 @@ pub(crate) fn executable(settings: &Settings) -> Option<PathBuf> {
 async fn start(settings: &Settings) -> Result<Browser, String> {
     let executable =
         executable(settings).ok_or("Chrome/Chromium not found; set computer_use.executable")?;
-    let profile = crate::config::get_config_dir()
+    let root = crate::config::get_config_dir()
         .ok_or("No config directory")?
-        .join("computer-use")
-        .join(format!("profile-{:032x}", rand::random::<u128>()));
+        .join("computer-use");
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| sweep_stale_profiles(&root, owner_alive));
+    let profile = root.join(format!("profile-{:032x}", rand::random::<u128>()));
     std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -256,6 +292,17 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    std::fs::write(profile.join(OWNER_FILE), std::process::id().to_string())
+        .map_err(|e| e.to_string())?;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_on_failure = stop.clone().drop_guard();
+    let allow: proxy::Allow = Arc::new(|host: &str| {
+        let settings = current_settings();
+        settings.enabled && settings.allows_host(host)
+    });
+    let proxy_port = proxy::bind(allow, stop.clone())
+        .await
+        .map_err(|e| format!("Could not start the browser's proxy: {e}"))?;
     let child = Command::new(executable)
         .args([
             "--headless=new",
@@ -265,7 +312,10 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
             "--disable-extensions",
             "--disable-background-networking",
             "--block-new-web-contents",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         ])
+        .arg(format!("--proxy-server=http://127.0.0.1:{proxy_port}"))
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank")
         .stdin(std::process::Stdio::null())
@@ -314,7 +364,6 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         .await
         .map_err(|e| e.to_string())?;
     let (sender, mut jobs) = mpsc::channel::<Job>(1);
-    let stop = tokio_util::sync::CancellationToken::new();
     let stopped = stop.clone();
     tokio::spawn(async move {
         let mut chrome = chrome;
@@ -328,6 +377,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         }
         let _ = cdp
             .command(
+                "Network.enable",
+                json!({"maxTotalBufferSize":0,"maxResourceBufferSize":0}),
+            )
+            .await;
+        let _ = cdp
+            .command(
                 "Network.setBlockedURLs",
                 json!({"urls":["file:*","ftp:*","data:*"]}),
             )
@@ -335,9 +390,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = cdp
             .command("Page.setDownloadBehavior", json!({"behavior":"deny"}))
             .await;
+        let idle = tokio::time::sleep(IDLE_LIMIT);
+        tokio::pin!(idle);
         loop {
             tokio::select! {
                 _ = stopped.cancelled() => break,
+                _ = &mut idle => break,
                 message = cdp.ws.next() => {
                     match message { Some(Ok(Message::Text(body))) => { if let Ok(event) = serde_json::from_str::<Value>(&body) { if cdp.intercept(&event).await.is_err() { break } } }, Some(Ok(_)) => {}, _ => break }
                 },
@@ -347,6 +405,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
                         _ = stopped.cancelled() => break,
                         result = tokio::time::timeout(Duration::from_secs(40), cdp.action(&tool, &args)) => result.unwrap_or_else(|_| Err("CDP timed out".into())),
                     };
+                    idle.as_mut().reset(tokio::time::Instant::now() + IDLE_LIMIT);
                     let failed = result.is_err(); let _ = answer.send(result); if failed { break }
                 }
             }
@@ -355,6 +414,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = chrome.child.wait().await;
         let _ = std::fs::remove_dir_all(&chrome.profile);
     });
+    let _ = stop_on_failure.disarm();
     Ok(Browser { sender, stop })
 }
 struct Cdp {
@@ -376,7 +436,7 @@ impl Cdp {
     }
     async fn intercept(&mut self, event: &Value) -> Result<(), String> {
         if event["method"] == "Fetch.requestPaused" {
-            let allowed = Settings::load();
+            let allowed = current_settings();
             let allowed = allowed.enabled
                 && allowed.allows(event["params"]["request"]["url"].as_str().unwrap_or(""));
             let mut params = json!({"requestId":event["params"]["requestId"]});
@@ -427,7 +487,7 @@ impl Cdp {
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
-            if !Settings::load().allows(url) {
+            if !current_settings().allows(url) {
                 return Err("URL refused".into());
             }
             let response = self.command("Page.navigate", json!({"url":url})).await?;
@@ -437,7 +497,7 @@ impl Cdp {
             return Ok(response);
         }
         let location = self.evaluate("location.href".into()).await?;
-        if !Settings::load().allows(location.as_str().unwrap_or("")) {
+        if !current_settings().allows(location.as_str().unwrap_or("")) {
             return Err("Current page is outside the allowlist; open an allowed URL".into());
         }
         match tool {
@@ -542,6 +602,9 @@ pub async fn run_approved(
         .or_default()
         .clone();
     let mut browser = slot.lock().await;
+    if browser.as_ref().is_some_and(Browser::stopped) {
+        *browser = None;
+    }
     if browser.is_none() {
         *browser = Some(tokio::select! {
             _ = cancel.cancelled() => return Err("Cancelled".into()),
@@ -564,6 +627,105 @@ pub async fn run_approved(
         *browser = None;
     }
     result.map(|value| value.to_string())
+}
+
+fn owner_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        i32::try_from(pid).is_ok_and(crate::orchestration::tool_socket::process_alive)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Remove browser profiles left by an engine that is no longer running, such
+/// as after a crash or a forced quit, when `Chrome`'s cleanup never ran.
+fn sweep_stale_profiles(root: &std::path::Path, alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with("profile-") || !path.is_dir() {
+            continue;
+        }
+        let owner = std::fs::read_to_string(path.join(OWNER_FILE))
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        let stale = match owner {
+            Some(pid) => pid != std::process::id() && !alive(pid),
+            None => entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > UNOWNED_GRACE),
+        };
+        if stale {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{Browser, OWNER_FILE, sweep_stale_profiles};
+
+    #[test]
+    fn sweep_removes_only_profiles_of_engines_that_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = |name: &str, owner: Option<String>| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            if let Some(owner) = owner {
+                std::fs::write(path.join(OWNER_FILE), owner).unwrap();
+            }
+            path
+        };
+        let dead = profile("profile-dead", Some("7".into()));
+        let live = profile("profile-live", Some("42".into()));
+        let own = profile("profile-own", Some(std::process::id().to_string()));
+        let starting = profile("profile-starting", None);
+        let other = profile("notes", Some("7".into()));
+        sweep_stale_profiles(root.path(), |pid| pid == 42);
+        assert!(!dead.exists());
+        assert!(live.exists());
+        assert!(own.exists());
+        assert!(
+            starting.exists(),
+            "a fresh profile without an owner may be starting"
+        );
+        assert!(other.exists(), "only profile directories are touched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_removes_old_profiles_without_an_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("profile-old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+        sweep_stale_profiles(root.path(), |_| true);
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn a_stopped_browser_is_replaced_on_the_next_call() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let browser = Browser {
+            sender,
+            stop: tokio_util::sync::CancellationToken::new(),
+        };
+        assert!(!browser.stopped());
+        drop(receiver);
+        assert!(browser.stopped());
+    }
 }
 
 /// Turn a native `browser_screenshot` result into a short text result and
