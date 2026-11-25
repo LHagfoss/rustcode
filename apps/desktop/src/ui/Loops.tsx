@@ -39,7 +39,7 @@ import { askConfirm, errorText, loadMachineHarnesses, toast, useApp } from "../s
 import { LOCAL_HOST } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
 import { CheckCheck, Plus, Repeat } from "./icons";
-import { JobCard, listening } from "./JobCard";
+import { JobCard, JobCardsSkeleton, listening } from "./JobCard";
 import { JobDetails } from "./JobDetails";
 import { JobReview } from "./JobReview";
 import { showJob } from "./JobRunBar";
@@ -410,7 +410,11 @@ export function Loops() {
             </div>
           )}
           {!byHost ? (
-            <Loading error={error} onRetry={() => void reload()} />
+            error ? (
+              <Loading error={error} onRetry={() => void reload()} />
+            ) : (
+              <JobCardsSkeleton />
+            )
           ) : scopeOffline && scopeMachine ? (
             <Callout tone="warning">
               {machineName(scopeMachine)} is offline. Connect to it to view or edit its jobs.

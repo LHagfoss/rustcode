@@ -44,6 +44,7 @@ import {
   menuItemDanger,
   menuSeparator,
   Pill,
+  Skeleton,
   Spinner,
   Tooltip,
 } from "./primitives";
@@ -354,5 +355,37 @@ export function JobCard({
         </div>
       </div>
     </li>
+  );
+}
+
+/** Where the job cards will be while the first list loads: the grid of cards, each shaped like one. */
+export function JobCardsSkeleton() {
+  return (
+    <ul
+      role="status"
+      aria-label="Loading"
+      className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-3"
+    >
+      {[58, 72, 46, 64, 52, 68].map((w, i) => (
+        <li key={i} aria-hidden className="flex min-w-0 flex-col gap-2 rounded-xl bg-surface p-4">
+          <Skeleton className="h-4" style={{ width: `${w}%` }} />
+          <Skeleton className="h-2.5 w-28" />
+          <div className="flex flex-col gap-1.5 pt-1.5">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3" style={{ width: `${w + 10}%` }} />
+          </div>
+          <div className="mt-2 flex flex-col gap-2 border-t border-border pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <Skeleton className="h-2.5 w-24" />
+              <Skeleton className="h-2.5 w-14" />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <Skeleton className="h-2.5 w-32" />
+              <Skeleton className="h-2.5 w-10" />
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
