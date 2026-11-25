@@ -1,7 +1,7 @@
 /**
  * Settings › Machines › Map: the machines and how this computer reaches each one, drawn as a graph
- * (`ui/machinesMapLayout.ts` builds and lays it out). Selecting a node shows that machine's list row
- * under the map, with the same actions the list has.
+ * (`ui/machinesMapLayout.ts` builds and lays it out). Pressing a node calls `onSelect`: the page opens
+ * a paired machine's settings, and shows a machine only seen by another as its list row under the map.
  */
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
