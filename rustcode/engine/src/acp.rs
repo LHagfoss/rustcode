@@ -945,6 +945,7 @@ impl AcpEngine {
         crate::data_store::warm();
         // Links an earlier engine was running when it died are not running now.
         tokio::task::spawn_blocking(crate::data_store::interrupt_orphaned_links);
+        tokio::task::spawn_blocking(crate::harness::process::orphans::reap);
         let server = AcpServer::new(auto_approve)?;
         // Apps connected through `rc mcp-connect` find this engine by its
         // hub, so it listens from the start when any are connected.

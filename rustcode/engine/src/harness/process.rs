@@ -9,6 +9,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
+#[cfg(windows)]
+#[path = "job.rs"]
+mod job;
+#[path = "orphans.rs"]
+pub(crate) mod orphans;
+
 /// Process groups of running harnesses, killed when the engine stops.
 fn live_groups() -> &'static Mutex<HashSet<i32>> {
     static GROUPS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
@@ -18,6 +24,8 @@ fn live_groups() -> &'static Mutex<HashSet<i32>> {
 pub(crate) struct HarnessProcess {
     child: Mutex<Option<Child>>,
     group: Option<i32>,
+    #[cfg(windows)]
+    job: Option<job::Job>,
     /// The child's last stderr lines, so a harness that exits before the ACP
     /// handshake says why (`Unknown interactive flag: --acp`).
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
@@ -50,12 +58,17 @@ impl HarnessProcess {
 
     /// Kill the harness and its process group now.
     pub(crate) fn kill(&self) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
         if let Some(group) = self.group {
             kill_group(group);
             live_groups()
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .remove(&group);
+            forget_group(group);
         }
         let child = self
             .child
@@ -100,7 +113,35 @@ pub(crate) fn kill_all() {
     );
     for group in groups {
         kill_group(group);
+        forget_group(group);
     }
+}
+
+fn forget_group(group: i32) {
+    if let Some(dir) = orphans::directory() {
+        orphans::forget(&dir, group);
+    }
+}
+
+/// Note `group` so an engine started after this one dies can end it ([`orphans`]).
+fn remember_group(group: i32, harness_id: &str, thread: Option<&str>) {
+    let Some(dir) = orphans::directory() else {
+        return;
+    };
+    #[cfg(unix)]
+    let started = orphans::started(group as u32);
+    #[cfg(not(unix))]
+    let started = None;
+    orphans::remember(
+        &dir,
+        group,
+        &orphans::Record {
+            engine_pid: std::process::id(),
+            harness: harness_id.to_owned(),
+            thread: thread.map(str::to_owned),
+            started,
+        },
+    );
 }
 
 /// The message a thread shows when its harness cannot start.
@@ -246,6 +287,7 @@ pub(crate) fn spawn_with(
     let stdout = child.stdout.take().ok_or("harness stdout unavailable")?;
     let stdin = child.stdin.take().ok_or("harness stdin unavailable")?;
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
+    let thread = log_session.clone();
     if let Some(stderr) = child.stderr.take() {
         let harness_id = harness_id.to_owned();
         let tail = Arc::clone(&stderr_tail);
@@ -269,17 +311,24 @@ pub(crate) fn spawn_with(
             }
         });
     }
+    #[cfg(windows)]
+    let job = child
+        .raw_handle()
+        .and_then(|handle| job::Job::holding(handle as windows_sys::Win32::Foundation::HANDLE));
     let group = child.id().map(|pid| pid as i32);
     if let Some(group) = group {
         live_groups()
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(group);
+        remember_group(group, harness_id, thread.as_deref());
     }
     Ok((
         HarnessProcess {
             child: Mutex::new(Some(child)),
             group,
+            #[cfg(windows)]
+            job,
             stderr_tail,
         },
         stdout,
