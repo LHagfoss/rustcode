@@ -105,6 +105,7 @@ import {
   threadCreatedAt,
   topLevel,
 } from "../state/topLevel";
+import { showsPage } from "../state/viewActions";
 import { useWaitingIds } from "../state/waiting";
 import { CustomSnooze } from "./CustomSnooze";
 import { Fold } from "./Fold";
@@ -317,7 +318,7 @@ export function Sidebar() {
   // Loading until this computer's list is in; a restart keeps the rows it already shows.
   const listing = useApp((s) => !sessionsListed(s.engine) && !s.sessions.length);
   const selectedId = useApp((s) => s.selectedId);
-  const loopsOpen = useApp((s) => s.view.kind === "loops");
+  const pageOpen = useApp((s) => showsPage(s.view));
   // Which threads need you or work, as a string so a streamed chunk does not change it.
   const flags = useApp((s) =>
     Object.values(s.threads)
@@ -1152,8 +1153,8 @@ export function Sidebar() {
   const rowFor = (s: SessionSummary, hint = true, nested = false) => (
     <ThreadRow
       session={s}
-      selected={!loopsOpen && s.id === selectedId}
-      context={!loopsOpen && s.id === contextSelected && s.id !== selectedId}
+      selected={!pageOpen && s.id === selectedId}
+      context={!pageOpen && s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
       dragging={drag.draggedId === s.id}
       pull={pullOf(s)}
@@ -1191,7 +1192,7 @@ export function Sidebar() {
           {pendingById[s.id] ? (
             <PendingRow
               pending={pendingById[s.id]!}
-              selected={!loopsOpen && !selectedId && pending?.id === s.id}
+              selected={!pageOpen && !selectedId && pending?.id === s.id}
               navActive={s.id === currentId}
               compact={compact}
             />

@@ -49,20 +49,15 @@ function NavRow({
 export function SidebarToolbar() {
   const projectCwd = useApp((s) => s.projectCwd);
   const view = useApp((s) => s.view.kind);
+  const composing = useApp((s) => s.view.kind === "chat" && !s.selectedId && !s.pendingSetup && !s.settings);
   const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
   const filtering = onlyProject && !!projectCwd;
   return (
     <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
       <nav aria-label="Sidebar" className="flex flex-col gap-0.5 pb-1">
-        <button
-          type="button"
-          aria-label="New thread"
-          className={NAV_ROW}
-          onClick={() => startNewThreadFromContext()}
-        >
+        <NavRow label="New thread" current={composing} onClick={() => startNewThreadFromContext()}>
           <SquarePen size={14} />
-          <span className="flex-1 text-left">New thread</span>
-        </button>
+        </NavRow>
         <NavRow
           label="Dashboard"
           current={view === "dashboard"}
