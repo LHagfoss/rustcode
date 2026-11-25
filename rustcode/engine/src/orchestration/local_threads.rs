@@ -1210,6 +1210,7 @@ fn deliver(engine: Engine, session_id: String, text: String, link: Option<String
             return;
         };
         settle(&link, &session_id, outcome);
+        super::local_wake::link_settled(&link);
     });
 }
 
@@ -1230,32 +1231,39 @@ pub(super) async fn merge_notice(caller: &str, number: u64, result: Value) {
         .or_else(|| result.pointer("/error/message").and_then(Value::as_str))
         .unwrap_or("Merge finished");
     let text = format!("Pull request #{number}: {summary}\n\n{result}\n\n<!-- rustcode:pull -->");
-    // The engine waits, not the model. Never interrupt the turn that requested it.
-    while crate::thread_status::is_active(caller) {
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    let delivered = async {
-        let engine = Engine::open(access_of(caller))
-            .await
-            .map_err(|why| why.to_string())?;
-        let meta = crate::sessions::session_meta_by_id(caller).ok_or("thread no longer exists")?;
-        let cwd = meta
-            .workspace_cwd
-            .clone()
-            .unwrap_or_else(|| project_of(caller, &meta).into());
-        engine
-            .request(
-                LoadSessionRequest::new(caller.to_owned(), cwd),
-                LOAD_TIMEOUT,
-            )
-            .await?;
-        engine.prompt(caller, &text).await?;
-        Ok::<(), String>(())
-    }
-    .await;
-    if let Err(why) = delivered {
+    if let Err(why) = deliver_notice(caller, &text).await {
         crate::dbg_log!("merge outcome for {caller} could not be delivered: {why}; {result}");
     }
+}
+
+/// Run `text` as `thread`'s next turn once its current turn ends: the engine
+/// waits, not the model, and never interrupts the turn that is running.
+pub(super) async fn deliver_notice(thread: &str, text: &str) -> Result<(), String> {
+    while crate::thread_status::is_active(thread) {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let engine = Engine::open(access_of(thread))
+        .await
+        .map_err(|why| why.to_string())?;
+    let meta = crate::sessions::session_meta_by_id(thread).ok_or("thread no longer exists")?;
+    let cwd = meta
+        .workspace_cwd
+        .clone()
+        .unwrap_or_else(|| project_of(thread, &meta).into());
+    engine
+        .request(
+            LoadSessionRequest::new(thread.to_owned(), cwd),
+            LOAD_TIMEOUT,
+        )
+        .await?;
+    engine.prompt(thread, text).await?;
+    Ok(())
+}
+
+/// Whether a wake may run as a turn of `thread` with no app: not at Ask
+/// access, where nobody could approve what the turn asks.
+pub(super) fn wakes_without_app(thread: &str) -> bool {
+    access_of(thread) != Access::Ask
 }
 
 /// What a turn's end writes into its link.

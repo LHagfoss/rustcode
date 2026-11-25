@@ -353,12 +353,11 @@ fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: 
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(&id);
-        if store
-            .load(&id)
-            .is_some_and(|record| record.status.settled())
-            && let Some(index) = driver::index()
-        {
-            driver::unmark(&index, &id);
+        if let Some(record) = store.load(&id).filter(|record| record.status.settled()) {
+            if let Some(index) = driver::index() {
+                driver::unmark(&index, &id);
+            }
+            crate::orchestration::local_wake::run_ended(&record.thread, &id);
         }
     });
 }
