@@ -79,6 +79,10 @@ pub(crate) struct LoopsSaveRequest {
     /// editor only, never by an agent's `create_loop`.
     #[serde(default)]
     pub webhook: bool,
+    /// The webhook events the Loop takes (#4386); empty takes every one. Set
+    /// from the app's editor only.
+    #[serde(default)]
+    pub webhook_events: Vec<String>,
     /// Replace the webhook's secret, so the old URL stops working.
     #[serde(default)]
     pub rotate_webhook: bool,
@@ -206,6 +210,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         thread_id,
         script,
         webhook,
+        webhook_events,
         machine,
     } = &job.action
     else {
@@ -227,6 +232,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "threadId": thread_id,
         "script": script,
         "webhook": webhook.is_some(),
+        "webhookEvents": webhook_events,
         "machine": machine,
         // A Loop run only by hand or by its webhook is never due.
         "nextDueAt": (!manual).then_some(job.next_due_at),
@@ -405,6 +411,11 @@ pub(crate) fn job_from(
     if name.is_empty() {
         return Err("a loop needs a name".to_owned());
     }
+    let webhook_events = if webhook.is_some() {
+        crate::daemon::webhook::clean_events(&request.webhook_events)?
+    } else {
+        Vec::new()
+    };
     let machine = trimmed(request.machine);
     let script = request
         .script
@@ -443,6 +454,7 @@ pub(crate) fn job_from(
         thread_id: trimmed(request.thread_id),
         script,
         webhook,
+        webhook_events,
         machine,
     };
     let schedule_json =
@@ -559,13 +571,22 @@ async fn webhook_urls(id: &str, secret: &str) -> Value {
 }
 
 /// A call to a Loop's webhook (`POST /hooks/<id>/<secret>`): start a run
-/// whose prompt carries `body`. Answers an HTTP status and its JSON. An
-/// unknown Loop, a Loop without a webhook and a wrong secret all answer 404,
-/// so a caller cannot tell which Loops exist. A `ping` (GitHub sends one when
-/// a webhook is added) checks the secret and answers 200 without a run.
-pub(crate) async fn trigger(id: &str, secret: &str, body: &[u8], ping: bool) -> (u16, Value) {
+/// whose prompt carries `body`, with the `event` and `delivery` the request
+/// headers named (#4386). Answers an HTTP status and its JSON. An unknown
+/// Loop, a Loop without a webhook and a wrong secret all answer 404, so a
+/// caller cannot tell which Loops exist. A `ping` (GitHub sends one when a
+/// webhook is added) checks the secret and answers 200 without a run. A
+/// delivery whose event the Loop does not take answers 202 `ignored`, and one
+/// the Loop already ran from answers 200 `duplicate`; neither starts a run.
+pub(crate) async fn trigger(
+    id: &str,
+    secret: &str,
+    body: &[u8],
+    event: Option<&str>,
+    delivery: Option<&str>,
+) -> (u16, Value) {
     match client() {
-        Ok(client) => trigger_with(&client, id, secret, body, ping).await,
+        Ok(client) => trigger_with(&client, id, secret, body, event, delivery).await,
         Err(_) => (503, json!({ "error": "scheduler_off" })),
     }
 }
@@ -575,7 +596,8 @@ async fn trigger_with(
     id: &str,
     secret: &str,
     body: &[u8],
-    ping: bool,
+    event: Option<&str>,
+    delivery: Option<&str>,
 ) -> (u16, Value) {
     let not_found = (404, json!({ "error": "not_found" }));
     if id.is_empty() || secret.is_empty() {
@@ -593,6 +615,7 @@ async fn trigger_with(
     };
     let JobAction::Loop {
         webhook: Some(hash),
+        webhook_events,
         ..
     } = &job.action
     else {
@@ -601,22 +624,34 @@ async fn trigger_with(
     if !webhook_matches(hash, secret) {
         return not_found;
     }
-    if ping {
+    if event == Some("ping") {
         return (200, json!({ "pong": true }));
+    }
+    let delivery = crate::daemon::webhook::Delivery::new(
+        event,
+        delivery,
+        String::from_utf8_lossy(body).into_owned(),
+    );
+    if !delivery.matches(webhook_events) {
+        return (202, json!({ "ignored": "event" }));
     }
     if job.paused {
         return (409, json!({ "error": "paused" }));
     }
-    let input = String::from_utf8_lossy(body).into_owned();
     match client
         .request(DaemonRequest::RunNow {
             job_id: job.id.clone(),
-            input: Some(input),
+            input: Some(delivery.to_input()),
         })
         .await
     {
         Ok(DaemonResponse::Ack | DaemonResponse::RunAccepted { .. }) => {
             (202, json!({ "accepted": true }))
+        }
+        Ok(DaemonResponse::Error { code, message })
+            if code == "conflict" && message.contains(crate::daemon::store::DUPLICATE_DELIVERY) =>
+        {
+            (200, json!({ "duplicate": true }))
         }
         // The Loop's previous run is still going; a run never overlaps.
         Ok(DaemonResponse::Error { code, .. }) if code == "conflict" => {
@@ -689,6 +724,7 @@ pub(crate) async fn patch(
             thread_id: old_thread_id,
             script: old_script,
             webhook: old_webhook,
+            webhook_events: old_webhook_events,
             machine: old_machine,
         } = existing.action
         else {
@@ -734,6 +770,7 @@ pub(crate) async fn patch(
             thread_id: next_thread,
             script: old_script,
             webhook: old_webhook.is_some(),
+            webhook_events: old_webhook_events,
             rotate_webhook: false,
             machine: old_machine,
         };
@@ -824,6 +861,7 @@ mod tests {
             thread_id: None,
             script: None,
             webhook: false,
+            webhook_events: Vec::new(),
             rotate_webhook: false,
             machine: None,
         }
@@ -1079,27 +1117,35 @@ mod tests {
             assert_eq!(secret.len(), 64, "{created}");
 
             assert_eq!(
-                trigger_with(&client, &id, "wrong", b"{}", false).await.0,
+                trigger_with(&client, &id, "wrong", b"{}", None, None)
+                    .await
+                    .0,
                 404
             );
             assert_eq!(
-                trigger_with(&client, &id, "wrong", b"{}", true).await.0,
+                trigger_with(&client, &id, "wrong", b"{}", Some("ping"), None)
+                    .await
+                    .0,
                 404
             );
             // GitHub's ping when the webhook is added starts no run.
             assert_eq!(
-                trigger_with(&client, &id, &secret, b"{}", true).await.0,
+                trigger_with(&client, &id, &secret, b"{}", Some("ping"), None)
+                    .await
+                    .0,
                 200
             );
             assert_eq!(
-                trigger_with(&client, "loop-none", &secret, b"{}", false)
+                trigger_with(&client, "loop-none", &secret, b"{}", None, None)
                     .await
                     .0,
                 404
             );
             // The right secret reaches the scheduler, which this test does not run.
             assert_eq!(
-                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                trigger_with(&client, &id, &secret, b"{}", None, None)
+                    .await
+                    .0,
                 503
             );
 
@@ -1110,16 +1156,47 @@ mod tests {
             let edited = save_with(&client, edit).await.unwrap();
             assert!(edited.get("webhook").is_none());
             assert_eq!(
-                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                trigger_with(&client, &id, &secret, b"{}", None, None)
+                    .await
+                    .0,
                 503
             );
+
+            let mut filtered = request(&workspace);
+            filtered.id = Some(id.clone());
+            filtered.webhook = true;
+            filtered.webhook_events = vec![" pull_request ".into(), "pull_request".into()];
+            let saved = save_with(&client, filtered).await.unwrap();
+            assert_eq!(saved["loop"]["webhookEvents"], json!(["pull_request"]));
+            let ignored =
+                trigger_with(&client, &id, &secret, b"{}", Some("push"), Some("d-1")).await;
+            assert_eq!(ignored, (202, json!({ "ignored": "event" })));
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", None, None)
+                    .await
+                    .0,
+                202
+            );
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", Some("pull_request"), None)
+                    .await
+                    .0,
+                503
+            );
+            let mut bad = request(&workspace);
+            bad.id = Some(id.clone());
+            bad.webhook = true;
+            bad.webhook_events = vec!["push; rm -rf".into()];
+            assert!(save_with(&client, bad).await.is_err());
 
             // Turned off, the old URL is unknown.
             let mut off = request(&workspace);
             off.id = Some(id.clone());
             save_with(&client, off).await.unwrap();
             assert_eq!(
-                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                trigger_with(&client, &id, &secret, b"{}", None, None)
+                    .await
+                    .0,
                 404
             );
         }
