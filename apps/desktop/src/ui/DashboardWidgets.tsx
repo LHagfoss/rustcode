@@ -48,6 +48,7 @@ import {
   useTwoLines,
 } from "./DashboardCard";
 import { DashboardFigures, HarnessesCard, ModelsCard, RhythmCard, TodayCard } from "./DashboardCards";
+import { ActivitySkeleton, RowsSkeleton, SpendSkeleton, useThreadsListing } from "./DashboardSkeletons";
 import {
   Activity,
   Flame,
@@ -61,7 +62,7 @@ import {
   History,
   Play,
 } from "./icons";
-import { cx, Pill, Skeleton, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
 import { useCardHeight, useWidgetRows, WidgetGrid } from "./WidgetGrid";
@@ -219,7 +220,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
     >
       {rows === undefined ? (
-        <Skeleton className="h-full w-full flex-1" />
+        <ActivitySkeleton stacked={stacked} />
       ) : turns.size === 0 ? (
         <Nothing>No turns recorded yet.</Nothing>
       ) : (
@@ -311,6 +312,7 @@ function RecentThreadsCard({ project }: { project: string }) {
   const threads = useMemo(() => projectThreads(sessions, project), [sessions, project]);
   const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
+  const listing = useThreadsListing();
   return (
     <Card
       label="Recent threads"
@@ -323,7 +325,9 @@ function RecentThreadsCard({ project }: { project: string }) {
         ) : undefined
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton />
+      ) : shown.length ? (
         <CardList>
           {shown.map((thread) => (
             <CardRow
@@ -392,10 +396,7 @@ function SpendCard({
       aside={change ? <TrendPill trend={change} compare="against the month before" /> : undefined}
     >
       {rows === undefined || !spend ? (
-        <div className="flex flex-1 flex-col justify-end gap-2">
-          <Skeleton className="h-5 w-[50%]" />
-          <Skeleton className="h-3 w-[70%]" />
-        </div>
+        <SpendSkeleton />
       ) : turns === 0 && spend.now.usd === undefined ? (
         <Nothing>No usage recorded in {USAGE_DAYS} days.</Nothing>
       ) : (
@@ -442,6 +443,7 @@ function NeedsYouCard() {
   }, [items]);
   const twoLines = useTwoLines();
   const shown = threads.slice(0, useShownRows(twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT));
+  const listing = useThreadsListing();
   return (
     <Card
       label="Needs you"
@@ -456,7 +458,9 @@ function NeedsYouCard() {
         </LabelNote>
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton mark age={false} rowHeight={twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT} />
+      ) : shown.length ? (
         <CardList>
           {shown.map((item) => (
             <CardRow
@@ -501,6 +505,7 @@ function RunningCard() {
   );
   const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
+  const listing = useThreadsListing();
   return (
     <Card
       label="Running now"
@@ -511,7 +516,9 @@ function RunningCard() {
         ) : undefined
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton mark />
+      ) : shown.length ? (
         <CardList>
           {shown.map((thread) => (
             <CardRow key={thread.id} onClick={() => selectThread(thread.id)} title={thread.title}>
@@ -597,11 +604,7 @@ function PullsCard({ project }: { project: string }) {
           </Pill>
         </div>
       ) : pulls === undefined ? (
-        <div className="flex flex-1 flex-col justify-center gap-2">
-          {[0, 1, 2].map((row) => (
-            <Skeleton key={row} className="h-3 w-[75%]" />
-          ))}
-        </div>
+        <RowsSkeleton mark rowHeight={twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT} />
       ) : shown.length ? (
         <CardList>
           {shown.map((pull) => (

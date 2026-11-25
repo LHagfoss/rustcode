@@ -10,6 +10,7 @@ import {
   monthBounds,
   periodTotals,
   projectThreads,
+  sharePercent,
   sharesBy,
   streakOf,
   turnsPerDay,
@@ -204,5 +205,11 @@ describe("the dashboard's splits", () => {
     ];
     expect(periodTotals(rows, "2026-11-01", "2026-11-02")).toEqual({ turns: 5, tokens: 10 });
     expect(periodTotals(rows, "2026-11-03")).toEqual({ turns: 7, tokens: 0 });
+  });
+
+  test("a share too small to round up reads as under one percent, not zero", () => {
+    expect(sharePercent(0.004)).toBe("<1%");
+    expect(sharePercent(0)).toBe("0%");
+    expect(sharePercent(0.66)).toBe("66%");
   });
 });

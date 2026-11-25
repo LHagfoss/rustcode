@@ -185,6 +185,11 @@ export function sharesBy(rows: readonly UsageRow[], key: "harness" | "model", si
     .sort((one, other) => other.turns - one.turns || other.tokens - one.tokens);
 }
 
+/** A share as a whole percentage; a share too small to round to 1% says so instead of showing 0%. */
+export function sharePercent(part: number): string {
+  return part > 0 && part < 0.005 ? "<1%" : `${Math.round(part * 100)}%`;
+}
+
 /** What one stretch of days ran: its turns and its input and output tokens. */
 export function periodTotals(
   rows: readonly UsageRow[],
