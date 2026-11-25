@@ -28,6 +28,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Access",
     keywords: "permission mode approval full access default",
   },
+  {
+    section: "general",
+    title: "Harness and model",
+    keywords: "new thread default harness model effort claude codex agents start on",
+  },
   // ------------------------------------------------------------ Permissions
   {
     section: "permissions",
@@ -363,7 +368,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "sidebar search filter sort new thread button header",
   },
   {
-    section: "appearance",
+    section: "general",
     title: "Settle idle threads",
     keywords: "sidebar settled shelf auto archive idle days never",
   },
@@ -389,7 +394,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "glass blur frosted translucent solid mica acrylic vibrancy accessibility contrast",
   },
   {
-    section: "appearance",
+    section: "general",
     title: "Toast position",
     keywords: "notification notice toast corner top bottom left right center placement",
   },
