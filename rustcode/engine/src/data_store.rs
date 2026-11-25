@@ -382,7 +382,8 @@ pub fn usage_at(
                     AS turns_without_cached_tokens, \
                 SUM(CASE WHEN t.cache_write_tokens IS NULL THEN 1 ELSE 0 END) \
                     AS turns_without_cache_write_tokens, \
-                SUM(CASE WHEN t.cost_usd IS NULL THEN 1 ELSE 0 END) AS turns_without_cost \
+                SUM(CASE WHEN t.cost_usd IS NULL THEN 1 ELSE 0 END) AS turns_without_cost, \
+                MAX(t.duration_ms) AS longest_turn_ms \
          FROM turns t LEFT JOIN threads th ON th.id = t.thread_id"
     );
     if group_by == GroupBy::Model {

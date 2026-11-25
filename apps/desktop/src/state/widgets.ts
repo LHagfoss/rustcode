@@ -22,12 +22,12 @@ export interface HeatCell {
 }
 
 /** The UTC day `n` days after `day`; the store groups by the same UTC day. */
-function plusDays(day: string, days: number): string {
+export function plusDays(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
 /** The column a day belongs to: Monday is 0, as a contribution graph reads. */
-function weekday(day: string): number {
+export function weekday(day: string): number {
   return (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
 }
 

@@ -407,6 +407,7 @@ export function mockUsage(threads: MockThread[], groupBy: string, since?: string
       turns_without_cached_tokens: spends.reduce((sum, spend) => sum + spend.withoutCached, 0),
       turns_without_cache_write_tokens: spends.reduce((sum, spend) => sum + spend.withoutCacheWrite, 0),
       turns_without_cost: spends.reduce((sum, spend) => sum + spend.withoutCost, 0),
+      longest_turn_ms: Math.max(...spends.map((spend) => spend.turns * 97_000)),
     }))
     .sort(
       (one, other) =>
