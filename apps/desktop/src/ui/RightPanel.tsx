@@ -64,7 +64,7 @@ const CARD_GAP = 12;
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
 /** The surface the right panel's card is drawn on, whichever tab it shows. */
-const CARD_SURFACE = "rounded-2xl border border-border bg-bg";
+const CARD_SURFACE = "rc-panel-card rounded-2xl";
 /** The row is told when the card's width moves with it, so the lane's padding follows in step. */
 const MOVING = "rc-panel-moving";
 /**
