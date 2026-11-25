@@ -9,7 +9,7 @@ import { primaryModifier } from "../lib/platform";
 // draft a comment; the drafts go to the agent as one message, or to the pull
 // request as one review with line comments (`_rustcode/pulls/review`).
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
@@ -39,6 +39,14 @@ import {
   useReviewDrafts,
 } from "../state/reviewDrafts";
 import {
+  patchHash,
+  setViewed,
+  stepFile,
+  useReviewViewed,
+  viewedKey,
+  viewedState,
+} from "../state/reviewViewed";
+import {
   featureMissing,
   refreshCheckpoints,
   request,
@@ -51,7 +59,17 @@ import {
 } from "../state/store";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
-import { ChevronDown, ChevronRight, FileDiff, Folder, MessageSquarePlus, RefreshCw, Send, X } from "./icons";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FileDiff,
+  Folder,
+  MessageSquarePlus,
+  RefreshCw,
+  Send,
+  X,
+} from "./icons";
 import { ViewHeader } from "./MainHeader";
 import { cx, noTextHelpers, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
@@ -340,7 +358,7 @@ export function Review({ threadId }: { threadId: string }) {
   // The diff column's own width decides: the file tree takes its share of the window.
   const [diffRef, diffWidth] = useDiffWidth<HTMLElement>();
   const { mode, wide } = useDiffLayout(diffWidth);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean | null>(null);
   // A diff for a source already left is dropped, not drawn over the one chosen after it.
   const [diff, runLoad] = useOp<ReviewFile[]>();
   const files = diff.data ?? null;
@@ -373,7 +391,7 @@ export function Review({ threadId }: { threadId: string }) {
   // A folded file opens again for the next one, and for another source.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fold belongs to one file of one source
   useEffect(() => {
-    setCollapsed(false);
+    setCollapsed(null);
   }, [selected, sourceKey(source)]);
 
   // The branch's pull request, from the pull store the panel and the sidebar
@@ -444,7 +462,42 @@ export function Review({ threadId }: { threadId: string }) {
     void load();
   }, [load]);
   const tree = useMemo(() => fileTree((files ?? []).map((f) => f.path)), [files]);
+  const order = useMemo(() => tree.flatMap((group) => group.files), [tree]);
+  const viewedBook = useReviewViewed((s) => s.book);
+  const hashes = useMemo(() => new Map((files ?? []).map((f) => [f.path, patchHash(f.lines)])), [files]);
+  const viewedOf = (path: string) =>
+    viewedState(viewedBook, viewedKey(threadId, sourceKey(source), path), hashes.get(path) ?? "");
+  const viewedCount = order.filter((path) => viewedOf(path) === "viewed").length;
+  const toggleViewed = (path: string) => {
+    const hash = hashes.get(path);
+    if (hash === undefined) return;
+    const marking = viewedOf(path) !== "viewed";
+    setViewed(viewedKey(threadId, sourceKey(source), path), marking ? hash : null);
+    setCollapsed(null);
+    if (!marking) return;
+    const next = stepFile(order, path, 1, (p) => p === path || viewedOf(p) === "viewed", true);
+    if (next) setSelected(next);
+  };
+  const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keys.current = (e) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !order.length) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']"))
+      return;
+    if (e.key === "j" || e.key === "k") {
+      const next = stepFile(order, selected, e.key === "j" ? 1 : -1);
+      if (next) setSelected(next);
+    } else if (e.key === "v" && selected) toggleViewed(selected);
+    else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keys.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const file = files?.find((f) => f.path === selected);
+  const folded = collapsed ?? (file ? viewedOf(file.path) === "viewed" : false);
   const label = sourceLabel(source, wt?.branch);
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
@@ -573,6 +626,13 @@ export function Review({ threadId }: { threadId: string }) {
           <div className="flex h-9 items-center gap-2 px-2">
             <span className="shrink-0 font-semibold text-body">Files</span>
             <span className="shrink-0 text-caption text-fg-faint tabular">{files?.length ?? 0}</span>
+            {files && files.length > 0 && (
+              <Tooltip label="J and K move between files, V marks one viewed">
+                <span className="shrink-0 text-caption text-fg-faint tabular">
+                  · {viewedCount} of {files.length} viewed
+                </span>
+              </Tooltip>
+            )}
             {base && (
               <Tooltip label={base}>
                 <span className="min-w-0 truncate text-caption text-fg-faint">vs {shortRef(base)}</span>
@@ -595,8 +655,13 @@ export function Review({ threadId }: { threadId: string }) {
               {group.files.map((path) => {
                 const f = files?.find((x) => x.path === path);
                 const n = comments.filter((c) => c.path === path).length;
+                const seen = viewedOf(path);
                 return (
-                  <Tooltip key={path} label={f?.oldPath ? `${f.oldPath} → ${path}` : path} side="right">
+                  <Tooltip
+                    key={path}
+                    label={`${f?.oldPath ? `${f.oldPath} → ${path}` : path}${seen === "changed" ? " · changed since you viewed it" : ""}`}
+                    side="right"
+                  >
                     <button
                       type="button"
                       onClick={() => setSelected(path)}
@@ -604,6 +669,7 @@ export function Review({ threadId }: { threadId: string }) {
                       className={cx(
                         "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
                         selected === path ? "bg-fill" : "hover:bg-fill-subtle",
+                        seen === "viewed" && selected !== path && "text-fg-muted",
                       )}
                     >
                       {f ? <StatusMark status={f.status} /> : <span className="size-4 shrink-0" />}
@@ -613,7 +679,16 @@ export function Review({ threadId }: { threadId: string }) {
                       {n > 0 && (
                         <span className="rounded-full bg-accent/20 px-1.5 text-caption text-accent">{n}</span>
                       )}
-                      {f && <DiffCount added={f.added} removed={f.removed} />}
+                      {seen === "changed" && (
+                        <span className="size-1.5 shrink-0 rounded-full bg-accent">
+                          <span className="sr-only">Changed since viewed</span>
+                        </span>
+                      )}
+                      {seen === "viewed" ? (
+                        <Check size={12} aria-label="Viewed" className="shrink-0 text-success" />
+                      ) : (
+                        f && <DiffCount added={f.added} removed={f.removed} />
+                      )}
                     </button>
                   </Tooltip>
                 );
@@ -632,7 +707,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={setSelected}
                 options={files.map((f) => ({
                   value: f.path,
-                  label: `${f.path} +${f.added} −${f.removed}`,
+                  label: `${viewedOf(f.path) === "viewed" ? "✓ " : ""}${f.path} +${f.added} −${f.removed}`,
                 }))}
               />
             </div>
@@ -644,12 +719,12 @@ export function Review({ threadId }: { threadId: string }) {
                 <div className="sticky top-0 z-10 flex items-center gap-2 bg-bg px-4 py-2 text-callout">
                   <button
                     type="button"
-                    aria-expanded={!collapsed}
-                    aria-label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
-                    onClick={() => setCollapsed(!collapsed)}
+                    aria-expanded={!folded}
+                    aria-label={folded ? `Expand ${file.path}` : `Collapse ${file.path}`}
+                    onClick={() => setCollapsed(!folded)}
                     className="-ml-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
                   >
-                    {collapsed ? (
+                    {folded ? (
                       <ChevronRight size={13} strokeWidth={2.5} />
                     ) : (
                       <ChevronDown size={13} strokeWidth={2.5} />
@@ -661,12 +736,23 @@ export function Review({ threadId }: { threadId: string }) {
                   </span>
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
-                  <span className="shrink-0 text-caption text-fg-faint max-[1099px]:hidden">
+                  <span className="shrink-0 text-caption text-fg-faint max-[1300px]:hidden">
                     Click a line number to comment
                   </span>
+                  <Tooltip label="Mark viewed (V)">
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-fg-muted hover:text-fg">
+                      <input
+                        type="checkbox"
+                        className="shrink-0 accent-[var(--rc-accent)]"
+                        checked={viewedOf(file.path) === "viewed"}
+                        onChange={() => toggleViewed(file.path)}
+                      />
+                      Viewed
+                    </label>
+                  </Tooltip>
                 </div>
                 <div className="px-4 pb-4">
-                  {collapsed ? null : file.lines.length ? (
+                  {folded ? null : file.lines.length ? (
                     <FileDiffView
                       key={`${sourceKey(source)}|${file.path}`}
                       file={file}
