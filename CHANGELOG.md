@@ -1,3 +1,24 @@
+## [v1.52.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.52.0) - 2026-11-25
+
+### Features
+- Removed the thread Preview dialog, remote loopback preview relay, and public preview link sharing. (#4297)
+- Keep a thread's turns listed in the right sidebar after restarting the app or reloading the thread. (#4298)
+- Redesigned the Jobs overview dialog and cards, and fixed legacy or hub-dispatched scheduled job runs reappearing in the sidebar. (#4299)
+- Show each turn's prompt in full width with its duration and price below, and price the turns after a reload. (#4300)
+- The chat recap now appears inside the chat after the last turn instead of floating over the top of it. (#4302)
+- Toasts are lighter, frosted like the composer, and can be moved to another corner in Settings › Appearance. (#4303)
+- Markdown table toolbars and dragged header buttons get their shadow back. (#4305)
+- Screenshots an agent saves in one of the project's git worktrees now show in its reply. (#4307)
+- The new-thread overview's Activity card shows your day streak. (#4306)
+- The Changes chip under a turn no longer counts a git pull, checkout or merge as the agent's edits, and Rewind keeps what it pulled in. (#4308)
+- Paired devices see a thread's turn as running even when the desktop is not sharing that thread. (#4310)
+- Settings › Remote access: a status banner at the top says whether and where a phone can reach this computer. (#4314)
+- Settings: details, add forms and feature cards unfold smoothly, and the section highlight glides between pages. (#4311)
+- Settings: Advanced is merged into Diagnostics, and Orchestration's second Delegation group is renamed Delegate limits. (#4312)
+- Settings › Connections: sign in to GitHub and sign accounts out without a terminal; model accounts can refresh their models. (#4313)
+- Agents now name a new thread with their first tool call, so fewer threads keep the raw first prompt as their title. (#4315)
+- RustCode now describes itself as an agentic development environment (ADE); Settings › Orchestration is renamed Delegation. (#4316)
+- Settings › Connections lists apps (Linear, Notion, Jira, Sentry, Vercel and more) to connect in one click with a browser sign-in. (#4317)
 ## [v1.51.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.51.0) - 2026-11-23
 
 ### Features
