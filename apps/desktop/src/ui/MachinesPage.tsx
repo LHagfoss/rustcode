@@ -20,7 +20,7 @@ import { isLoaded } from "../state/thread";
 // with it. A row of another machine says which RustCode version it runs, so an old one is a
 // sentence with a command, not a silent connection failure.
 
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
@@ -179,7 +179,11 @@ export function MachinesPage() {
             machines={machines}
             known={known}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={(id) => {
+              if (id === SELF_NODE) openMachineSettings(LOCAL_MACHINE_ID);
+              else if (id && machines.some((machine) => machine.id === id)) openMachineSettings(id);
+              else setSelected(id);
+            }}
             footer={
               <SelectedMachine
                 id={selected}
@@ -256,51 +260,53 @@ function ThisComputer() {
   const running = status === "ready";
   const installed = server?.installed === true;
   return (
-    <Row
-      title={
-        <>
-          <DeviceGlyphIcon glyph={local.icon ?? platformIcon(reported)} tint={local.tint} size={16} />
-          {selfName()}
-          <Chip tone={running ? "ok" : "warn"}>
-            {running ? "Online" : status === "connecting" ? "Connecting" : "Offline"}
-          </Chip>
-          <span className="font-normal text-caption text-fg-faint">This computer</span>
-        </>
-      }
-      subtitle={`Local server · ${open === 1 ? "1 thread" : `${open} threads`}`}
-      hint={
-        server?.gateway.remoteEnabled || server?.gateway.running
-          ? `Gateway: ${gatewayLine(server.gateway, server.installed)}`
-          : undefined
-      }
-      status={
-        <>
-          <span className="tabular">Server: {serverLine(server)}</span>
-          {server?.version && server.version !== server.cliVersion ? (
-            <span className="text-warning">
-              {" "}
-              · it runs {server.version}, this app ships {server.cliVersion}
-            </span>
-          ) : null}
-          {/* The gateway with the app closed: the server keeps it running, the
+    <OpensSettings onOpen={() => openMachineSettings(LOCAL_MACHINE_ID)}>
+      <Row
+        title={
+          <>
+            <DeviceGlyphIcon glyph={local.icon ?? platformIcon(reported)} tint={local.tint} size={16} />
+            {selfName()}
+            <Chip tone={running ? "ok" : "warn"}>
+              {running ? "Online" : status === "connecting" ? "Connecting" : "Offline"}
+            </Chip>
+            <span className="font-normal text-caption text-fg-faint">This computer</span>
+          </>
+        }
+        subtitle={`Local server · ${open === 1 ? "1 thread" : `${open} threads`}`}
+        hint={
+          server?.gateway.remoteEnabled || server?.gateway.running
+            ? `Gateway: ${gatewayLine(server.gateway, server.installed)}`
+            : undefined
+        }
+        status={
+          <>
+            <span className="tabular">Server: {serverLine(server)}</span>
+            {server?.version && server.version !== server.cliVersion ? (
+              <span className="text-warning">
+                {" "}
+                · it runs {server.version}, this app ships {server.cliVersion}
+              </span>
+            ) : null}
+            {/* The gateway with the app closed: the server keeps it running, the
               app's own threads still end with the app (docs/remote.md). */}
-          {server?.gateway.running ? (
-            <span className="tabular"> · Gateway on {server.gateway.address ?? "an unknown address"}</span>
-          ) : server?.gateway.remoteEnabled ? (
-            <span> · Gateway not running</span>
-          ) : null}
-          <ServerProblems problems={server?.problems} />
-        </>
-      }
-    >
-      {server && !installed && (
-        <Action disabled={installing} onClick={() => askInstallServer()}>
-          {installing ? <Spinner /> : null}
-          Install server
-        </Action>
-      )}
-      <MachineSettingsButton name={selfName()} onClick={() => openMachineSettings(LOCAL_MACHINE_ID)} />
-    </Row>
+            {server?.gateway.running ? (
+              <span className="tabular"> · Gateway on {server.gateway.address ?? "an unknown address"}</span>
+            ) : server?.gateway.remoteEnabled ? (
+              <span> · Gateway not running</span>
+            ) : null}
+            <ServerProblems problems={server?.problems} />
+          </>
+        }
+      >
+        {server && !installed && (
+          <Action disabled={installing} onClick={() => askInstallServer()}>
+            {installing ? <Spinner /> : null}
+            Install server
+          </Action>
+        )}
+        <MachineSettingsButton name={selfName()} onClick={() => openMachineSettings(LOCAL_MACHINE_ID)} />
+      </Row>
+    </OpensSettings>
   );
 }
 
@@ -424,61 +430,63 @@ export function MachineRow({
   const updating = updateRunning(update);
   const updateLine = update ? remoteUpdateLine(update, name) : null;
   return (
-    <Row
-      title={
-        <>
-          <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
-          {name}
-          <span data-status={status.kind}>
-            <Chip tone={status.tone}>{status.label}</Chip>
-          </span>
-          {outdated && <Chip tone="warn">Outdated</Chip>}
-        </>
-      }
-      hint={
-        machine.hint ? (
+    <OpensSettings onOpen={() => openMachineSettings(machine.id)}>
+      <Row
+        title={
           <>
-            {direction}
-            <br />
-            {machine.hint}
-          </>
-        ) : (
-          direction
-        )
-      }
-      subtitle={<span className="selectable break-words">{machineRoute(machine)}</span>}
-      status={
-        <>
-          <span className="tabular">{facts.join(" · ")}</span>
-          {updateLine ? (
-            <span
-              role="status"
-              className={`mt-1 block ${update?.phase === "failed" ? "text-warning" : update?.phase === "done" ? "text-success" : "text-fg-muted"}`}
-            >
-              {withCode(updateLine)}
+            <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
+            {name}
+            <span data-status={status.kind}>
+              <Chip tone={status.tone}>{status.label}</Chip>
             </span>
+            {outdated && <Chip tone="warn">Outdated</Chip>}
+          </>
+        }
+        hint={
+          machine.hint ? (
+            <>
+              {direction}
+              <br />
+              {machine.hint}
+            </>
           ) : (
-            skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>
-          )}
-          {machine.forward && !connected && <ForwardTakeover machine={machine} forward={machine.forward} />}
-        </>
-      }
-    >
-      {(outdated || updating) && connected && (
-        <Action disabled={updating} onClick={() => void updateMachine(machine)}>
-          {updating ? <Spinner /> : null}
-          {updating ? "Updating…" : update?.phase === "failed" ? "Retry update" : "Update"}
-        </Action>
-      )}
-      {recovery === "pair" ? (
-        <PairAgainAction machine={machine} />
-      ) : recovery ? (
-        <Action onClick={() => reconnectMachine(machine)}>
-          {status.kind === "connecting" ? "Retry now" : recoveryLabel(recovery)}
-        </Action>
-      ) : null}
-      <MachineSettingsButton name={name} onClick={() => openMachineSettings(machine.id)} />
-    </Row>
+            direction
+          )
+        }
+        subtitle={<span className="selectable break-words">{machineRoute(machine)}</span>}
+        status={
+          <>
+            <span className="tabular">{facts.join(" · ")}</span>
+            {updateLine ? (
+              <span
+                role="status"
+                className={`mt-1 block ${update?.phase === "failed" ? "text-warning" : update?.phase === "done" ? "text-success" : "text-fg-muted"}`}
+              >
+                {withCode(updateLine)}
+              </span>
+            ) : (
+              skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>
+            )}
+            {machine.forward && !connected && <ForwardTakeover machine={machine} forward={machine.forward} />}
+          </>
+        }
+      >
+        {(outdated || updating) && connected && (
+          <Action disabled={updating} onClick={() => void updateMachine(machine)}>
+            {updating ? <Spinner /> : null}
+            {updating ? "Updating…" : update?.phase === "failed" ? "Retry update" : "Update"}
+          </Action>
+        )}
+        {recovery === "pair" ? (
+          <PairAgainAction machine={machine} />
+        ) : recovery ? (
+          <Action onClick={() => reconnectMachine(machine)}>
+            {status.kind === "connecting" ? "Retry now" : recoveryLabel(recovery)}
+          </Action>
+        ) : null}
+        <MachineSettingsButton name={name} onClick={() => openMachineSettings(machine.id)} />
+      </Row>
+    </OpensSettings>
   );
 }
 
@@ -508,5 +516,26 @@ function MachineSettingsButton({ name, onClick }: { name: string; onClick: () =>
     <ChromeButton label={`Settings for ${name}`} tooltip="Machine settings" onClick={onClick}>
       <Settings size={14} />
     </ChromeButton>
+  );
+}
+
+/**
+ * A machine's row opens its settings when pressed anywhere but its own controls or a text
+ * selection; the gear stays the keyboard path.
+ */
+function OpensSettings({ onOpen, children }: { onOpen: () => void; children: ReactNode }) {
+  return (
+    <div
+      data-opens-settings
+      className="cursor-pointer hover:bg-fill-subtle"
+      onClick={(event) => {
+        const target = event.target as Element;
+        if (target.closest("button, a, input, textarea, select, label, [role='button']")) return;
+        if (window.getSelection()?.toString()) return;
+        onOpen();
+      }}
+    >
+      {children}
+    </div>
   );
 }

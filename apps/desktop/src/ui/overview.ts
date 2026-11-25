@@ -275,6 +275,8 @@ export interface TurnEntry {
   id: string;
   /** The first line of the message that opened it, or what woke the thread. */
   prompt: string;
+  /** When the message that opened it was sent, so a stored turn can be matched to it. */
+  promptAt?: number;
   at?: number;
   /** When the app saw the turn begin; a replayed turn has none, and so no waterfall. */
   startedAt?: number;
@@ -334,6 +336,7 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
   let from = 0;
   let prompt = "";
   let userId: string | undefined;
+  let promptAt: number | undefined;
   let worked = false;
   let lastSample: TraceUsage | undefined;
   for (let i = 0; i <= items.length; i++) {
@@ -349,6 +352,7 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
       entries.push({
         id: end.id,
         prompt: prompt || "No message",
+        promptAt,
         at: end.at,
         startedAt: end.startedAt,
         outcome: end.outcome,
@@ -358,21 +362,25 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
       lastSample = end.usage?.samples.at(-1)?.usage;
       from = i;
       userId = undefined;
+      promptAt = undefined;
       worked = false;
     } else if (nextTurn) {
       entries.push({
         id: userId ?? items[from]!.id,
         prompt: prompt || "No message",
+        promptAt,
         outcome: "completed",
       });
       lastSample = undefined;
       from = i;
       userId = undefined;
+      promptAt = undefined;
       worked = false;
     }
     if (!item) break;
     if (item.kind === "user" && !item.steered) {
       prompt = item.wake ? "Woken for a delegate" : promptLine(item.text);
+      if (userId === undefined) promptAt = item.wake ? undefined : item.at;
       userId ??= item.id;
     } else if (item.kind === "assistant" || item.kind === "tool" || item.kind === "thought") {
       worked = true;

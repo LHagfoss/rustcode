@@ -47,7 +47,7 @@ export function Fold({
     <div
       data-fold={shown ? "open" : "closed"}
       className={cx(
-        "grid transition-[grid-template-rows,opacity] duration-200 ease-snappy",
+        "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-200 ease-snappy",
         clipped && "overflow-hidden",
       )}
       style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0 }}
@@ -57,7 +57,7 @@ export function Fold({
         else setMounted(false);
       }}
     >
-      <div className={cx("min-h-0", clipped && "overflow-hidden", className)}>{children}</div>
+      <div className={cx("min-h-0 min-w-0", clipped && "overflow-hidden", className)}>{children}</div>
     </div>
   );
 }

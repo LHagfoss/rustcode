@@ -39,6 +39,7 @@ import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
+import { useStoredTurns, withStoredTurns } from "./storedTurns";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
 
@@ -249,6 +250,7 @@ export function ThreadDetails() {
       </Section>
       <TurnsSection
         key={id}
+        threadKey={id ?? undefined}
         items={items ?? []}
         running={running}
         model={model}
@@ -345,6 +347,7 @@ function turnPrice(turn: TurnEntry, harness: string | undefined, model: string |
 }
 
 function TurnsSection({
+  threadKey,
   items,
   running,
   model,
@@ -353,6 +356,7 @@ function TurnsSection({
   folded,
   onToggle,
 }: {
+  threadKey?: string;
   items: readonly TranscriptItem[];
   running?: boolean;
   model?: string;
@@ -362,7 +366,9 @@ function TurnsSection({
   folded: boolean;
   onToggle: (id: SectionId) => void;
 }) {
-  const turns = useMemo(() => [...turnEntries(items, running)].reverse(), [items, running]);
+  const entries = useMemo(() => turnEntries(items, running), [items, running]);
+  const stored = useStoredTurns(threadKey, entries.length);
+  const turns = useMemo(() => withStoredTurns(entries, stored).reverse(), [entries, stored]);
   const byEnd = useMemo(() => turnItemsByEnd(items, undefined, running), [items, running]);
   const ends = useMemo(() => {
     const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
