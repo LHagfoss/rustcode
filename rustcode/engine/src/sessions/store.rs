@@ -1015,6 +1015,7 @@ pub fn delete_session_by_id(session_id: &str) -> bool {
     if let Some(cwd) = crate::checkpoints::thread_cwd(session_id) {
         crate::checkpoints::delete_session(&cwd, session_id);
     }
+    crate::computer_use::unregister(session_id);
     store().is_some_and(|session_store| session_store.delete_session_by_id(session_id))
 }
 
