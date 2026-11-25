@@ -433,6 +433,7 @@ function TurnsSection({
                 <span className="truncate text-callout">{turn.prompt}</span>
                 <span className="truncate text-caption text-fg-muted tabular">
                   {[
+                    turn.origin,
                     turn.elapsedMs === undefined ? undefined : formatDuration(turn.elapsedMs),
                     turnPrice(turn, harness, rawModel),
                   ]
