@@ -716,7 +716,10 @@ saved, and is paired on its own (**Pair** in Settings › Machines).
   name does, so every computer ends on the same one. A name nobody chose (the
   operating system's) has no time and loses to any rename. Platform, version
   and last-seen come from the more recent report. An entry about a computer
-  that was never reported on for 90 days is forgotten.
+  that was never reported on for 90 days is forgotten. A rename time more than five minutes ahead of the
+  receiving computer's clock is taken as five minutes ahead, on the engine and
+  in the app, so a computer whose clock is ahead cannot pin a name; a rename
+  made here is always stamped after the one it replaces.
 - **Storage:** a computer's own name is `machine.json` in the configuration
   directory (earlier versions wrote `environment.json`, which is still read
   until the next rename writes `machine.json`; without either the gateway
