@@ -7,8 +7,9 @@
  * by day, two by model to price the spend, the session list the sidebar shows, the inbox, and the
  * project's pulls cache (`state/pulls.ts`). No new engine call.
  *
- * Every card is one height, so two rows fit under the composer in a laptop window. Lists show
- * three rows and say how many more there are at the end of their label row.
+ * Every card is one height: short under the centred composer, so two rows fit in a laptop window,
+ * and grown to fill the room above it once the composer is docked. Lists show the rows the height
+ * holds and say how many more there are at the end of their label row.
  */
 
 import { type ReactNode, useEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -52,16 +53,38 @@ import {
 import { cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
-import { useWidgetEditClass, useWidgetId, useWidgetSpan, WidgetChrome, WidgetGrid } from "./WidgetGrid";
+import {
+  useCardHeight,
+  useWidgetEditClass,
+  useWidgetId,
+  useWidgetSpan,
+  WidgetChrome,
+  WidgetGrid,
+} from "./WidgetGrid";
 
-/** How many rows a list card shows before its label says how many are left. */
-const SHOWN_ROWS = 3;
+/** A list row's height, one line or two, and what a card spends on its padding, label row and the gap under it. */
+const ROW_HEIGHT = 24;
+const TWO_LINE_ROW_HEIGHT = 40;
+const CARD_CHROME = 52;
+/** From this card height a list whose rows have more to say gives each row a second line. */
+const TWO_LINE_FROM = 176;
+
+/** Whether the card is tall enough for its rows' second line. */
+function useTwoLines(): boolean {
+  return useCardHeight() >= TWO_LINE_FROM;
+}
+
+/** How many rows a list card shows before its label says how many are left: as many as its height holds. */
+function useShownRows(rowHeight = ROW_HEIGHT): number {
+  return Math.max(1, Math.floor((useCardHeight() - CARD_CHROME + 4) / rowHeight));
+}
 
 /** The spend card's token line: the last thirty days, counted as whole UTC days. */
 const USAGE_DAYS = 30;
 
-/** A heatmap cell's side and the space between cells, in pixels: squares, as a contribution graph draws them. */
+/** A heatmap cell's smallest and largest side and the space between cells, in pixels: squares, as a contribution graph draws them. */
 const HEAT_CELL = 8;
+const HEAT_CELL_MAX = 14;
 const HEAT_GAP = 2;
 /** The fewest weeks the heatmap draws, however narrow its card. */
 const MIN_WEEKS = 8;
@@ -102,8 +125,9 @@ function Card({
     <section
       aria-label={label}
       data-widget={useWidgetId()}
+      style={{ height: useCardHeight() }}
       className={cx(
-        "rc-glass-faint rc-overview-card flex h-[128px] w-[240px] shrink-0 snap-start flex-col overflow-hidden rounded-xl p-3 ring-inset lg:w-auto",
+        "rc-glass-faint rc-overview-card flex w-[240px] shrink-0 snap-start flex-col overflow-hidden rounded-xl p-3 ring-inset lg:w-auto",
         span,
         editClass ?? "ring-1 ring-border-strong",
       )}
@@ -156,16 +180,38 @@ function LabelNote({
 }
 
 /** A row in a card's list: a control, so the card is walkable with the keyboard. */
-function CardRow({ onClick, title, children }: { onClick: () => void; title: string; children: ReactNode }) {
+function CardRow({
+  onClick,
+  title,
+  mark,
+  detail,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  /** What leads the row, a dot or an icon: centred on both lines when there are two. */
+  mark?: ReactNode;
+  /** A quiet second line under the row, for a card tall enough to show it. */
+  detail?: ReactNode;
+  children: ReactNode;
+}) {
+  const className = "-mx-1 min-w-0 shrink-0 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle";
   return (
     <Tooltip label={title}>
-      <button
-        type="button"
-        onClick={onClick}
-        className="-mx-1 flex h-6 min-w-0 shrink-0 items-center gap-2 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle"
-      >
-        {children}
-      </button>
+      {detail === undefined ? (
+        <button type="button" onClick={onClick} className={cx(className, "flex h-6 items-center gap-2")}>
+          {mark}
+          {children}
+        </button>
+      ) : (
+        <button type="button" onClick={onClick} className={cx(className, "flex h-10 items-center gap-2")}>
+          {mark}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 items-center gap-2">{children}</span>
+            <span className="truncate text-caption text-fg-muted">{detail}</span>
+          </span>
+        </button>
+      )}
     </Tooltip>
   );
 }
@@ -205,7 +251,7 @@ function StreakBadge({ streak }: { streak: Streak }) {
 }
 
 /** How many whole weeks of square cells fit the heatmap's width; the ref goes on the heatmap's box. */
-function useFittedWeeks() {
+function useFittedWeeks(cell: number) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [weeks, setWeeks] = useState(MIN_WEEKS);
   useEffect(() => {
@@ -214,22 +260,58 @@ function useFittedWeeks() {
       setWeeks(
         Math.max(
           MIN_WEEKS,
-          Math.min(HEATMAP_WEEKS, Math.floor((element.clientWidth + HEAT_GAP) / (HEAT_CELL + HEAT_GAP))),
+          Math.min(HEATMAP_WEEKS, Math.floor((element.clientWidth + HEAT_GAP) / (cell + HEAT_GAP))),
         ),
       );
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [element]);
+  }, [element, cell]);
   return [setElement, weeks] as const;
+}
+
+/** From this cell side the heatmap names the months over its columns. */
+const MONTH_LABELS_FROM = 12;
+/** The height the month names take over the heatmap, with the gap under them. */
+const MONTH_ROW = 14;
+
+/**
+ * The month to name over each of the heatmap's columns: where a new month starts, unless the last
+ * name is too close to leave room for this one.
+ */
+function monthLabels(columns: readonly (readonly (HeatCell | null)[])[]): (string | undefined)[] {
+  let last = -3;
+  let month = "";
+  return columns.map((week, index) => {
+    const day = week.find(Boolean)?.day;
+    if (!day) return undefined;
+    const next = day.slice(0, 7);
+    if (next === month) return undefined;
+    const first = month === "";
+    month = next;
+    if (first || index - last < 3) return undefined;
+    last = index;
+    return new Date(`${day}T00:00:00Z`).toLocaleString(undefined, { month: "short", timeZone: "UTC" });
+  });
+}
+
+/** The heatmap cell's side that fits a week's seven days in the card's height. */
+function useHeatCell(): number {
+  const fits = Math.floor((useCardHeight() - CARD_CHROME - 6 * HEAT_GAP - MONTH_ROW) / 7);
+  return Math.max(HEAT_CELL, Math.min(HEAT_CELL_MAX, fits));
 }
 
 function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   const sessions = useApp((s) => s.sessions);
-  const [box, weeks] = useFittedWeeks();
+  const side = useHeatCell();
+  const [box, weeks] = useFittedWeeks(side);
   const turns = useMemo(() => turnsPerDay(rows ?? []), [rows]);
   const columns = useMemo(() => heatmapWeeks(turns, weeks), [turns, weeks]);
+  const months = useMemo(
+    () => (side >= MONTH_LABELS_FROM ? monthLabels(columns) : undefined),
+    [columns, side],
+  );
   const streak = useMemo(() => streakOf(turns), [turns]);
   const shownTurns = useMemo(
     () => columns.flat().reduce((sum, cell) => sum + (cell?.turns ?? 0), 0),
@@ -269,12 +351,21 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
                 className="flex shrink-0 flex-col"
                 style={{ gap: HEAT_GAP }}
               >
+                {months && (
+                  <span className="relative shrink-0" style={{ height: MONTH_ROW - HEAT_GAP }}>
+                    {months[index] && (
+                      <span className="absolute bottom-0 left-0 whitespace-nowrap text-caption text-fg-muted leading-none">
+                        {months[index]}
+                      </span>
+                    )}
+                  </span>
+                )}
                 {week.map((cell, day) => (
                   <span
                     key={cell?.day ?? `future-${index}-${day}`}
                     title={cell ? `${cell.day} · ${count(cell.turns, "turn")}` : undefined}
                     className={cx("rc-heat-cell rounded-xs", cell && SHADE[cell.level])}
-                    style={{ width: HEAT_CELL, height: HEAT_CELL }}
+                    style={{ width: side, height: side }}
                   />
                 ))}
               </div>
@@ -289,7 +380,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
 function RecentThreadsCard({ project }: { project: string }) {
   const sessions = useApp((s) => s.sessions);
   const threads = useMemo(() => projectThreads(sessions, project), [sessions, project]);
-  const shown = threads.slice(0, SHOWN_ROWS);
+  const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
   return (
     <Card
@@ -394,7 +485,7 @@ function SpendCard({
             viewBox="0 0 100 20"
             preserveAspectRatio="none"
             aria-hidden
-            className="mt-1 h-5 w-full text-accent/60"
+            className="mt-1 min-h-5 w-full flex-1 text-accent/60"
           >
             {path && (
               <path
@@ -420,7 +511,8 @@ function NeedsYouCard() {
     const seen = new Set<string>();
     return items.filter((item) => !seen.has(item.threadId) && seen.add(item.threadId));
   }, [items]);
-  const shown = threads.slice(0, SHOWN_ROWS);
+  const twoLines = useTwoLines();
+  const shown = threads.slice(0, useShownRows(twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT));
   return (
     <Card
       label="Needs you"
@@ -442,8 +534,9 @@ function NeedsYouCard() {
               key={item.key}
               onClick={() => selectThread(item.threadId)}
               title={`${item.title}: ${item.detail}`}
+              detail={twoLines ? item.detail : undefined}
+              mark={<span className="size-1.5 shrink-0 rounded-full bg-warning" />}
             >
-              <span className="size-1.5 shrink-0 rounded-full bg-warning" />
               <span className="min-w-0 flex-1 truncate text-fg">{item.title}</span>
             </CardRow>
           ))}
@@ -477,7 +570,7 @@ function RunningCard() {
         : [],
     [running, sessions],
   );
-  const shown = threads.slice(0, SHOWN_ROWS);
+  const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
   return (
     <Card
@@ -550,7 +643,8 @@ function PullsCard({ project }: { project: string }) {
     () => [...(pulls ?? [])].sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0)),
     [pulls],
   );
-  const shown = recent.slice(0, SHOWN_ROWS);
+  const twoLines = useTwoLines();
+  const shown = recent.slice(0, useShownRows(twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT));
   const more = recent.length - shown.length;
   return (
     <Card
@@ -586,8 +680,15 @@ function PullsCard({ project }: { project: string }) {
               key={pull.number}
               title={pull.url ? `Open #${pull.number} on GitHub` : `#${pull.number} ${pull.title}`}
               onClick={() => (pull.url ? openExternal(pull.url) : setPanel("pulls"))}
+              detail={
+                twoLines
+                  ? [pull.headRef, pull.author, pull.updatedAt && relativeAge(pull.updatedAt)]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : undefined
+              }
+              mark={<PullMark pull={pull} />}
             >
-              <PullMark pull={pull} />
               <span className="min-w-0 flex-1 truncate text-fg">{pull.title}</span>
               <span className="shrink-0 text-caption text-fg-muted tabular">#{pull.number}</span>
             </CardRow>
@@ -605,7 +706,7 @@ function PullsCard({ project }: { project: string }) {
  * token line; two reads by model price the month's spend and the one before it, a harness's
  * reported cost or the list-price estimate (`state/pricing.ts`).
  */
-export function NewThreadWidgets({ project }: { project: string }) {
+export function NewThreadWidgets({ project, docked = false }: { project: string; docked?: boolean }) {
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
   const usageSince = useMemo(() => daysAgo(new Date(), USAGE_DAYS - 1), []);
   const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
@@ -639,5 +740,5 @@ export function NewThreadWidgets({ project }: { project: string }) {
         return <RunningCard />;
     }
   };
-  return <WidgetGrid render={render} />;
+  return <WidgetGrid render={render} fill={docked} />;
 }

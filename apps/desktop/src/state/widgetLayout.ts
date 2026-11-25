@@ -146,3 +146,30 @@ function subscribe(listener: () => void): () => void {
 export function useWidgetLayout(): WidgetSlot[] {
   return useSyncExternalStore(subscribe, getWidgetLayout);
 }
+
+/** A card's height when the overview has no room to fill, and the most it grows to when it has. */
+export const CARD_HEIGHT = 128;
+export const TALL_CARD_HEIGHT = 216;
+/** The space between the grid's cards, in pixels. */
+export const CARD_GAP = 8;
+
+/** How many rows the six-column grid lays the cards out in: a card that does not fit a row's end starts the next. */
+export function layoutRows(layout: readonly WidgetSlot[]): number {
+  let rows = 0;
+  let used = 6;
+  for (const slot of layout) {
+    if (used + slot.span > 6) {
+      rows += 1;
+      used = 0;
+    }
+    used += slot.span;
+  }
+  return rows;
+}
+
+/** The one height every card takes so `rows` of them fill `room`, between the short and the tall card. */
+export function fittedCardHeight(room: number, rows: number): number {
+  if (rows === 0) return CARD_HEIGHT;
+  const each = Math.floor((room - (rows - 1) * CARD_GAP) / rows);
+  return Math.max(CARD_HEIGHT, Math.min(TALL_CARD_HEIGHT, each));
+}

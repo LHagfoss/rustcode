@@ -17,9 +17,12 @@ import {
 } from "react";
 import {
   addWidget,
+  CARD_HEIGHT,
   DEFAULT_LAYOUT,
+  fittedCardHeight,
   getWidgetLayout,
   hiddenWidgets,
+  layoutRows,
   moveWidget,
   removeWidget,
   resizeWidget,
@@ -72,6 +75,43 @@ interface Frame {
 }
 
 const FrameContext = createContext<Frame | undefined>(undefined);
+const HeightContext = createContext(CARD_HEIGHT);
+
+/** The height every card in the grid takes, in pixels: taller when the overview has room to fill. */
+export function useCardHeight(): number {
+  return useContext(HeightContext);
+}
+
+/**
+ * The height left for the grid's scroll box inside the box that holds it, the overview's docked
+ * column: that column's height less everything else in it and the gaps between them.
+ */
+function useRoom(scroller: HTMLElement | null | undefined, on: boolean): number | undefined {
+  const [room, setRoom] = useState<number>();
+  useLayoutEffect(() => {
+    const column = scroller?.parentElement;
+    if (!on || !scroller || !column) {
+      setRoom(undefined);
+      return;
+    }
+    const measure = () => {
+      const others = [...column.children].filter((child) => child !== scroller);
+      const gap = Number.parseFloat(getComputedStyle(column).rowGap) || 0;
+      const scrollerStyle = getComputedStyle(scroller);
+      const padding =
+        (Number.parseFloat(scrollerStyle.paddingTop) || 0) +
+        (Number.parseFloat(scrollerStyle.paddingBottom) || 0);
+      const taken = others.reduce((sum, child) => sum + (child as HTMLElement).offsetHeight, 0);
+      setRoom(column.clientHeight - taken - gap * others.length - padding);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    for (const child of column.children) if (child !== scroller) observer.observe(child);
+    return () => observer.disconnect();
+  }, [scroller, on]);
+  return room;
+}
 
 /** The card's width class in the grid, for `Card` to put on its section. */
 export function useWidgetSpan(): string {
@@ -161,12 +201,23 @@ function useSlideOnReorder(order: string) {
 }
 
 /** The overview's cards in the user's order, with the edit mode's tray at the end. */
-export function WidgetGrid({ render }: { render: (id: WidgetId) => ReactNode }) {
+export function WidgetGrid({
+  render,
+  fill = false,
+}: {
+  render: (id: WidgetId) => ReactNode;
+  /** Grow the cards to fill the column the overview is docked in. */
+  fill?: boolean;
+}) {
   const layout = useWidgetLayout();
   const isEditing = useWidgetsEditing();
   const [dragId, setDragId] = useState<WidgetId>();
   const [ghost, setGhost] = useState<{ x: number; y: number }>();
   const grid = useSlideOnReorder(layout.map((slot) => `${slot.id}:${slot.span}`).join());
+  const [scroller, setScroller] = useState<HTMLElement | null>();
+  useLayoutEffect(() => setScroller(grid.current?.parentElement), [grid]);
+  const room = useRoom(scroller, fill);
+  const height = room === undefined ? CARD_HEIGHT : fittedCardHeight(room, layoutRows(layout));
 
   const hoverTarget = (x: number, pointerY: number, id: WidgetId) => {
     const box = grid.current?.parentElement?.getBoundingClientRect();
@@ -253,7 +304,7 @@ export function WidgetGrid({ render }: { render: (id: WidgetId) => ReactNode }) 
 
   const hidden = hiddenWidgets(layout);
   return (
-    <>
+    <HeightContext.Provider value={height}>
       <div
         ref={grid}
         className="relative flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
@@ -295,7 +346,7 @@ export function WidgetGrid({ render }: { render: (id: WidgetId) => ReactNode }) 
           {WIDGET_NAMES[dragId]}
         </div>
       )}
-    </>
+    </HeightContext.Provider>
   );
 }
 

@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   addWidget,
+  CARD_HEIGHT,
   DEFAULT_LAYOUT,
+  fittedCardHeight,
   hiddenWidgets,
+  layoutRows,
   moveWidget,
   nextSpan,
   parseLayout,
   removeWidget,
   resizeWidget,
   sameLayout,
+  TALL_CARD_HEIGHT,
 } from "./widgetLayout";
 
 const ids = (layout: { id: string }[]) => layout.map((slot) => slot.id);
@@ -80,5 +84,27 @@ describe("arranging", () => {
   test("cycles widths and wraps back to the narrowest", () => {
     expect([nextSpan(2), nextSpan(3), nextSpan(4), nextSpan(6)]).toEqual([3, 4, 6, 2]);
     expect(resizeWidget(DEFAULT_LAYOUT, "spend")[2]).toEqual({ id: "spend", span: 3 });
+  });
+});
+
+describe("card height", () => {
+  test("rows wrap a card that does not fit the row's end", () => {
+    expect(layoutRows(DEFAULT_LAYOUT)).toBe(2);
+    expect(layoutRows([])).toBe(0);
+    expect(
+      layoutRows([
+        { id: "activity", span: 4 },
+        { id: "threads", span: 3 },
+        { id: "spend", span: 2 },
+      ]),
+    ).toBe(2);
+    expect(layoutRows([...DEFAULT_LAYOUT, { id: "running", span: 6 }])).toBe(3);
+  });
+
+  test("cards share the room between the short and the tall height", () => {
+    expect(fittedCardHeight(408, 2)).toBe(200);
+    expect(fittedCardHeight(2000, 2)).toBe(TALL_CARD_HEIGHT);
+    expect(fittedCardHeight(200, 3)).toBe(CARD_HEIGHT);
+    expect(fittedCardHeight(500, 0)).toBe(CARD_HEIGHT);
   });
 });

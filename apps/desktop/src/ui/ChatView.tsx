@@ -930,7 +930,7 @@ export function ChatView() {
               )}
               style={
                 overviewDocked
-                  ? { top: HEADER_HEIGHT, bottom: stackHeight + 24 }
+                  ? { top: HEADER_HEIGHT + 24, bottom: stackHeight + 24 }
                   : { top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }
               }
             >
@@ -962,7 +962,7 @@ export function ChatView() {
                     setOverviewMounted(false);
                   }}
                 >
-                  <NewThreadWidgets project={projectCwd} />
+                  <NewThreadWidgets project={projectCwd} docked={overviewDocked} />
                 </div>
               )}
               {overviewDocked && overviewToggles}
