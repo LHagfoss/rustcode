@@ -111,29 +111,6 @@ describe("a project's threads", () => {
   });
 });
 
-test("the overview defaults closed and persists its choice", async () => {
-  const { overviewExpanded, setOverviewExpanded } = await import("./widgets");
-  const scope = globalThis as typeof globalThis & { localStorage: Storage };
-  const previous = scope.localStorage;
-  const values = new Map<string, string>();
-  scope.localStorage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      values.set(key, value);
-    },
-  } as Storage;
-  try {
-    expect(overviewExpanded()).toBe(false);
-    setOverviewExpanded(true);
-    expect(overviewExpanded()).toBe(true);
-    setOverviewExpanded(false);
-    expect(overviewExpanded()).toBe(false);
-  } finally {
-    if (previous) scope.localStorage = previous;
-    else Reflect.deleteProperty(scope, "localStorage");
-  }
-});
-
 describe("the activity streak", () => {
   const today = new Date("2026-06-10T12:00:00Z");
   const days = (...entries: [string, number][]) => new Map(entries);

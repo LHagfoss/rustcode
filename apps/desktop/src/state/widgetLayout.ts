@@ -158,7 +158,7 @@ export function useWidgetLayout(): WidgetSlot[] {
 /** A grid row's height when the overview has no room to fill, and the least and most it takes when it has. */
 export const ROW_HEIGHT = 128;
 export const MIN_ROW_HEIGHT = 112;
-export const MAX_ROW_HEIGHT = 200;
+export const MAX_ROW_HEIGHT = 280;
 /** The space between the grid's cards, in pixels. */
 export const CARD_GAP = 8;
 

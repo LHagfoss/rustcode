@@ -44,6 +44,7 @@ import {
   Settings as Gear,
   GitBranch,
   Hand,
+  LayoutGrid,
   MessageSquare,
   Moon,
   PanelLeft,
@@ -145,6 +146,14 @@ export function baseActions(): PaletteAction[] {
       keys: shortcutHint("inbox"),
       words: "attention waiting inbox approve decline failed delegate",
       run: () => setView({ kind: "inbox" }),
+    },
+    {
+      id: "dashboard",
+      label: s.view.kind === "dashboard" ? "Show the chat" : "Show the dashboard",
+      detail: "Activity, spend, pull requests and what is running",
+      icon: LayoutGrid,
+      words: "dashboard overview home activity spend usage widgets",
+      run: () => setView(s.view.kind === "dashboard" ? { kind: "chat" } : { kind: "dashboard" }),
     },
     {
       id: "loops",

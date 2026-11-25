@@ -6,7 +6,6 @@
 
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
-import { readFlag, writeFlag } from "../lib/storage";
 import { sameProject } from "./orchestration";
 import { DAY_MS } from "./period";
 
@@ -128,17 +127,6 @@ export function projectThreads(sessions: readonly SessionSummary[], project: str
   return sessions
     .filter((session) => sameProject(session.worktree?.repo || session.cwd, project))
     .sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0));
-}
-
-/** The overview is opt-in and remembers its last setting on this device. */
-const OVERVIEW_KEY = "rc-new-thread-overview";
-export function overviewExpanded(): boolean {
-  return readFlag(OVERVIEW_KEY, false);
-}
-
-export function setOverviewExpanded(expanded: boolean): void {
-  // Storage can be unavailable; the view still works for this session.
-  writeFlag(OVERVIEW_KEY, expanded);
 }
 
 /** The activity card's small numbers: turns in the last seven days, today's included, and the busiest day read. */

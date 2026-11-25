@@ -995,25 +995,6 @@
 .rc-overview-out .rc-overview-card {
   animation: rc-overview-fill-out 160ms ease-out both;
 }
-@keyframes rc-dock-heading-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-.rc-dock-heading {
-  animation: rc-dock-heading-in 320ms var(--ease-snappy) 120ms both;
-}
-.rc-overview-docked.rc-overview-in .rc-overview-body,
-.rc-overview-docked.rc-overview-in .rc-overview-card {
-  animation-delay: 220ms;
-  animation-fill-mode: both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .rc-dock-heading {
-    animation: none;
-  }
-}
 
 /*
  * A native slider's thumb is the same knob (settingsKit.tsx `Slider`): the browser draws it in
@@ -1451,15 +1432,7 @@
 }
 /* The composer's stack eases its `bottom` as a new thread fills, and its `right` with the lane. */
 .rc-lane-stack {
-  transition:
-    bottom 500ms var(--ease-snappy),
-    opacity 200ms ease-out,
-    translate 320ms var(--ease-snappy);
-}
-.rc-composer-away {
-  opacity: 0;
-  translate: 0 24px;
-  pointer-events: none;
+  transition: bottom 500ms var(--ease-snappy);
 }
 .rc-panel-moving .rc-lane-stack {
   transition:

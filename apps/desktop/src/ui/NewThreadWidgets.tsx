@@ -89,13 +89,10 @@ const HEAT_CELL = 8;
 const HEAT_CELL_MAX = 14;
 /** A two-row activity card stacks its numbers over the heatmap: their line's height, and the larger cells it allows. */
 const STACKED_STATS = 100;
-const STACKED_HEAT_CELL_MAX = 18;
+const STACKED_HEAT_CELL_MAX = 24;
 const HEAT_GAP = 2;
 /** The fewest weeks the heatmap draws, however narrow its card. */
 const MIN_WEEKS = 8;
-
-/** Short columns leave the overview out to keep space for the composer. */
-export const NEW_THREAD_WIDGETS_MIN_HEIGHT = 700;
 
 /** A day's shade in the heatmap, as the design system's own fills and accent. */
 const SHADE: Record<HeatCell["level"], string> = {

@@ -443,7 +443,7 @@
 4 apps/desktop/src/state/wakeNotice.test.ts
 15 apps/desktop/src/state/wakeNotice.ts
 6 apps/desktop/src/state/widgets.test.ts
-6 apps/desktop/src/state/widgets.ts
+5 apps/desktop/src/state/widgets.ts
 5 apps/desktop/src/state/workflows.test.ts
 11 apps/desktop/src/state/workflows.ts
 9 apps/desktop/src/ui/AddHarness.tsx
@@ -460,7 +460,7 @@
 21 apps/desktop/src/ui/ChangesPanel.tsx
 5 apps/desktop/src/ui/ChatBackgroundGroup.tsx
 5 apps/desktop/src/ui/ChatLight.tsx
-109 apps/desktop/src/ui/ChatView.tsx
+97 apps/desktop/src/ui/ChatView.tsx
 14 apps/desktop/src/ui/CommandPalette.tsx
 5 apps/desktop/src/ui/Compare.tsx
 222 apps/desktop/src/ui/Composer.tsx
