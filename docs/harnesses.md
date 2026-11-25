@@ -839,6 +839,36 @@ Add a scenario there for a regression that crosses the engine and a harness
 process; the in-process fake in `harness/acp_child_tests.rs` stays the place
 for adapter details.
 
+### Replay fixtures
+
+`harness/replay_tests.rs` replays each file in
+`rustcode/engine/src/fixtures/harness/` into a thread's transcript and checks
+the history it records against the file's last line. A fixture is JSONL, one
+frame per line:
+
+- a header, `{"adapter", "recorded", "source"}`
+- `{"dir": "client", "method": "session/prompt" | "session/cancel", "params"}`
+- `{"dir": "agent", "method": "session/update" | "session/request_permission", "params"}`
+- `{"dir": "agent", "response": "session/prompt", "result"}`, which ends the turn
+- `{"expect": [...], "permissions": n}`: per message its `role` and, where it
+  matters, `contains`, `calls`, `tool`, `success`, `pending`, `exit_code`,
+  `error_kind` and `command`
+
+The fixtures for `claude-agent-acp` and Pi are written by hand from the shapes
+this page and `harness/transcript.rs` describe (`"recorded": false`). To
+replace one with a recording, or to refresh it after an adapter upgrade:
+
+1. Turn on *Harness messages* (Settings › Diagnostics › Record request
+   bodies) and run the scenario
+   on that harness in a scratch project: a reply, a shell command, a file
+   edit with its approval, and a cancelled turn.
+2. Export the thread's frames in order:
+   `rc data query "SELECT direction, method, payload_json FROM harness_rpc_messages WHERE thread_id = '<id>' ORDER BY id"`.
+3. Rewrite them as fixture lines, replacing every path, id, prompt and output
+   with neutral text: the test refuses home paths, tokens and email
+   addresses. Keep the keys, kinds, statuses and `_meta` exactly as sent.
+4. Set `"recorded": true` with the adapter's version, and update `expect`.
+
 ## MCP servers and skills
 
 A thread on an external harness runs with the workspace's MCP servers: the
