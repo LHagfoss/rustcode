@@ -40,6 +40,38 @@ export function recapDue(seenAt: number | undefined, now: number, minutes: numbe
   return now - seenAt >= minutes * MINUTE;
 }
 
+/**
+ * When a chat went quiet, for a return to it: when the user last had it on screen,
+ * or, for one they never opened here, its last activity. Either earns a recap
+ * through {@link recapDue}, so every chat left long enough gets one.
+ */
+export function quietSince(seenAt: number | undefined, lastActive: number | undefined): number | undefined {
+  return seenAt ?? lastActive;
+}
+
+/** An open recap: when its chat went quiet, and how many messages it had once loaded. */
+export interface OpenRecap {
+  since: number;
+  messages?: number;
+}
+
+/** The messages a chat holds: what the user sent and the replies, not tool calls or notices. */
+export function messageCount(items: readonly TranscriptItem[]): number {
+  let n = 0;
+  for (const item of items) if (item.kind === "assistant" || typed(item)) n++;
+  return n;
+}
+
+/**
+ * The recap once its chat has `count` messages (undefined while it loads): it takes
+ * the first count it sees, and is gone (null) when a message arrives after it.
+ */
+export function recapAfterMessages(recap: OpenRecap, count: number | undefined): OpenRecap | null {
+  if (count === undefined) return recap;
+  if (recap.messages === undefined) return { ...recap, messages: count };
+  return count > recap.messages ? null : recap;
+}
+
 /** The last-seen map with only its {@link SEEN_LIMIT} most recent chats. */
 export function pruneSeen(seen: Readonly<Record<string, number>>): Record<string, number> {
   const entries = Object.entries(seen).filter(([, at]) => Number.isFinite(at) && at > 0);

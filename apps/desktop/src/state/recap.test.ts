@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   chatRecapOf,
+  messageCount,
   parseRecapMinutes,
   plainLine,
   pruneSeen,
+  quietSince,
   RECAP_MINUTES_DEFAULT,
+  recapAfterMessages,
   recapDue,
   recapMinutesLabel,
   SEEN_LIMIT,
@@ -104,5 +107,33 @@ describe("what the recap says", () => {
     expect(shorten("One two three. Four five six seven.", 22)).toBe("One two three.");
     expect(shorten("alpha beta gamma delta epsilon", 20)).toBe("alpha beta gamma…");
     expect(plainLine("```ts\nconst a = 1;\n```\nafter")).toBe("after");
+  });
+});
+
+describe("recaps in every chat", () => {
+  test("a chat never opened here goes quiet from its last activity", () => {
+    expect(quietSince(undefined, NOW - 90 * MINUTE)).toBe(NOW - 90 * MINUTE);
+    expect(quietSince(NOW - 5 * MINUTE, NOW - 90 * MINUTE)).toBe(NOW - 5 * MINUTE);
+    expect(quietSince(undefined, undefined)).toBeUndefined();
+  });
+
+  test("messages count what was said, not steers or wakes", () => {
+    expect(
+      messageCount([user("a"), reply("b"), user("c", { wake: true }), user("d", { steering: true })]),
+    ).toBe(2);
+  });
+});
+
+describe("a recap closes when a new message arrives", () => {
+  test("it waits for the chat to load, then takes its count", () => {
+    const open = { since: NOW };
+    expect(recapAfterMessages(open, undefined)).toBe(open);
+    expect(recapAfterMessages(open, 4)).toEqual({ since: NOW, messages: 4 });
+  });
+
+  test("the same count keeps it and one more closes it", () => {
+    const open = { since: NOW, messages: 4 };
+    expect(recapAfterMessages(open, 4)).toBe(open);
+    expect(recapAfterMessages(open, 5)).toBeNull();
   });
 });

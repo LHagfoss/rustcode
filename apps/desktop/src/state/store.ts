@@ -483,7 +483,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   ),
   chatRecaps: storedFlag(STORAGE.chatRecaps, SETTINGS_DEFAULTS.chatRecaps),
   recapMinutes: parseRecapMinutes(stored(STORAGE.recapMinutes)),
-  chatRecap: null,
+  recaps: {},
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   internetWaits: storedJson<Record<string, InternetWait>>(STORAGE.internetWaits, {}),

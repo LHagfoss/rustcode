@@ -472,7 +472,7 @@ export function Transcript({
   // skips a streamed chunk (state/fold.ts keepUnchangedRows).
   const drawnRows = useRef<Row[]>([]);
   const showTools = useApp((s) => s.showToolCalls);
-  const recapOpen = useApp((s) => !peek && s.chatRecaps && s.chatRecap?.threadId === thread.id);
+  const recapOpen = useApp((s) => !peek && s.chatRecaps && !!s.recaps[thread.id]);
   // The messages that open a day keep their time in view: where a long thread's days begin.
   const newDays = useMemo(() => newDayMessages(visible), [visible]);
   const rows = useMemo<Row[]>(() => {
