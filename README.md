@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="./images/readme-desktop.png" alt="The RustCode app showing a new thread" width="100%"/>
+  <img src="./images/readme-desktop.png" alt="The RustCode app showing a thread with an agent reply, a pending approval and the Properties panel" width="100%"/>
 </p>
 
 RustCode is an agentic development environment (ADE) for the coding agents you
