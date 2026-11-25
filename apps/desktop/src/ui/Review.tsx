@@ -25,6 +25,7 @@ import {
   type PatchLine,
   parsePatch,
   type ReviewComment,
+  rangeLines,
   reviewMessage,
   splitRows,
 } from "../state/diff";
@@ -164,21 +165,24 @@ interface LineProps {
   line: PatchLine;
   html: string | null | undefined;
   side: "LEFT" | "RIGHT";
-  onComment: () => void;
+  onComment: (extend: boolean) => void;
   commented: boolean;
+  /** Inside the range a comment is being written on. */
+  picked?: boolean;
 }
 
-function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
+function Gutter({ line, side, onComment, commented, picked }: Omit<LineProps, "html">) {
   const n = side === "LEFT" ? line.old : line.new;
   return (
     <button
       type="button"
-      onClick={onComment}
+      onClick={(e) => onComment(e.shiftKey)}
       disabled={n === undefined}
       aria-label={n === undefined ? undefined : `Comment on line ${n}`}
       className={cx(
         "group/g relative w-[6ch] shrink-0 pr-1.5 text-right text-fg-faint tabular enabled:hover:bg-accent/20 enabled:hover:text-accent",
         commented && "text-accent",
+        picked && "bg-accent/20 text-accent",
       )}
     >
       <span className="group-hover/g:invisible">{n ?? ""}</span>
@@ -229,7 +233,12 @@ const FileDiffView = memo(function FileDiffView({
   onAdd: (c: ReviewComment) => void;
   onRemove: (c: ReviewComment) => void;
 }) {
-  const [editing, setEditing] = useState<{ side: "LEFT" | "RIGHT"; line: number; code: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    side: "LEFT" | "RIGHT";
+    line: number;
+    startLine?: number;
+    code: string;
+  } | null>(null);
   // Every line highlighted once, split around the words that changed on it.
   const texts = useMemo(() => file.lines.map((line) => line.text), [file.lines]);
   const marks = useMemo(() => runWordMarks(file.lines), [file.lines]);
@@ -241,10 +250,23 @@ const FileDiffView = memo(function FileDiffView({
   };
   const at = (side: "LEFT" | "RIGHT", n?: number) =>
     n === undefined ? [] : comments.filter((c) => c.side === side && c.line === n);
-  const start = (line: PatchLine, side: "LEFT" | "RIGHT") => {
+  const start = (line: PatchLine, side: "LEFT" | "RIGHT", extend = false) => {
     const n = side === "LEFT" ? line.old : line.new;
-    if (n !== undefined) setEditing({ side, line: n, code: line.text });
+    if (n === undefined) return;
+    const anchor = editing?.side === side ? (editing.startLine ?? editing.line) : undefined;
+    const range = extend && anchor !== undefined ? rangeLines(file.lines, side, anchor, n) : null;
+    if (range && range.length > 1) {
+      const first = Math.min(anchor!, n);
+      const last = Math.max(anchor!, n);
+      setEditing({ side, line: last, startLine: first, code: range.map((l) => l.text).join("\n") });
+    } else setEditing({ side, line: n, code: line.text });
   };
+  const picked = (side: "LEFT" | "RIGHT", n?: number) =>
+    n !== undefined &&
+    editing?.side === side &&
+    editing.startLine !== undefined &&
+    n >= editing.startLine &&
+    n <= editing.line;
   const after = (line: PatchLine | undefined, side: "LEFT" | "RIGHT") => {
     if (!line) return null;
     const n = side === "LEFT" ? line.old : line.new;
@@ -271,7 +293,14 @@ const FileDiffView = memo(function FileDiffView({
           <CommentBox
             onCancel={() => setEditing(null)}
             onSave={(body) => {
-              onAdd({ path: file.path, line: editing.line, side, body, code: editing.code });
+              onAdd({
+                path: file.path,
+                line: editing.line,
+                ...(editing.startLine !== undefined ? { startLine: editing.startLine } : {}),
+                side,
+                body,
+                code: editing.code,
+              });
               setEditing(null);
             }}
           />
@@ -294,14 +323,16 @@ const FileDiffView = memo(function FileDiffView({
                     <Gutter
                       line={line}
                       side="LEFT"
-                      onComment={() => start(line, "LEFT")}
+                      onComment={(extend) => start(line, "LEFT", extend)}
                       commented={at("LEFT", line.old).length > 0}
+                      picked={picked("LEFT", line.old)}
                     />
                     <Gutter
                       line={line}
                       side="RIGHT"
-                      onComment={() => start(line, line.kind === "del" ? "LEFT" : "RIGHT")}
+                      onComment={(extend) => start(line, line.kind === "del" ? "LEFT" : "RIGHT", extend)}
                       commented={at("RIGHT", line.new).length > 0}
+                      picked={picked("RIGHT", line.new)}
                     />
                     <span
                       className={cx(
@@ -339,8 +370,9 @@ const FileDiffView = memo(function FileDiffView({
                               <Gutter
                                 line={shown}
                                 side={side}
-                                onComment={() => start(shown, side)}
+                                onComment={(extend) => start(shown, side, extend)}
                                 commented={at(side, side === "LEFT" ? shown.old : shown.new).length > 0}
+                                picked={picked(side, side === "LEFT" ? shown.old : shown.new)}
                               />
                               {code(shown)}
                             </>
@@ -572,7 +604,13 @@ export function Review({ threadId }: { threadId: string }) {
             commitId: source.pull.headSha,
             event,
             body: note,
-            comments: comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+            comments: comments.map((c) => ({
+              path: c.path,
+              line: c.line,
+              side: c.side,
+              body: c.body,
+              ...(c.startLine !== undefined ? { start_line: c.startLine, start_side: c.side } : {}),
+            })),
           },
           60_000,
         )) as JsonObject;
@@ -797,7 +835,7 @@ export function Review({ threadId }: { threadId: string }) {
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
                   <span className="shrink-0 text-caption text-fg-faint max-[1300px]:hidden">
-                    Click a line number to comment
+                    Click a line number to comment, Shift-click another to cover a range
                   </span>
                   <Tooltip label="Mark viewed (V)">
                     <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-fg-muted hover:text-fg">

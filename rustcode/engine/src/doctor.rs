@@ -2,7 +2,7 @@
 //!
 //! Checks the local harness prerequisites without network access:
 //! config directory, config load, required binaries (`git`, `rg`),
-//! and skill directories. `--fix` creates missing directories; binaries are
+//! external harnesses and their accounts, and skill directories. `--fix` creates missing directories; binaries are
 //! never auto-installed (we print the install hint instead).
 
 use std::path::PathBuf;
@@ -224,6 +224,8 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
         ),
     ));
 
+    checks.extend(collect_harness_checks());
+
     // Skill directories (informational; --fix creates only the one RustCode
     // owns, never the shared or workspace roots).
     for root in crate::skills::skill_roots() {
@@ -291,6 +293,125 @@ pub fn format_report(checks: &[DoctorCheck]) -> String {
         ));
     }
     out
+}
+
+type HarnessFinding = (
+    crate::harness::ResolvedHarness,
+    crate::harness::detect::Detection,
+);
+type AccountFinding = (crate::harness::config::HarnessAccount, &'static str);
+
+/// Every external harness of the user config, detected the way Settings ›
+/// Harnesses does, and the named accounts of the enabled ones with their
+/// sign-in read by the harness's own status command.
+fn collect_harness_checks() -> Vec<DoctorCheck> {
+    let Ok(dir) = crate::harness::config::config_dir() else {
+        return Vec::new();
+    };
+    let (_, entries) = crate::harness::config::load_in(&dir);
+    let found: Vec<HarnessFinding> = crate::harness::resolve_all(&entries)
+        .into_iter()
+        .filter(|harness| harness.kind != crate::harness::HarnessKind::Builtin)
+        .map(|harness| {
+            let detection = if harness.enabled {
+                crate::harness::detect::detect(&harness)
+            } else {
+                crate::harness::detect::Detection::default()
+            };
+            (harness, detection)
+        })
+        .collect();
+    let accounts: Vec<AccountFinding> = crate::harness::config::load_accounts_in(&dir)
+        .into_iter()
+        .filter(|account| {
+            found
+                .iter()
+                .any(|(harness, _)| harness.enabled && harness.id == account.harness)
+        })
+        .map(|account| {
+            let auth = crate::harness::detect::account_auth(&account, true);
+            (account, auth)
+        })
+        .collect();
+    harness_checks(&found, &accounts)
+}
+
+fn harness_checks(found: &[HarnessFinding], accounts: &[AccountFinding]) -> Vec<DoctorCheck> {
+    let mut checks = Vec::new();
+    for (harness, detection) in found {
+        let known = harness.known;
+        if !harness.enabled {
+            checks.push(DoctorCheck::pass(
+                "harness",
+                format!("{}: turned off", harness.id),
+            ));
+            continue;
+        }
+        if !detection.installed {
+            let program = harness.command.first().map_or("", String::as_str);
+            let detail = detection
+                .error
+                .clone()
+                .unwrap_or_else(|| format!("`{program}` not found on PATH"));
+            checks.push(DoctorCheck::fail(
+                "harness",
+                format!("{}: {detail}", harness.id),
+                known
+                    .and_then(|known| known.install_hint)
+                    .map(str::to_owned),
+            ));
+            continue;
+        }
+        let version = detection.version.as_deref().unwrap_or("version unknown");
+        match detection.auth {
+            "needs_login" => checks.push(DoctorCheck::fail(
+                "harness",
+                format!("{}: {version}, signed out", harness.id),
+                known
+                    .and_then(|known| known.login_command)
+                    .map(|login| format!("run `{}` in a terminal", login.join(" "))),
+            )),
+            "ok" => checks.push(DoctorCheck::pass(
+                "harness",
+                format!("{}: {version}, signed in", harness.id),
+            )),
+            _ => checks.push(DoctorCheck::pass(
+                "harness",
+                format!("{}: {version}, sign-in not checked", harness.id),
+            )),
+        }
+    }
+    for (account, auth) in accounts {
+        let label = format!(
+            "{} account {} ({})",
+            account.harness,
+            account.display_name(),
+            account.config_dir
+        );
+        match *auth {
+            "needs_login" => checks.push(DoctorCheck::fail(
+                "harness-account",
+                format!("{label}: signed out"),
+                crate::harness::config::account_layout(&account.harness).map(|layout| {
+                    format!(
+                        "run `{}={} {}` in a terminal",
+                        layout.env_var,
+                        account.config_dir,
+                        layout.login_command.join(" ")
+                    )
+                }),
+            )),
+            "ok" => checks.push(DoctorCheck::pass(
+                "harness-account",
+                format!("{label}: signed in"),
+            )),
+            _ => checks.push(DoctorCheck::pass(
+                "harness-account",
+                format!("{label}: sign-in not checked"),
+            )),
+        }
+    }
+    checks
 }
 
 /// The config rows: `config-load` fails when the user config could not be
@@ -379,6 +500,77 @@ mod tests {
         let clean = config_load_checks(&[], "model=m");
         assert!(clean[0].ok);
         assert_eq!(clean[0].detail, "model=m");
+    }
+
+    fn resolved(id: &str, enabled: bool) -> crate::harness::ResolvedHarness {
+        crate::harness::ResolvedHarness {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            kind: crate::harness::HarnessKind::Acp,
+            command: vec![format!("{id}-missing-binary")],
+            env: Vec::new(),
+            enabled,
+            known: None,
+        }
+    }
+
+    fn detected(installed: bool, auth: &'static str) -> crate::harness::detect::Detection {
+        crate::harness::detect::Detection {
+            installed,
+            version: installed.then(|| "1.2.3".to_owned()),
+            auth,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn harness_rows_fail_only_for_enabled_missing_or_signed_out_harnesses() {
+        let found = vec![
+            (resolved("off", false), detected(false, "unknown")),
+            (resolved("gone", true), detected(false, "unknown")),
+            (resolved("out", true), detected(true, "needs_login")),
+            (resolved("fine", true), detected(true, "ok")),
+            (resolved("quiet", true), detected(true, "unknown")),
+        ];
+        let checks = harness_checks(&found, &[]);
+        let row = |id: &str| {
+            checks
+                .iter()
+                .find(|check| check.detail.starts_with(&format!("{id}:")))
+                .unwrap()
+                .clone()
+        };
+        assert!(row("off").ok);
+        assert_eq!(row("off").detail, "off: turned off");
+        assert!(!row("gone").ok);
+        assert!(
+            row("gone")
+                .detail
+                .contains("`gone-missing-binary` not found on PATH")
+        );
+        assert!(!row("out").ok);
+        assert!(row("fine").ok);
+        assert_eq!(row("fine").detail, "fine: 1.2.3, signed in");
+        assert!(row("quiet").ok);
+        assert!(row("quiet").detail.ends_with("sign-in not checked"));
+    }
+
+    #[test]
+    fn a_signed_out_account_fails_with_its_login_command() {
+        let account = crate::harness::config::HarnessAccount {
+            id: "work".to_owned(),
+            harness: "codex".to_owned(),
+            name: Some("Work".to_owned()),
+            config_dir: "~/.codex-work".to_owned(),
+        };
+        let checks = harness_checks(&[], &[(account.clone(), "needs_login"), (account, "ok")]);
+        assert!(!checks[0].ok);
+        assert_eq!(checks[0].name, "harness-account");
+        assert_eq!(
+            checks[0].fix_hint.as_deref(),
+            Some("run `CODEX_HOME=~/.codex-work codex login` in a terminal")
+        );
+        assert!(checks[1].ok);
     }
 
     #[test]

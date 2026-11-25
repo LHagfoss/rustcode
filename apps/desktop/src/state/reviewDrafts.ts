@@ -42,6 +42,7 @@ function comment(value: unknown): ReviewComment | null {
     side: c.side,
     body: c.body,
     code: typeof c.code === "string" ? c.code : "",
+    ...(typeof c.startLine === "number" ? { startLine: c.startLine } : {}),
   };
 }
 

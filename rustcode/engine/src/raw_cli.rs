@@ -474,6 +474,15 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
                     }
                     return false;
                 }
+                if crate::tools::always_asks(&call.name) {
+                    if !quiet {
+                        println!(
+                            "[Headless] Rejected: {} asks before every call and nobody can answer",
+                            call.name
+                        );
+                    }
+                    return false;
+                }
                 if !quiet {
                     println!("\n[Headless] Executing Tool: {}", call.name);
                 }
