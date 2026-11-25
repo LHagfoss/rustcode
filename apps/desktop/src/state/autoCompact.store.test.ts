@@ -117,6 +117,36 @@ describe("requested compaction", () => {
     expect(isRunning(thread)).toBe(false);
   });
 
+  test("a queued turn that runs after a requested compaction can request the next one", async () => {
+    const id = await openClaudeThread(10);
+    const first = runPrompt(id, "yolo, finish this task first", emptyExtras);
+    expect(requestCompaction(id, false)).toBe(true);
+    void runPrompt(id, "yolo, the queued wake", emptyExtras);
+    await until(
+      () =>
+        isRunning(useApp.getState().threads[id]) &&
+        (useApp
+          .getState()
+          .threads[id]?.items.some((item) => item.kind === "user" && item.text === "yolo, the queued wake") ??
+          false),
+      10_000,
+    );
+
+    expect(requestCompaction(id, true)).toBe(true);
+    await first;
+    const thread = useApp.getState().threads[id]!;
+    const compactions = thread.items.filter(
+      (item) => item.kind === "notice" && item.text.startsWith("Context compacted"),
+    );
+    expect(compactions).toHaveLength(2);
+    await until(
+      () =>
+        useApp.getState().threads[id]?.items.some((item) => item.kind === "user" && item.continued) ?? false,
+      10_000,
+    );
+    await cancel(id);
+  }, 30_000);
+
   test("continues once when requested", async () => {
     const id = await openClaudeThread(10);
     expect(requestCompaction(id, true)).toBe(true);

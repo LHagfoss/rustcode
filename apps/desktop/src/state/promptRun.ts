@@ -17,6 +17,7 @@ import { uploadPromptImages } from "./attachmentTransfer";
 import {
   beginAutoCompactIdle,
   cancelRequestedCompaction,
+  requestedCompactionEnded,
   runRequestedCompaction,
   scheduleAutoCompact,
 } from "./autoCompactRun";
@@ -351,7 +352,10 @@ export async function runPrompt(
     ...(options.requestedCompaction && previousQueueHold ? { queueHeld: true } : {}),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
-  if (options.requestedCompaction) updateThread(id, (t) => settleCompaction(t, null));
+  if (options.requestedCompaction) {
+    updateThread(id, (t) => settleCompaction(t, null));
+    requestedCompactionEnded(id);
+  }
   // Steers the turn never read wait as turns of their own, and carry the links they came from.
   if (!options.autoCompact) requeueUnreadSteers(id, unused);
   // The stop is settled first: a turn it stopped is reported as the stop, not twice.
