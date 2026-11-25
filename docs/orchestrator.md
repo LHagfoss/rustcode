@@ -379,6 +379,7 @@ is on) and that machine's engine attaches its own tools:
 | `update_session` on the caller's own thread | Its `status` (settling it), `pinned` and `title`, stored and told to every client; a title the user chose stays, and the answer says `title_kept` (#4094). A read mark, a snooze or another thread needs the app, and then nothing changes. |
 | `thread_usage`, `query_data` | This machine's data store through `_rustcode/data/usage` / `_rustcode/data/query`'s readers, the ones `rc usage` and `rc data query` use, under the app's cross-project rule below (#4094). |
 | `merge_when_green` | An engine-hosted harness validates the PR against the target thread’s branch and asks through its permission channel. A numbered own-PR merge returns `watching` after approval; the engine waits for CI and delivers the outcome as a follow-up turn. The outcome is also saved as `merge-<number>.json` in the thread folder. With no permission channel, nothing is merged. |
+| `interrupt_session` | The engine stops the target's running turn over the loopback, and the engine links that thread works through (and theirs), once each, settled `cancelled` and not reported; the answer says how many (`stopped`). A thread stops a delegate it started at any access, which is how `stop_workflow` and a workflow's timeout end their workers; any other target needs the caller at Full access and in reach (same rule as `thread_status`). (#4381) |
 | `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
 
 Any other tool says it needs the app, and names the shell command that answers it where there is one (`rc worktree` for `list_worktrees` and `worktree_status`, `rc data query` for `read_activity`, `gh pr list` for `list_pull_requests`).
@@ -471,7 +472,7 @@ What it does not do, and says so by name:
   `rc threads configure <id> [--model] [--effort]` does the same through the
   running server.
 
-Other management and merge tools (`transfer_session`, `interrupt_session`,
+Other management and merge tools (`transfer_session`,
 `merge_when_green`, `cleanup_worktree`, `handoff_worktree` and the rest) still
 need the app: with no app they are listed, and a call answers `{"error": {"code": "unavailable", "message": "…
 needs the RustCode app open to approve and run it …"}}` instead of "unknown

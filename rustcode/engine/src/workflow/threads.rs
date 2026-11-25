@@ -179,8 +179,7 @@ impl AgentRunner for ThreadRunner {
 
     fn abandon<'a>(&'a self, worker: &'a Worker) -> Fut<'a, ()> {
         Box::pin(async move {
-            // Best effort: with no app attached there is nothing to interrupt
-            // with, and the worker finishes on its own.
+            // Best effort: a worker that already ended has nothing to stop.
             let never = CancellationToken::new();
             let _ = self
                 .call(
