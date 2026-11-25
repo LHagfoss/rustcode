@@ -143,6 +143,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // preserves the message + location in debug.log even when the process
     // dies without a crash report.
     rustcode::logger::install_panic_hook();
+    rustcode::sessions::report_history_write_failures();
     // Provider keys are often exported in `~/.zshrc` (interactive-only) and
     // invisible to GUI/systemd/IDE launches. Hydrate missing keys from the
     // login shell once at startup so profiles, MCP servers, and tool shells

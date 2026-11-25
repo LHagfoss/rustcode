@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -187,7 +187,7 @@ impl Store {
             .ok_or_else(|| "invalid run id".to_owned())?;
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
-        write_atomically(&dir.join(SCRIPT_FILE), script.as_bytes())?;
+        crate::atomic_file::write_described(&dir.join(SCRIPT_FILE), script.as_bytes())?;
         self.save(record)
     }
 
@@ -197,7 +197,7 @@ impl Store {
             .ok_or_else(|| "invalid run id".to_owned())?;
         let text = serde_json::to_vec_pretty(record)
             .map_err(|error| format!("could not write the run record: {error}"))?;
-        write_atomically(&path, &text)
+        crate::atomic_file::write_described(&path, &text)
     }
 
     /// The final result as a file of its own, for a result too large to answer.
@@ -207,7 +207,7 @@ impl Store {
             .ok_or_else(|| "invalid run id".to_owned())?;
         let text = serde_json::to_vec_pretty(result)
             .map_err(|error| format!("could not write the result: {error}"))?;
-        write_atomically(&path, &text)?;
+        crate::atomic_file::write_described(&path, &text)?;
         Ok(path)
     }
 
@@ -303,14 +303,6 @@ impl Store {
         calls.sort_by_key(|call| call.seq);
         calls
     }
-}
-
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, bytes)
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    crate::atomic_file::replace_file(&temporary, path)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 #[cfg(test)]

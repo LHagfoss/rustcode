@@ -209,7 +209,7 @@ pub(crate) fn relocate(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot read settings: {e}")),
     }
-    commit_move(&old, &new, &edits, atomic_write)?;
+    commit_move(&old, &new, &edits, crate::atomic_file::write_atomic)?;
     Ok(json!({ "path": new, "previous_path": old, "moved": true, "thread_ids": ids }))
 }
 
@@ -240,16 +240,6 @@ fn commit_move(
         }
     }
     Ok(())
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let temp = path.with_extension("relocate.tmp");
-    std::fs::write(&temp, bytes)?;
-    let result = std::fs::rename(&temp, path);
-    if result.is_err() {
-        let _ = std::fs::remove_file(temp);
-    }
-    result
 }
 
 #[cfg(test)]
@@ -369,7 +359,7 @@ mod tests {
                 if calls == 2 {
                     return Err(std::io::Error::other("disk full"));
                 }
-                atomic_write(path, bytes)
+                crate::atomic_file::write_atomic(path, bytes)
             })
             .is_err()
         );
