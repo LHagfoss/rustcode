@@ -144,6 +144,7 @@ import {
   StopIcon,
   Sun03Icon,
   Tag01Icon,
+  TextWrapIcon,
   Tick02Icon,
   TickDouble02Icon,
   Time04Icon,
@@ -482,6 +483,7 @@ export const UserRound = (props: IconProps) => <Rounded name="UserRound" icon={U
 export const Users = (props: IconProps) => <Rounded name="Users" icon={UserMultipleIcon} {...props} />;
 export const Webhook = (props: IconProps) => <Rounded name="Webhook" icon={WebhookIcon} {...props} />;
 export const WifiOff = (props: IconProps) => <Rounded name="WifiOff" icon={WifiOff01Icon} {...props} />;
+export const TextWrap = (props: IconProps) => <Rounded name="TextWrap" icon={TextWrapIcon} {...props} />;
 export const Workflow = (props: IconProps) => (
   <Rounded name="Workflow" icon={WorkflowSquare01Icon} {...props} />
 );
