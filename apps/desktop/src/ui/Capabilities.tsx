@@ -588,20 +588,23 @@ function McpRow({
   };
   return (
     <div>
-      <div className="flex min-h-11 items-center gap-3 px-4 py-2">
+      <div className="group/row relative flex min-h-11 items-center gap-3 px-4 py-2">
         <button
           type="button"
           onClick={onToggleOpen}
           aria-expanded={open}
-          className="-mx-1.5 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-fill-subtle"
+          className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left outline-none before:absolute before:inset-x-1 before:inset-y-0.5 before:rounded-row before:transition-[background-color] before:duration-(--rc-hover-out) before:ease-out group-hover/row:before:bg-fill-subtle group-hover/row:before:duration-(--rc-hover-in) focus-visible:before:bg-fill active:before:bg-fill-strong"
         >
           <ChevronRight
             size={12}
             strokeWidth={2.5}
-            className={cx("shrink-0 text-fg-faint transition-transform duration-150", open && "rotate-90")}
+            className={cx(
+              "relative shrink-0 text-fg-faint transition-transform duration-150",
+              open && "rotate-90",
+            )}
           />
           <StatusDot connection={s.connection} />
-          <span className="min-w-0 flex-1">
+          <span className="relative min-w-0 flex-1">
             <span className="block truncate font-medium text-body">{s.name}</span>
             <span className={cx("block truncate text-caption", s.error ? "text-danger" : "text-fg-muted")}>
               {signingIn
@@ -619,7 +622,7 @@ function McpRow({
             </span>
           </span>
         </button>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="relative flex shrink-0 items-center gap-1.5">
           {needsSignIn && (
             <Action size="sm" disabled={signingIn} aria-busy={signingIn} onClick={() => void signIn()}>
               {signingIn ? <Spinner size={12} /> : null} Sign in
