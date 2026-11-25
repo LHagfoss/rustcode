@@ -949,6 +949,14 @@ pub(super) async fn dispatch_request(
                 Ok(())
             })
         }
+        "_rustcode/remote/revoke_machine" => {
+            let request: revoke_machine::RevokeMachineRequest = parse_params(params)?;
+
+            connection.spawn(async move {
+                responder.respond(revoke_machine::revoke_machine(request).await)?;
+                Ok(())
+            })
+        }
         "_rustcode/remote/revoke" => {
             let server = server.clone();
             let request: remote::RemoteRevokeRequest = parse_params(params)?;
@@ -1877,18 +1885,13 @@ pub(super) async fn dispatch_request(
         }
         "_rustcode/workflows/resume" => {
             let request: workflows::WorkflowResumeRequest = parse_params(params)?;
-            let asker = server.clients.info(client_id).orchestration;
-            let host = (asker >= 2)
-                .then(|| {
-                    super::preview::orchestration_client_for(
-                        true,
-                        &server.clients.session(&request.session_id),
-                    )
-                })
-                .flatten()
-                .map(|client| (client, asker));
-
+            let host = workflows::host(&server.clients, client_id, &request.session_id);
             responder.respond(workflows::resume(request, host))
+        }
+        "_rustcode/workflows/retry" => {
+            let request: workflows::WorkflowRetryRequest = parse_params(params)?;
+            let host = workflows::host(&server.clients, client_id, &request.session_id);
+            responder.respond(workflows::retry(request, host))
         }
         "_rustcode/workflows/wake" => {
             let request: workflows::WorkflowWakeRequest = parse_params(params)?;

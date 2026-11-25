@@ -824,6 +824,12 @@ pub enum MachineCommands {
         #[arg(long)]
         local: bool,
     },
+    /// For a lost or stolen computer: end its pairings on this computer and on
+    /// every saved machine that answers, then forget it here
+    RevokeEverywhere {
+        /// Name, host id or a prefix of one
+        machine: String,
+    },
     /// Create a connect code here, for another computer to pair with this
     /// one: valid ten minutes, once, no accept step. Anyone who has it can see
     /// and run all threads on this computer.
@@ -2126,6 +2132,10 @@ mod tests {
         assert!(matches!(
             machines(&["remove", "Studio", "--local"]).unwrap(),
             MachineCommands::Remove { local: true, .. }
+        ));
+        assert!(matches!(
+            machines(&["revoke-everywhere", "Laptop"]).unwrap(),
+            MachineCommands::RevokeEverywhere { ref machine } if machine == "Laptop"
         ));
         assert!(machines(&["discover", "--json", "--secs", "2"]).is_ok());
         assert!(machines(&["remove"]).is_err());

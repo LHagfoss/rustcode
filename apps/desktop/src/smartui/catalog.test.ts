@@ -118,6 +118,23 @@ describe("shorthand catalog", () => {
     ).toBe(
       '<div class="rc-findings"><div class="rc-finding" data-severity="high"><div><code>a.ts:21</code> · Codex</div><p>The limiter runs late.</p><p class="rc-finding-note rc-ok">Fixed</p></div></div>',
     );
+    const review = expandShorthand(
+      [
+        ":: findings",
+        "- Low | `b.ts:4` · Gemini | Flaky timer.",
+        "- High | `a.ts:21` · Codex | The limiter runs **late**.",
+        "- Medium | `c.ts:9` | Shared bucket. | Set aside: by design",
+        "- High | `d.ts:1` | Done already. | Fixed {ok}",
+      ].join("\n"),
+    );
+    expect(review).toContain(
+      '<div class="rc-finding-fix"><button class="rc-chip" data-rc-send="Fix this finding: a.ts:21 — The limiter runs late.">Fix</button></div>',
+    );
+    expect(review.match(/>Fix<\/button>/g)).toHaveLength(2);
+    expect(review).toContain(
+      'data-rc-send="Fix these open findings:\n- high · a.ts:21: The limiter runs late.\n- low · b.ts:4: Flaky timer.">Fix all open</button>',
+    );
+    expect(expandShorthand(":: findings\n- High | `a.ts:1` | One.")).not.toContain("Fix all open");
     expect(expandShorthand(":: files\n- src/a.ts | +12 -3 | new")).toContain(
       '<span><span class="rc-add">+12</span> <span class="rc-del">−3</span></span>',
     );

@@ -17,7 +17,7 @@ import { Method } from "../acp/types";
 import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { comparisonBase, shortRef } from "../lib/gitRef";
-import { gitChanges } from "../lib/native";
+import { type GitCommit, gitChanges, gitCommitChanges, gitCommits } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
@@ -90,10 +90,17 @@ type Source =
   | { kind: "uncommitted" }
   | { kind: "branch" }
   | { kind: "turn"; turn: number }
-  | { kind: "pull"; pull: PullRequest };
+  | { kind: "pull"; pull: PullRequest }
+  | { kind: "commit"; sha: string };
 
 const sourceKey = (s: Source) =>
-  s.kind === "turn" ? `turn:${s.turn}` : s.kind === "pull" ? `pull:${s.pull.number}` : s.kind;
+  s.kind === "turn"
+    ? `turn:${s.turn}`
+    : s.kind === "pull"
+      ? `pull:${s.pull.number}`
+      : s.kind === "commit"
+        ? `commit:${s.sha}`
+        : s.kind;
 
 function sourceLabel(s: Source, branch?: string): string {
   switch (s.kind) {
@@ -105,7 +112,15 @@ function sourceLabel(s: Source, branch?: string): string {
       return `turn ${s.turn}`;
     case "pull":
       return `pull request #${s.pull.number}`;
+    case "commit":
+      return `commit ${shortRef(s.sha)}`;
   }
+}
+
+/** A commit in the picker: its short sha and subject, a merge named as one. */
+export function commitLabel(c: Pick<GitCommit, "sha" | "subject" | "parents">): string {
+  const merge = c.parents > 1 && !/^merge\b/i.test(c.subject) ? "Merge: " : "";
+  return `${shortRef(c.sha)} · ${merge}${clip(c.subject, 40)}`;
 }
 
 const STATUS_LETTER: Record<string, string> = { added: "A", deleted: "D", renamed: "R", modified: "M" };
@@ -397,6 +412,19 @@ export function Review({ threadId }: { threadId: string }) {
   const error = opError(diff);
   const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
+  const [commits, setCommits] = useState<GitCommit[] | null>(null);
+  useEffect(() => {
+    setCommits(null);
+    if (!wt?.path || !wt.base) return;
+    let live = true;
+    gitCommits(wt.path, wt.base).then(
+      (list) => live && setCommits(list),
+      () => live && setCommits(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [wt?.path, wt?.base]);
   const draftKey = reviewDraftKey(threadId, sourceKey(source));
   const draft = useReviewDrafts((s) => s.book[draftKey]) ?? EMPTY_DRAFT;
   const counts = useReviewDrafts(useShallow((s) => draftCounts(s.book, threadId)));
@@ -463,8 +491,11 @@ export function Review({ threadId }: { threadId: string }) {
               binary: f.binary,
             }));
           } else {
-            const folder = source.kind === "branch" && wt ? wt.path : cwd;
-            const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
+            const folder = (source.kind === "branch" || source.kind === "commit") && wt ? wt.path : cwd;
+            const changes =
+              source.kind === "commit"
+                ? await gitCommitChanges(folder, source.sha)
+                : await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
             if (!changes)
               throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
             const chunks = splitUnifiedDiff(changes.diff);
@@ -533,7 +564,12 @@ export function Review({ threadId }: { threadId: string }) {
   const label = sourceLabel(source, wt?.branch);
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
-  const base = source.kind === "branch" ? comparisonBase(wt) : undefined;
+  const base =
+    source.kind === "branch"
+      ? comparisonBase(wt)
+      : source.kind === "commit"
+        ? `${shortRef(source.sha)}^`
+        : undefined;
   const counted = (key: string, label: string) => (counts[key] ? `${label} · ${counts[key]}` : label);
   const sources: { value: string; label: string }[] = [
     { value: "uncommitted", label: counted("uncommitted", "Uncommitted") },
@@ -595,7 +631,7 @@ export function Review({ threadId }: { threadId: string }) {
       <ViewHeader title={`Review · ${title}`}>
         <Segments
           label="Changes"
-          value={source.kind === "turn" ? "turn" : sourceKey(source)}
+          value={source.kind === "turn" ? "turn" : source.kind === "commit" ? "commit" : sourceKey(source)}
           onChange={(v) => {
             if (v === "uncommitted" || v === "branch") setSource({ kind: v });
             else if (v.startsWith("pull:") && pull) setSource({ kind: "pull", pull });
@@ -606,9 +642,33 @@ export function Review({ threadId }: { threadId: string }) {
           options={
             source.kind === "turn"
               ? [...sources, { value: "turn", label: counted(`turn:${source.turn}`, `Turn ${source.turn}`) }]
-              : sources
+              : source.kind === "commit"
+                ? [
+                    ...sources,
+                    {
+                      value: "commit",
+                      label: counted(`commit:${source.sha}`, `Commit ${shortRef(source.sha)}`),
+                    },
+                  ]
+                : sources
           }
         />
+        {commits && commits.length > 1 && (
+          <Select
+            label="One commit's changes"
+            size="sm"
+            className="max-w-[220px]"
+            value={source.kind === "commit" ? source.sha : ""}
+            onChange={(sha) => sha && setSource({ kind: "commit", sha })}
+            options={[
+              { value: "", label: "Commit…" },
+              ...commits.map((c) => ({
+                value: c.sha,
+                label: counted(`commit:${c.sha}`, commitLabel(c)),
+              })),
+            ]}
+          />
+        )}
         {checkpoints && checkpoints.length > 0 ? (
           <Select
             label="A turn's changes"

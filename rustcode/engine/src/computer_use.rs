@@ -1,4 +1,5 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
+mod proxy;
 use crate::orchestration::{
     ask_user::Asker,
     tool_socket::{CallAnswer, CallRequest},
@@ -53,9 +54,11 @@ impl Settings {
         {
             return false;
         }
-        let Some(host) = url.host_str() else {
-            return false;
-        };
+        url.host_str().is_some_and(|host| self.allows_host(host))
+    }
+    /// Whether a host (any case) matches an allowlist entry.
+    fn allows_host(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
         self.allowed_domains.iter().any(|entry| {
             let entry = entry.to_ascii_lowercase();
             if let Some(base) = entry.strip_prefix("*.") {
@@ -66,6 +69,26 @@ impl Settings {
         })
     }
 }
+/// The settings, read again only when `config.toml` changes, for checks that
+/// run on every request the browser makes.
+fn current_settings() -> Settings {
+    type Cached = Option<(Option<(std::time::SystemTime, u64)>, Settings)>;
+    static CACHE: Mutex<Cached> = Mutex::new(None);
+    let stamp = crate::config::get_config_dir()
+        .and_then(|dir| std::fs::metadata(dir.join("config.toml")).ok())
+        .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, settings)) = cache.as_ref()
+        && stamp.is_some()
+        && *cached == stamp
+    {
+        return settings.clone();
+    }
+    let settings = Settings::load();
+    *cache = Some((stamp, settings.clone()));
+    settings
+}
+
 pub(crate) fn settings_value() -> Value {
     let settings = Settings::load();
     json!({"enabled": settings.enabled, "allowed_domains": settings.allowed_domains,
@@ -271,6 +294,15 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
     }
     std::fs::write(profile.join(OWNER_FILE), std::process::id().to_string())
         .map_err(|e| e.to_string())?;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_on_failure = stop.clone().drop_guard();
+    let allow: proxy::Allow = Arc::new(|host: &str| {
+        let settings = current_settings();
+        settings.enabled && settings.allows_host(host)
+    });
+    let proxy_port = proxy::bind(allow, stop.clone())
+        .await
+        .map_err(|e| format!("Could not start the browser's proxy: {e}"))?;
     let child = Command::new(executable)
         .args([
             "--headless=new",
@@ -280,7 +312,10 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
             "--disable-extensions",
             "--disable-background-networking",
             "--block-new-web-contents",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         ])
+        .arg(format!("--proxy-server=http://127.0.0.1:{proxy_port}"))
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank")
         .stdin(std::process::Stdio::null())
@@ -329,7 +364,6 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         .await
         .map_err(|e| e.to_string())?;
     let (sender, mut jobs) = mpsc::channel::<Job>(1);
-    let stop = tokio_util::sync::CancellationToken::new();
     let stopped = stop.clone();
     tokio::spawn(async move {
         let mut chrome = chrome;
@@ -341,6 +375,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         {
             return;
         }
+        let _ = cdp
+            .command(
+                "Network.enable",
+                json!({"maxTotalBufferSize":0,"maxResourceBufferSize":0}),
+            )
+            .await;
         let _ = cdp
             .command(
                 "Network.setBlockedURLs",
@@ -374,6 +414,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = chrome.child.wait().await;
         let _ = std::fs::remove_dir_all(&chrome.profile);
     });
+    let _ = stop_on_failure.disarm();
     Ok(Browser { sender, stop })
 }
 struct Cdp {
@@ -395,7 +436,7 @@ impl Cdp {
     }
     async fn intercept(&mut self, event: &Value) -> Result<(), String> {
         if event["method"] == "Fetch.requestPaused" {
-            let allowed = Settings::load();
+            let allowed = current_settings();
             let allowed = allowed.enabled
                 && allowed.allows(event["params"]["request"]["url"].as_str().unwrap_or(""));
             let mut params = json!({"requestId":event["params"]["requestId"]});
@@ -446,7 +487,7 @@ impl Cdp {
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
-            if !Settings::load().allows(url) {
+            if !current_settings().allows(url) {
                 return Err("URL refused".into());
             }
             let response = self.command("Page.navigate", json!({"url":url})).await?;
@@ -456,7 +497,7 @@ impl Cdp {
             return Ok(response);
         }
         let location = self.evaluate("location.href".into()).await?;
-        if !Settings::load().allows(location.as_str().unwrap_or("")) {
+        if !current_settings().allows(location.as_str().unwrap_or("")) {
             return Err("Current page is outside the allowlist; open an allowed URL".into());
         }
         match tool {

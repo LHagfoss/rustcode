@@ -1,4 +1,4 @@
-// The Board: the threads as cards in four columns, Running, Needs input,
+// The Board: the threads as cards in four columns, Running, Needs you,
 // Review and Settled, as an alternative to the list. Drag a card to Review or
 // Settled (or use its buttons) to mark it; the engine moves merged worktree
 // threads to Settled by itself. Idle threads stay in the list.

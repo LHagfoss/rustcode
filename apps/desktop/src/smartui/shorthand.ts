@@ -541,15 +541,45 @@ function timeline(block: Block): string {
   return `${heading(block.arg)}<ol class="rc-steps rc-timeline">${out.join("")}</ol>`;
 }
 
+/** Severities from the most to the least urgent; anything else goes last. */
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+
+const severityRank = (severity: string) => {
+  const at = SEVERITY_ORDER.indexOf(severity);
+  return at < 0 ? SEVERITY_ORDER.length : at;
+};
+
+/**
+ * A review's findings. One without a note is still open and gets a Fix chip that sends it back as
+ * a message; two or more open ones also get Fix all open, most urgent first. A fixed (`{ok}`) or
+ * set-aside (a plain note) finding gets none.
+ */
 function findings(block: Block): string {
+  const open: { severity: string; where: string; finding: string }[] = [];
   const out = block.items.map((item) => {
     const [[severity = "", where = "", finding = "", note], tint] = tintedCells(item, 4);
+    const level = plain(severity).toLowerCase();
     const noteHtml = note
       ? `<p class="rc-finding-note${tint === " rc-ok" ? " rc-ok" : ""}">${inline(note)}</p>`
       : "";
-    return `<div class="rc-finding" data-severity="${escapeAttr(plain(severity).toLowerCase())}"><div>${inline(where)}</div><p>${inline(finding)}</p>${noteHtml}</div>`;
+    let fix = "";
+    if (!note && tint !== " rc-ok") {
+      const entry = { severity: level, where: plain(where).split(" · ")[0] ?? "", finding: plain(finding) };
+      open.push(entry);
+      const send = `Fix this finding: ${entry.where ? `${entry.where} — ` : ""}${entry.finding}`;
+      fix = `<div class="rc-finding-fix"><button class="rc-chip" data-rc-send="${escapeAttr(send)}">Fix</button></div>`;
+    }
+    return `<div class="rc-finding" data-severity="${escapeAttr(level)}"><div>${inline(where)}</div><p>${inline(finding)}</p>${noteHtml}${fix}</div>`;
   });
-  return `${heading(block.arg)}<div class="rc-findings">${out.join("")}</div>`;
+  let all = "";
+  if (open.length > 1) {
+    const lines = [...open]
+      .sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
+      .map((f) => `- ${f.severity || "finding"}${f.where ? ` · ${f.where}` : ""}: ${f.finding}`);
+    const send = ["Fix these open findings:", ...lines].join("\n");
+    all = `<div class="rc-row rc-gap-2 rc-actions"><button class="rc-chip" data-rc-send="${escapeAttr(send)}">Fix all open</button></div>`;
+  }
+  return `${heading(block.arg)}<div class="rc-findings">${out.join("")}</div>${all}`;
 }
 
 /** `+12 -3` as added and removed counts; anything else as written. */
