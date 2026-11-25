@@ -541,7 +541,6 @@ function UsageCard({
 /** One window: its name and reset, a bar of what is left (it drains) with quarter ticks, the numbers. */
 export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: string }) {
   const left = leftPercent(w);
-  const used = 100 - left;
   const reset = resetLabel(w);
   const pace = planPace(w);
   return (
@@ -577,10 +576,9 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
           />
         )}
       </div>
-      <div className="flex justify-between text-caption tabular">
-        <span className={cx("font-medium", left < 20 ? "text-warning" : "text-fg")}>{left}% left</span>
-        <span className="text-fg-faint">{used}% used</span>
-      </div>
+      <span className={cx("font-medium text-caption tabular", left < 20 ? "text-warning" : "text-fg")}>
+        {left}% left
+      </span>
       {pace && (
         <span
           data-pace={pace.kind}

@@ -23,9 +23,8 @@ import { ChatBackgroundGroup } from "./ChatBackgroundGroup";
 import { Check, Minus, Plus } from "./icons";
 import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { cx, noTextHelpers, Switch } from "./primitives";
-import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
+import { SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { Action, Choice, fieldClass, Group, Row, SectionTitle, Slider } from "./settingsKit";
-import { ToastPositionSetting } from "./ToastPositionSetting";
 
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -267,11 +266,11 @@ export function AppearancePage() {
               : undefined
           }
           subtitle="Menus, dialogs and the sidebar turn solid instead of frosted."
-          hint="Also on when your system asks for it."
+          hint="Also on when your system asks for it. Off, a slider sets how much the sidebar shows through."
         >
           <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
-        {paintsBlur() && (
+        {paintsBlur() && !reduceTransparency && (
           <Row
             title="Transparency"
             reset={
@@ -280,7 +279,6 @@ export function AppearancePage() {
                 : undefined
             }
             subtitle="How much of the window shows through the sidebar."
-            hint={reduceTransparency ? "Reduce transparency is on, so the sidebar stays solid." : undefined}
           >
             <Slider
               label="Transparency"
@@ -295,8 +293,6 @@ export function AppearancePage() {
         )}
         <SidebarDensitySetting />
         <SidebarToolbarSetting />
-        <SettleAfterSetting />
-        <ToastPositionSetting />
       </Group>
       <Group
         title="Theme"

@@ -34,6 +34,7 @@ import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
 import { PERMISSION_MODES } from "../state/permissions";
 import { RECAP_MINUTE_OPTIONS, recapMinutesLabel } from "../state/recap";
 import {
+  type ScopedDefaultHarness,
   useLoadScopeSettings,
   useProjectScope,
   useScope,
@@ -120,6 +121,7 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
 import { type SettingsNavPage, SettingsSectionList } from "./SettingsSectionList";
+import { SettleAfterSetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -136,6 +138,7 @@ import {
   Slider,
   useRowResets,
 } from "./settingsKit";
+import { ToastPositionSetting } from "./ToastPositionSetting";
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
 
@@ -266,9 +269,23 @@ const compactLabel = (value: Json | undefined) =>
 const thresholdLabel = (value: Json | undefined) =>
   typeof value === "number" ? `${Math.round(value / 1_000)}k tokens` : "150k tokens";
 
+/** "Claude Code · Opus 5.5": the default a new thread starts on, named as the Agents page shows it. */
+function newThreadLabel({ snapshot, value, mixed }: ScopedDefaultHarness): string | undefined {
+  if (!snapshot || snapshot.unsupported) return undefined;
+  if (mixed) return "Differs by machine";
+  const choice = value ?? snapshot.default;
+  const harness = snapshot.harnesses.find((h) => h.id === choice.harness);
+  if (!harness) return choice.harness;
+  const model = choice.model
+    ? (harness.models.find((m) => m.id === choice.model)?.name ?? choice.model)
+    : null;
+  return model ? `${harness.name} · ${model}` : harness.name;
+}
+
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
   useLoadScopeSettings();
+  const newThreadDefault = useScopedDefaultHarness();
   const defaultAccess = useScopedSetting("default-permission-mode", permissionLabel);
   const resume = useScopedSetting("resume-after-restart", boolLabel);
   const afterLimit = useScopedSetting("continue-after-limit", boolLabel);
@@ -307,6 +324,13 @@ function GeneralPage() {
           status={permissionLabel(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode)}
         >
           <Action onClick={() => openSettings("permissions")}>Permissions</Action>
+        </Row>
+        <Row
+          title="Harness and model"
+          subtitle="What a new thread runs on. A thread can still switch from the composer."
+          status={newThreadLabel(newThreadDefault)}
+        >
+          <Action onClick={() => openSettings("agents")}>Harnesses</Action>
         </Row>
       </Group>
       <Group title="Threads">
@@ -398,6 +422,7 @@ function GeneralPage() {
             </ScopedValue>
           </Row>
         )}
+        <SettleAfterSetting />
       </Group>
       <Group title="Notifications">
         <Row
@@ -450,6 +475,7 @@ function GeneralPage() {
             onChange={(value) => setRecapMinutes(Number(value))}
           />
         </Row>
+        <ToastPositionSetting />
       </Group>
       <Group title="This computer">
         <PresenceRow />

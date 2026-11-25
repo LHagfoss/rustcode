@@ -47,7 +47,7 @@ export function SidebarToolbarSetting() {
   );
 }
 
-/** Settings › Appearance › Settle idle threads: how long a thread rests before Settled takes it. */
+/** Settings › General › Settle idle threads: how long a thread rests before Settled takes it. */
 export function SettleAfterSetting() {
   const [raw, setDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
   const days = settleAfterDays(raw);
