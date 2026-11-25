@@ -311,14 +311,36 @@ pub fn project_files(cwd: String) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// An untracked file's line count, or None for a binary file, one over
+/// An untracked file's text, or None for a binary file, one over
 /// [`MAX_COUNTED_BYTES`] (checked before reading) or one that cannot be read.
-fn untracked_lines(path: &Path) -> Option<u64> {
+fn untracked_text(path: &Path) -> Option<String> {
     if std::fs::metadata(path).ok()?.len() > MAX_COUNTED_BYTES {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    (!bytes.contains(&0)).then(|| bytes.iter().filter(|b| **b == b'\n').count() as u64)
+    (!bytes.contains(&0)).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A new file as the unified diff that adds each of its lines, which `git diff`
+/// leaves out for a file git does not track yet.
+fn added_file_patch(path: &str, text: &str) -> String {
+    let mut out = format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return out;
+    }
+    out.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
+    for line in lines {
+        out.push('+');
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !text.ends_with('\n') {
+        out.push_str("\\ No newline at end of file\n");
+    }
+    out
 }
 
 /// Uncommitted changes against HEAD, plus untracked files. With `base`
@@ -392,8 +414,15 @@ pub fn git_changes(
             binary: added.is_none(),
         });
     }
+    let mut added_patches = Vec::new();
     for path in git(&cwd, &["ls-files", "--others", "--exclude-standard"])?.lines() {
-        let lines = untracked_lines(&cwd.join(path));
+        let text = untracked_text(&cwd.join(path));
+        let lines = text
+            .as_deref()
+            .map(|t| t.bytes().filter(|b| *b == b'\n').count() as u64);
+        if let (Some(text), false) = (&text, summary == Some(true)) {
+            added_patches.push(added_file_patch(path, text));
+        }
         files.push(FileChange {
             path: path.to_string(),
             status: "U".into(),
@@ -417,6 +446,15 @@ pub fn git_changes(
             cut -= 1;
         }
         diff.truncate(cut);
+    }
+    for patch in added_patches {
+        if diff.len() + patch.len() + 1 > MAX_DIFF_BYTES {
+            break;
+        }
+        if !diff.is_empty() && !diff.ends_with('\n') {
+            diff.push('\n');
+        }
+        diff.push_str(&patch);
     }
     Ok(GitChanges {
         branch,
@@ -1117,6 +1155,10 @@ mod tests {
         let summary = git_changes(cwd, None, Some(true)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(full.diff.contains("+three"));
+        assert!(full
+            .diff
+            .contains("diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+x\n+y\n"));
+        assert!(!full.diff.contains("b/big.log"));
         assert!(summary.diff.is_empty());
         assert_eq!(summary.branch, full.branch);
         assert_eq!(summary.files, full.files);
@@ -1125,6 +1167,15 @@ mod tests {
         assert_eq!(file("new.txt").added, 2);
         assert!(file("big.log").binary);
         assert_eq!(file("big.log").added, 0);
+    }
+
+    #[test]
+    fn a_new_file_patch_adds_every_line() {
+        assert_eq!(
+            added_file_patch("a/b.txt", "one\ntwo"),
+            "diff --git a/a/b.txt b/a/b.txt\nnew file mode 100644\n--- /dev/null\n+++ b/a/b.txt\n@@ -0,0 +1,2 @@\n+one\n+two\n\\ No newline at end of file\n"
+        );
+        assert!(!added_file_patch("empty", "").contains("@@"));
     }
 
     #[test]
