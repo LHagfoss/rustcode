@@ -37,13 +37,85 @@ export interface HubStatus {
   members: HubMember[] | null;
 }
 
-interface HubState {
-  status: HubStatus | null;
-  error: string | null;
-  busy: boolean;
+/**
+ * This machine's hub role as one value (issue 4338). `transitionHub` is the one way between
+ * phases:
+ *
+ * - `unread`: nothing answered yet.
+ * - `failed`: nothing answered yet and the last read failed. A failed read never replaces a
+ *   role that is on screen.
+ * - `read`: the role, as the last read or change answered.
+ * - `changing`: a change is out; the role shown is the one from before it.
+ */
+export type HubRole =
+  | { phase: "unread" }
+  | { phase: "failed"; error: string }
+  | { phase: "read"; status: HubStatus }
+  | { phase: "changing"; status: HubStatus };
+
+/**
+ * `epoch` counts the starts and ends of changes. A read carries the epoch it left at, and one
+ * that left before or during a change is dropped: its answer describes the role from before.
+ */
+export interface HubState {
+  role: HubRole;
+  epoch: number;
 }
 
-export const useHub = create<HubState>(() => ({ status: null, error: null, busy: false }));
+export type HubEvent =
+  | { type: "read"; epoch: number; status: HubStatus }
+  | { type: "readFailed"; epoch: number; error: string }
+  | { type: "change" }
+  | { type: "changed"; status: HubStatus }
+  | { type: "changeFailed" };
+
+export const HUB_UNREAD: HubState = { role: { phase: "unread" }, epoch: 0 };
+
+/** The pure step between hub phases; an event that does not apply answers `state` itself. */
+export function transitionHub(state: HubState, event: HubEvent): HubState {
+  const { role, epoch } = state;
+  switch (event.type) {
+    case "read":
+      return event.epoch === epoch && role.phase !== "changing"
+        ? { role: { phase: "read", status: event.status }, epoch }
+        : state;
+    case "readFailed":
+      return event.epoch === epoch && (role.phase === "unread" || role.phase === "failed")
+        ? { role: { phase: "failed", error: event.error }, epoch }
+        : state;
+    case "change":
+      return role.phase === "read"
+        ? { role: { phase: "changing", status: role.status }, epoch: epoch + 1 }
+        : state;
+    case "changed":
+      return role.phase === "changing"
+        ? { role: { phase: "read", status: event.status }, epoch: epoch + 1 }
+        : state;
+    case "changeFailed":
+      return role.phase === "changing"
+        ? { role: { phase: "read", status: role.status }, epoch: epoch + 1 }
+        : state;
+  }
+}
+
+export const hubStatus = (state: HubState): HubStatus | null =>
+  state.role.phase === "read" || state.role.phase === "changing" ? state.role.status : null;
+
+/** Why the role could not be read, while there is none to show. */
+export const hubError = (state: HubState): string | null =>
+  state.role.phase === "failed" ? state.role.error : null;
+
+export const hubChanging = (state: HubState): boolean => state.role.phase === "changing";
+
+export const useHub = create<HubState>(() => HUB_UNREAD);
+
+function send(event: HubEvent): boolean {
+  const before = useHub.getState();
+  const after = transitionHub(before, event);
+  if (after === before) return false;
+  useHub.setState(after, true);
+  return true;
+}
 
 function scope(value: unknown): OutsideScope {
   return OUTSIDE_SCOPES.find((level) => level === value) ?? "read_only";
@@ -92,11 +164,12 @@ export function parseHubStatus(value: unknown): HubStatus {
 
 export async function refreshHub(): Promise<void> {
   if (!hasShell()) return;
+  const { epoch } = useHub.getState();
   try {
     const status = parseHubStatus(await shellCallWithin<unknown>(HUB_CALL_MS, "hub_status"));
-    useHub.setState({ status, error: null });
+    send({ type: "read", epoch, status });
   } catch (error) {
-    useHub.setState({ error: errorText(error) });
+    send({ type: "readFailed", epoch, error: errorText(error) });
   }
 }
 
@@ -106,16 +179,14 @@ export type HubChange =
 
 /** Change the role; answers whether it changed, and toasts why not. */
 export async function setHub(change: HubChange): Promise<boolean> {
-  if (useHub.getState().busy) return false;
-  useHub.setState({ busy: true });
+  if (!send({ type: "change" })) return false;
   try {
     const status = parseHubStatus(await shellCallWithin<unknown>(HUB_CALL_MS, "hub_set", { ...change }));
-    useHub.setState({ status, error: null });
+    send({ type: "changed", status });
     return true;
   } catch (error) {
+    send({ type: "changeFailed" });
     toast(errorText(error), "error");
     return false;
-  } finally {
-    useHub.setState({ busy: false });
   }
 }

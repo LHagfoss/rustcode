@@ -1,11 +1,19 @@
 import { Dialog } from "radix-ui";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { redact, type SystemInfo } from "../lib/diagnostics";
 import { clipboardImage, openExternal, systemInfo, threadLogTail } from "../lib/native";
 import { pastedImages } from "../lib/paste";
 import { activeTransport, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
+import {
+  REPORT_CHECKING,
+  type ReportOptions,
+  reportError,
+  reportIssue,
+  reportOptions,
+  transitionReport,
+} from "../state/issueReport";
 import { Bug, ChevronDown, ExternalLink, Image, MessageSquarePlus, X } from "./icons";
 import { Pill } from "./primitives";
 
@@ -19,7 +27,6 @@ const reportTypes = [
 ] as const;
 
 type ReportType = (typeof reportTypes)[number];
-type Options = { labels: string[]; can_label: boolean };
 type Screenshot = { name: string; url: string; file: File };
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", windows: "Windows", linux: "Linux" };
@@ -73,13 +80,14 @@ export function IssueReportDialog({
   const [details, setDetails] = useState("");
   const [version, setVersion] = useState<string | null>(null);
   const [system, setSystem] = useState<SystemInfo | null>(null);
-  const [options, setOptions] = useState<Options | null>(null);
+  const [report, send] = useReducer(transitionReport, REPORT_CHECKING);
+  const options = reportOptions(report);
+  const issue = reportIssue(report);
+  const alert = reportError(report);
+  const submitting = report.phase === "submitting";
+  const unavailable = report.phase === "unavailable";
   const [labels, setLabels] = useState<string[]>([]);
-  const [setupError, setSetupError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [issue, setIssue] = useState("");
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [attachLog, setAttachLog] = useState(false);
   const [readLog, setReadLog] = useState<{ id: string; text: string } | null>(null);
@@ -102,19 +110,18 @@ export function IssueReportDialog({
   useEffect(() => {
     if (!open || issue) return;
     let current = true;
-    setSetupError("");
-    setOptions(null);
+    send({ type: "check" });
     const load = mock
       ? Promise.resolve({ labels: ["bug", "desktop", "enhancement", "needs-repro", "ui"], can_label: true })
       : isTauri()
-        ? shellCall<Options>("issue_report_options")
+        ? shellCall<ReportOptions>("issue_report_options")
         : Promise.reject("Open RustCode Desktop to submit with GitHub CLI.");
     void load.then(
       (value) => {
-        if (current) setOptions(value);
+        if (current) send({ type: "options", options: value });
       },
       (reason) => {
-        if (current) setSetupError(String(reason));
+        if (current) send({ type: "unavailable", error: String(reason) });
       },
     );
     void appVersion().then((value) => {
@@ -183,13 +190,12 @@ export function IssueReportDialog({
   const close = (next: boolean) => {
     if (submitting) return;
     if (!next && issue) {
-      setIssue("");
+      send({ type: "dismiss" });
       setType(reportTypes[0]);
       setTitle("");
       setDescription("");
       setDetails("");
       setLabels([]);
-      setError("");
       setImageError("");
       for (const url of imageUrls.current) URL.revokeObjectURL(url);
       imageUrls.current.clear();
@@ -235,15 +241,15 @@ export function IssueReportDialog({
 
   const submit = async () => {
     if (!options || !title.trim() || !description.trim() || submitting) return;
-    setSubmitting(true);
-    setError("");
+    send({ type: "submit" });
     try {
-      const report = { title: title.trim(), body, labels: selectedLabels };
-      setIssue(mock ? `${repository}/issues` : await shellCall<string>("issue_report_submit", { report }));
+      const filing = { title: title.trim(), body, labels: selectedLabels };
+      const url = mock
+        ? `${repository}/issues`
+        : await shellCall<string>("issue_report_submit", { report: filing });
+      send({ type: "filed", url });
     } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setSubmitting(false);
+      send({ type: "rejected", error: String(reason) });
     }
   };
 
@@ -487,14 +493,14 @@ export function IssueReportDialog({
                     )}
                   </section>
                 )}
-                {(setupError || error) && (
+                {alert && (
                   <p role="alert" className="text-callout text-danger">
-                    {error || setupError}
+                    {alert}
                   </p>
                 )}
               </div>
               <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3">
-                {setupError && !issue ? (
+                {unavailable ? (
                   <Pill quiet onClick={() => openExternal(`${repository}/issues/new/choose`)}>
                     GitHub <ExternalLink size={12} />
                   </Pill>
@@ -519,7 +525,7 @@ export function IssueReportDialog({
                       <Pill quiet disabled={submitting} onClick={() => close(false)}>
                         Cancel
                       </Pill>
-                      {setupError && isTauri() ? (
+                      {unavailable && isTauri() ? (
                         <Pill prominent onClick={() => setAttempt(attempt + 1)}>
                           Retry
                         </Pill>
@@ -529,7 +535,11 @@ export function IssueReportDialog({
                           prominent
                           disabled={!options || !title.trim() || !description.trim() || submitting}
                         >
-                          {submitting ? "Submitting…" : options || setupError ? "Submit" : "Checking GitHub…"}
+                          {submitting
+                            ? "Submitting…"
+                            : report.phase === "checking"
+                              ? "Checking GitHub…"
+                              : "Submit"}
                         </Pill>
                       )}
                     </>
