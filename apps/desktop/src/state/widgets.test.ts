@@ -10,10 +10,12 @@ import {
   monthBounds,
   periodTotals,
   projectThreads,
+  sharePercent,
   sharesBy,
   streakOf,
   turnsPerDay,
   weekdayTurns,
+  weeksOfHistory,
 } from "./widgets";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
@@ -66,6 +68,26 @@ describe("the activity heatmap", () => {
     // A day nothing ran is the quiet shade, never a step.
     expect(last[0]?.turns).toBe(40);
     expect(heatmapWeeks(new Map(), 1, today)[0]![0]?.level).toBe(0);
+  });
+
+  test("the weeks of history run from the week of the first turn to the week of today", () => {
+    expect(weeksOfHistory(new Map(), today)).toBe(0);
+    expect(weeksOfHistory(new Map([["2026-06-08", 1]]), today)).toBe(1);
+    expect(weeksOfHistory(new Map([["2026-06-07", 1]]), today)).toBe(2);
+    expect(weeksOfHistory(new Map([["2026-06-01", 1]]), today)).toBe(2);
+    expect(
+      weeksOfHistory(
+        new Map([
+          ["2026-05-31", 3],
+          ["2026-05-01", 0],
+        ]),
+        today,
+      ),
+    ).toBe(3);
+    const turns = new Map([["2026-05-20", 2]]);
+    expect(heatmapWeeks(turns, weeksOfHistory(turns, today), today)[0]?.some((cell) => cell?.turns)).toBe(
+      true,
+    );
   });
 
   test("a report's rows are added up per day, across harnesses and models", () => {
@@ -204,5 +226,11 @@ describe("the dashboard's splits", () => {
     ];
     expect(periodTotals(rows, "2026-11-01", "2026-11-02")).toEqual({ turns: 5, tokens: 10 });
     expect(periodTotals(rows, "2026-11-03")).toEqual({ turns: 7, tokens: 0 });
+  });
+
+  test("a share too small to round up reads as under one percent, not zero", () => {
+    expect(sharePercent(0.004)).toBe("<1%");
+    expect(sharePercent(0)).toBe("0%");
+    expect(sharePercent(0.66)).toBe("66%");
   });
 });

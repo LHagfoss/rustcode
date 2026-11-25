@@ -84,6 +84,30 @@ export function Nothing({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * A card's empty state when the emptiness is the news (nothing waiting, nothing running): a mark,
+ * a short line and, when there is one, a quiet line under it that leads somewhere.
+ */
+export function Calm({
+  icon: Icon,
+  children,
+  detail,
+}: {
+  icon: LucideIcon;
+  children: ReactNode;
+  detail?: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 text-center">
+      <span className="flex size-7 items-center justify-center rounded-full bg-fill-subtle text-fg-muted">
+        <Icon size={14} />
+      </span>
+      <p className="text-callout text-fg">{children}</p>
+      {detail && <div className="max-w-full text-caption text-fg-muted">{detail}</div>}
+    </div>
+  );
+}
+
 /** A small count at the end of a label row, or a link where it opens what it counts. */
 export function LabelNote({
   children,

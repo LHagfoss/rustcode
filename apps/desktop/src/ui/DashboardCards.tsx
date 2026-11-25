@@ -15,10 +15,18 @@ import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import { useApp } from "../state/store";
 import { formatTokens } from "../state/thread";
 import { isRunning } from "../state/turn";
-import { periodTotals, type Share, sharesBy, turnsPerDay, weekdayTurns } from "../state/widgets";
+import {
+  periodTotals,
+  type Share,
+  sharePercent,
+  sharesBy,
+  turnsPerDay,
+  weekdayTurns,
+} from "../state/widgets";
 import { Card, Nothing, useShownRows } from "./DashboardCard";
+import { ColumnsSkeleton, FigureTileSkeleton, SharesSkeleton, SplitSkeleton } from "./DashboardSkeletons";
 import { Bot, CalendarDays, Layers, Sun } from "./icons";
-import { cx, Skeleton, Tooltip } from "./primitives";
+import { cx, Tooltip } from "./primitives";
 import { shareShade, Tile, TrendPill } from "./StatisticsCharts";
 import { useCardHeight, useWidgetColumns } from "./WidgetGrid";
 
@@ -90,7 +98,7 @@ export function DashboardFigures({
     return (
       <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2">
         {[0, 1, 2, 3].map((tile) => (
-          <Skeleton key={tile} className="h-[132px] rounded-xl" />
+          <FigureTileSkeleton key={tile} />
         ))}
       </div>
     );
@@ -101,9 +109,13 @@ export function DashboardFigures({
         label="Spend this month"
         value={formatBestCost(spend.now)}
         exact={costLine(spend.now)}
-        note={`${formatBestCost(spend.before)} the month before`}
+        note={
+          spend.before.usd === undefined
+            ? "Nothing priced the month before"
+            : `${formatBestCost(spend.before)} the month before`
+        }
         trend={trend(spend.now.usd, spend.before.usd)}
-        compare="against the month before"
+        compare={spend.before.usd === undefined ? "" : "against the month before"}
         series={figures.cost}
         seriesLabel={`Cost per day over ${RECENT_DAYS} days`}
       />
@@ -208,7 +220,7 @@ export function TodayCard({ rows }: { rows?: UsageRow[] }) {
       aside={rows && change ? <TrendPill trend={change} compare="against yesterday" /> : undefined}
     >
       {rows === undefined ? (
-        <Skeleton className="w-full flex-1" />
+        <ColumnsSkeleton lead wide={wide} />
       ) : (
         <div className={cx("flex min-h-0 flex-1 gap-4", wide ? "items-stretch" : "flex-col gap-2")}>
           <div className="flex shrink-0 flex-col justify-end">
@@ -286,7 +298,7 @@ export function ModelsCard({ month }: { month?: UsageRow[] }) {
       aside={rest > 0 ? <span className="text-caption text-fg-muted tabular">+{rest}</span> : undefined}
     >
       {month === undefined ? (
-        <Skeleton className="w-full flex-1" />
+        <SharesSkeleton rows={Math.min(4, fit / columns)} columns={columns} />
       ) : shown.length === 0 ? (
         <Nothing>No turns this month yet.</Nothing>
       ) : (
@@ -304,7 +316,7 @@ export function ModelsCard({ month }: { month?: UsageRow[] }) {
                     name={share.key}
                     part={share.part}
                     shade={shareShade(index)}
-                    value={`${Math.round(share.part * 100)}%${priced}`}
+                    value={`${sharePercent(share.part)}${priced}`}
                   />
                 </div>
               </Tooltip>
@@ -329,7 +341,7 @@ export function HarnessesCard({ month }: { month?: UsageRow[] }) {
       aside={<span className="text-caption text-fg-muted">This month</span>}
     >
       {month === undefined ? (
-        <Skeleton className="w-full flex-1" />
+        <SplitSkeleton rows={legend} wide={wide} />
       ) : shares.length === 0 ? (
         <Nothing>No turns this month yet.</Nothing>
       ) : (
@@ -353,7 +365,7 @@ export function HarnessesCard({ month }: { month?: UsageRow[] }) {
                 <span className="size-2 shrink-0 rounded-full" style={{ background: shareShade(index) }} />
                 <span className="min-w-0 flex-1 truncate text-fg">{names.get(share.key) ?? share.key}</span>
                 <span className="shrink-0 text-caption text-fg-muted tabular">
-                  {Math.round(share.part * 100)}%
+                  {sharePercent(share.part)}
                 </span>
               </li>
             ))}
@@ -381,7 +393,7 @@ export function RhythmCard({ rows }: { rows?: UsageRow[] }) {
       }
     >
       {rows === undefined ? (
-        <Skeleton className="w-full flex-1" />
+        <ColumnsSkeleton />
       ) : !any ? (
         <Nothing>No turns recorded yet.</Nothing>
       ) : (

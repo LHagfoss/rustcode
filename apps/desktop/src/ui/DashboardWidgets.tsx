@@ -12,14 +12,22 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { PullRequest, UsageRow } from "../acp/rustcode";
-import { parseUsageReport } from "../acp/rustcode";
+import { parseUsageReport, pullErrorTitle } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
 import { useInboxItems } from "../state/inboxRead";
 import { daysAgo, previousRows, sparklinePath, sparklineSeries, sumRows, trend } from "../state/period";
 import { costLine, costOfRows, formatBestCost } from "../state/pricing";
-import { cachedPulls, loadPulls, pullState, pullsVersion, subscribePulls } from "../state/pulls";
+import {
+  cachedPulls,
+  loadPulls,
+  pullState,
+  pullsError,
+  pullsVersion,
+  retryPulls,
+  subscribePulls,
+} from "../state/pulls";
 import { openSettings, selectThread, setPanel, setView, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
 import { isRunning } from "../state/turn";
@@ -34,9 +42,11 @@ import {
   type Streak,
   streakOf,
   turnsPerDay,
+  weeksOfHistory,
 } from "../state/widgets";
 import {
   CARD_CHROME,
+  Calm,
   Card,
   CardList,
   CardRow,
@@ -48,8 +58,10 @@ import {
   useTwoLines,
 } from "./DashboardCard";
 import { DashboardFigures, HarnessesCard, ModelsCard, RhythmCard, TodayCard } from "./DashboardCards";
+import { ActivitySkeleton, RowsSkeleton, SpendSkeleton, useThreadsListing } from "./DashboardSkeletons";
 import {
   Activity,
+  CircleCheck,
   Flame,
   Gauge,
   GitMerge,
@@ -61,7 +73,7 @@ import {
   History,
   Play,
 } from "./icons";
-import { cx, Pill, Skeleton, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
 import { useCardHeight, useWidgetRows, WidgetGrid } from "./WidgetGrid";
@@ -75,6 +87,10 @@ const HEAT_CELL_MAX = 14;
 /** A two-row activity card stacks its numbers over the heatmap: their line's height, and the larger cells it allows. */
 const STACKED_STATS = 100;
 const STACKED_HEAT_CELL_MAX = 24;
+/** A two-row card with a short history puts its numbers beside the heatmap, whose few weeks then take larger cells. */
+const SIDE_HEAT_CELL_MAX = 30;
+/** Under this many weeks of history the heatmap draws only those weeks rather than blank ones before them. */
+const SHORT_HISTORY_WEEKS = 16;
 const HEAT_GAP = 2;
 /** The fewest weeks the heatmap draws, however narrow its card. */
 const MIN_WEEKS = 8;
@@ -119,23 +135,20 @@ function StreakBadge({ streak }: { streak: Streak }) {
 }
 
 /** How many whole weeks of square cells fit the heatmap's width; the ref goes on the heatmap's box. */
-function useFittedWeeks(cell: number) {
+function useFittedWeeks(cell: number, most: number) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [weeks, setWeeks] = useState(MIN_WEEKS);
   useEffect(() => {
     if (!element) return;
     const fit = () =>
       setWeeks(
-        Math.max(
-          MIN_WEEKS,
-          Math.min(HEATMAP_WEEKS, Math.floor((element.clientWidth + HEAT_GAP) / (cell + HEAT_GAP))),
-        ),
+        Math.max(MIN_WEEKS, Math.min(most, Math.floor((element.clientWidth + HEAT_GAP) / (cell + HEAT_GAP)))),
       );
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [element, cell]);
+  }, [element, cell, most]);
   return [setElement, weeks] as const;
 }
 
@@ -148,7 +161,10 @@ const MONTH_ROW = 14;
  * The month to name over each of the heatmap's columns: where a new month starts, unless the last
  * name is too close to leave room for this one.
  */
-function monthLabels(columns: readonly (readonly (HeatCell | null)[])[]): (string | undefined)[] {
+function monthLabels(
+  columns: readonly (readonly (HeatCell | null)[])[],
+  nameFirst = false,
+): (string | undefined)[] {
   let last = -3;
   let month = "";
   return columns.map((week, index) => {
@@ -158,16 +174,24 @@ function monthLabels(columns: readonly (readonly (HeatCell | null)[])[]): (strin
     if (next === month) return undefined;
     const first = month === "";
     month = next;
-    if (first || index - last < 3) return undefined;
+    if ((first && !nameFirst) || index - last < 3) return undefined;
     last = index;
     return new Date(`${day}T00:00:00Z`).toLocaleString(undefined, { month: "short", timeZone: "UTC" });
   });
 }
 
+/**
+ * How the activity card lays out: its numbers over the heatmap in a tall card, beside it in a
+ * tall card with a short history (whose few weeks would leave the width empty), or a short
+ * column beside it in a one-row card.
+ */
+type ActivityLayout = "stacked" | "side" | "compact";
+
 /** The heatmap cell's side that fits a week's seven days in the card's height, under the stacked numbers or beside them. */
-function useHeatCell(stacked: boolean): number {
+function useHeatCell(layout: ActivityLayout): number {
+  const stacked = layout === "stacked";
   const room = useCardHeight() - CARD_CHROME - 6 * HEAT_GAP - MONTH_ROW - (stacked ? STACKED_STATS : 0);
-  const most = stacked ? STACKED_HEAT_CELL_MAX : HEAT_CELL_MAX;
+  const most = stacked ? STACKED_HEAT_CELL_MAX : layout === "side" ? SIDE_HEAT_CELL_MAX : HEAT_CELL_MAX;
   return Math.max(HEAT_CELL, Math.min(most, Math.floor(room / 7)));
 }
 
@@ -193,14 +217,18 @@ function ActivityFigure({ label, value, detail }: { label: string; value: string
 
 function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   const sessions = useApp((s) => s.sessions);
-  const stacked = useWidgetRows() === 2;
-  const side = useHeatCell(stacked);
-  const [box, weeks] = useFittedWeeks(side);
   const turns = useMemo(() => turnsPerDay(rows ?? []), [rows]);
+  const history = useMemo(() => weeksOfHistory(turns), [turns]);
+  const short = history > 0 && history < SHORT_HISTORY_WEEKS;
+  const tall = useWidgetRows() === 2;
+  const layout: ActivityLayout = !tall ? "compact" : short ? "side" : "stacked";
+  const stacked = layout === "stacked";
+  const side = useHeatCell(layout);
+  const [box, weeks] = useFittedWeeks(side, short ? Math.max(MIN_WEEKS, history) : HEATMAP_WEEKS);
   const columns = useMemo(() => heatmapWeeks(turns, weeks), [turns, weeks]);
   const months = useMemo(
-    () => (side >= MONTH_LABELS_FROM ? monthLabels(columns) : undefined),
-    [columns, side],
+    () => (side >= MONTH_LABELS_FROM ? monthLabels(columns, layout === "side") : undefined),
+    [columns, side, layout],
   );
   const streak = useMemo(() => streakOf(turns), [turns]);
   const summary = useMemo(() => activitySummary(turns), [turns]);
@@ -219,27 +247,31 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
     >
       {rows === undefined ? (
-        <Skeleton className="h-full w-full flex-1" />
+        <ActivitySkeleton stacked={tall} />
       ) : turns.size === 0 ? (
         <Nothing>No turns recorded yet.</Nothing>
       ) : (
         <div
           className={cx(
             "flex min-h-0 flex-1",
-            stacked ? "flex-col justify-between gap-2" : "items-end gap-4",
+            stacked
+              ? "flex-col justify-between gap-2"
+              : layout === "side"
+                ? "items-center gap-6"
+                : "items-end gap-4",
           )}
         >
-          {stacked ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-baseline gap-2">
+          {layout !== "compact" ? (
+            <div className={cx("flex flex-col gap-3", layout === "side" && "w-[38%] max-w-64 shrink-0")}>
+              <div className={cx("flex items-baseline gap-x-2", layout === "side" && "flex-wrap")}>
                 <span className="font-semibold text-title2 text-fg tabular">
                   {shownTurns.toLocaleString()}
                 </span>
-                <span className="truncate text-caption text-fg-muted">
+                <span className={cx("text-caption text-fg-muted", stacked && "truncate")}>
                   turns in {weeks} weeks · {count(activeThreads, "thread")} active
                 </span>
               </div>
-              <dl className="grid grid-cols-3 gap-2">
+              <dl className={cx("grid gap-2", stacked && "grid-cols-3")}>
                 <ActivityFigure label="This week" value={count(summary.week, "turn")} />
                 <ActivityFigure
                   label="Busiest day"
@@ -256,12 +288,15 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
               <span className="text-caption text-fg-muted">{count(activeThreads, "thread")} active</span>
             </div>
           )}
-          <div className={cx("flex min-w-0 flex-1 flex-col", stacked && "justify-center gap-2")}>
+          <div className={cx("flex min-w-0 flex-1 flex-col", layout !== "compact" && "justify-center gap-2")}>
             <div
               ref={box}
               role="img"
               aria-label={`Turns per day over the last ${weeks} weeks: ${count(shownTurns, "turn")}.`}
-              className="flex min-w-0 justify-end overflow-hidden"
+              className={cx(
+                "flex min-w-0 overflow-hidden",
+                layout === "side" ? "justify-center" : "justify-end",
+              )}
               style={{ gap: HEAT_GAP }}
             >
               {columns.map((week, index) => (
@@ -290,8 +325,14 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
                 </div>
               ))}
             </div>
-            {stacked && (
-              <div aria-hidden className="flex items-center justify-end gap-1 text-caption text-fg-muted">
+            {layout !== "compact" && (
+              <div
+                aria-hidden
+                className={cx(
+                  "flex items-center gap-1 text-caption text-fg-muted",
+                  layout === "side" ? "justify-center" : "justify-end",
+                )}
+              >
                 Less
                 {([0, 1, 2, 3, 4] as const).map((level) => (
                   <span key={level} className={cx("size-2.5 rounded-xs", SHADE[level])} />
@@ -311,6 +352,7 @@ function RecentThreadsCard({ project }: { project: string }) {
   const threads = useMemo(() => projectThreads(sessions, project), [sessions, project]);
   const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
+  const listing = useThreadsListing();
   return (
     <Card
       label="Recent threads"
@@ -323,7 +365,9 @@ function RecentThreadsCard({ project }: { project: string }) {
         ) : undefined
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton />
+      ) : shown.length ? (
         <CardList>
           {shown.map((thread) => (
             <CardRow
@@ -392,10 +436,7 @@ function SpendCard({
       aside={change ? <TrendPill trend={change} compare="against the month before" /> : undefined}
     >
       {rows === undefined || !spend ? (
-        <div className="flex flex-1 flex-col justify-end gap-2">
-          <Skeleton className="h-5 w-[50%]" />
-          <Skeleton className="h-3 w-[70%]" />
-        </div>
+        <SpendSkeleton />
       ) : turns === 0 && spend.now.usd === undefined ? (
         <Nothing>No usage recorded in {USAGE_DAYS} days.</Nothing>
       ) : (
@@ -442,6 +483,7 @@ function NeedsYouCard() {
   }, [items]);
   const twoLines = useTwoLines();
   const shown = threads.slice(0, useShownRows(twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT));
+  const listing = useThreadsListing();
   return (
     <Card
       label="Needs you"
@@ -456,7 +498,9 @@ function NeedsYouCard() {
         </LabelNote>
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton mark age={false} rowHeight={twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT} />
+      ) : shown.length ? (
         <CardList>
           {shown.map((item) => (
             <CardRow
@@ -471,7 +515,7 @@ function NeedsYouCard() {
           ))}
         </CardList>
       ) : (
-        <Nothing>Nothing is waiting on you.</Nothing>
+        <Calm icon={CircleCheck}>Nothing is waiting on you</Calm>
       )}
     </Card>
   );
@@ -501,6 +545,15 @@ function RunningCard() {
   );
   const shown = threads.slice(0, useShownRows());
   const more = threads.length - shown.length;
+  const listing = useThreadsListing();
+  const lastRun = useMemo(
+    () =>
+      sessions.reduce<(typeof sessions)[number] | undefined>(
+        (latest, session) => ((session.updatedAt ?? 0) > (latest?.updatedAt ?? 0) ? session : latest),
+        undefined,
+      ),
+    [sessions],
+  );
   return (
     <Card
       label="Running now"
@@ -511,7 +564,9 @@ function RunningCard() {
         ) : undefined
       }
     >
-      {shown.length ? (
+      {listing ? (
+        <RowsSkeleton mark />
+      ) : shown.length ? (
         <CardList>
           {shown.map((thread) => (
             <CardRow key={thread.id} onClick={() => selectThread(thread.id)} title={thread.title}>
@@ -522,10 +577,42 @@ function RunningCard() {
           ))}
         </CardList>
       ) : (
-        <Nothing>Nothing is running.</Nothing>
+        <Calm
+          icon={Play}
+          detail={
+            lastRun && (
+              <button
+                type="button"
+                onClick={() => selectThread(lastRun.id)}
+                className="flex max-w-full items-baseline gap-1 rounded-sm hover:text-fg"
+              >
+                <span className="shrink-0">Last ran</span>
+                <span className="truncate text-fg">{lastRun.title || "Untitled thread"}</span>
+                <span className="shrink-0 tabular">· {relativeAge(lastRun.updatedAt)}</span>
+              </button>
+            )
+          }
+        >
+          Nothing is running
+        </Calm>
       )}
     </Card>
   );
+}
+
+/** From this long a read is slow enough to say it is still going. */
+const SLOW_READ_MS = 8_000;
+
+/** Whether `waiting` has held for `SLOW_READ_MS`; it resets when the wait ends. */
+function useLongWait(waiting: boolean): boolean {
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    setLong(false);
+    if (!waiting) return;
+    const timer = setTimeout(() => setLong(true), SLOW_READ_MS);
+    return () => clearTimeout(timer);
+  }, [waiting]);
+  return long;
 }
 
 /** What a pull request is, as the sidebar's rows mark it. */
@@ -568,6 +655,8 @@ function PullsCard({ project }: { project: string }) {
     return () => clearTimeout(t);
   }, [available, project]);
   const pulls = available ? cachedPulls(project) : undefined;
+  const error = available && pulls === undefined ? pullsError(project) : undefined;
+  const slow = useLongWait(available && !!project && pulls === undefined && !error);
   const recent = useMemo(
     () => [...(pulls ?? [])].sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0)),
     [pulls],
@@ -596,11 +685,22 @@ function PullsCard({ project }: { project: string }) {
             Connect GitHub
           </Pill>
         </div>
-      ) : pulls === undefined ? (
+      ) : error ? (
         <div className="flex flex-1 flex-col justify-center gap-2">
-          {[0, 1, 2].map((row) => (
-            <Skeleton key={row} className="h-3 w-[75%]" />
-          ))}
+          <p className="text-caption text-fg">{pullErrorTitle(error.code)}</p>
+          <p className="line-clamp-2 text-caption text-fg-muted">{error.message}</p>
+          <Pill quiet size="sm" className="self-start" onClick={() => retryPulls(project)}>
+            Try again
+          </Pill>
+        </div>
+      ) : pulls === undefined ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RowsSkeleton mark rowHeight={twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT} />
+          {slow && (
+            <p className="shrink-0 pt-1 text-caption text-fg-muted">
+              Still asking GitHub for this project's pull requests…
+            </p>
+          )}
         </div>
       ) : shown.length ? (
         <CardList>
