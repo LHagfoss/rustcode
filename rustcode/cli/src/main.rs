@@ -2,6 +2,7 @@ mod cli;
 mod hub_command;
 mod hub_member;
 mod machines;
+mod machines_revoke;
 mod manage_command;
 mod price_estimate;
 mod run;
