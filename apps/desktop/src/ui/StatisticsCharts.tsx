@@ -29,25 +29,39 @@ export function RollingText({ children, title }: { children: string; title?: str
   );
 }
 
+const shortDay = (day: string): string =>
+  new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+
+/** The sentence a trend pill's tip reads, e.g. "Up 23% against the 30 days before". */
+export function trendSentence(trend: Trend, compare: string): string {
+  if (trend.direction === "level") return `No change ${compare}`;
+  const way = trend.direction === "up" ? "Up" : "Down";
+  if (trend.percent === undefined) return `${way} from nothing ${compare}`;
+  return `${way} ${Math.abs(Math.round(trend.percent))}% ${compare}`;
+}
+
 /** How a tile moved against the period before: an arrow pill, never a coloured judgement. */
 export function TrendPill({ trend, compare }: { trend: Trend; compare: string }) {
   if (trend.direction === "level") {
     return (
-      <span title={compare} className="shrink-0 text-caption text-fg-faint">
-        no change
-      </span>
+      <Tooltip label={trendSentence(trend, compare)}>
+        <span className="shrink-0 text-caption text-fg-faint">no change</span>
+      </Tooltip>
     );
   }
   const up = trend.direction === "up";
   const Icon = up ? ArrowUp : ArrowDown;
   return (
-    <span
-      title={compare}
-      className="inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full bg-fill px-1.5 font-medium text-caption text-fg-muted tabular"
-    >
-      <Icon size={10} strokeWidth={2.5} aria-label={up ? "up" : "down"} />
-      {trend.percent === undefined ? "new" : `${Math.abs(Math.round(trend.percent))}%`}
-    </span>
+    <Tooltip label={trendSentence(trend, compare)}>
+      <span className="inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full bg-fill px-1.5 font-medium text-caption text-fg-muted tabular">
+        <Icon size={10} strokeWidth={2.5} aria-label={up ? "up" : "down"} />
+        {trend.percent === undefined ? "new" : `${Math.abs(Math.round(trend.percent))}%`}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -65,6 +79,8 @@ export function Tile({
   compare,
   series,
   seriesLabel,
+  days,
+  formatPoint,
 }: {
   label: string;
   value: string;
@@ -79,10 +95,23 @@ export function Tile({
   /** One value per day, `undefined` for a day nothing was reported. */
   series: (number | undefined)[];
   seriesLabel: string;
+  /** The day behind each value in `series`, so hovering the line can name it. */
+  days?: string[];
+  /** A day's value as the tile writes it ("$1.20", "12.4k"). */
+  formatPoint?: (value: number | undefined) => string;
 }) {
+  const [scrub, setScrub] = useState<number | null>(null);
+  const filled = sparklineSeries(series);
+  const peak = Math.max(0, ...filled);
+  const scrubbed = scrub !== null && days?.[scrub] !== undefined ? scrub : null;
+  const pointAt = (clientX: number, box: DOMRect) =>
+    Math.min(
+      Math.max(Math.round(((clientX - box.left) / box.width) * (series.length - 1)), 0),
+      series.length - 1,
+    );
   // A day with nothing reported is a zero here, so every tile draws the same
   // full-width line as Turns; one day is a point, not a line, and draws nothing.
-  const path = series.length > 1 ? sparklinePath(sparklineSeries(series), 100, 24) : "";
+  const path = series.length > 1 ? sparklinePath(filled, 100, 24) : "";
   return (
     <div className="flex min-w-0 flex-col rounded-xl bg-surface px-4 py-3">
       <div className="flex min-h-5 items-center gap-2">
@@ -91,41 +120,80 @@ export function Tile({
           {trend ? (
             <TrendPill trend={trend} compare={compare} />
           ) : (
-            <span className="truncate text-caption text-fg-faint" title={compare}>
-              {compare}
-            </span>
+            <Tooltip label={compare}>
+              <span className="truncate text-caption text-fg-faint">{compare}</span>
+            </Tooltip>
           )}
         </span>
       </div>
-      <div className="pt-0.5 font-semibold text-title2 text-fg" title={exact}>
-        {count === undefined ? (
-          <RollingText>{value}</RollingText>
-        ) : (
-          <RollingNumber value={count} className="font-semibold text-title2 text-fg" />
-        )}
-      </div>
-      <div className="line-clamp-2 min-h-8 text-balance text-caption text-fg-faint leading-4" title={note}>
-        {note ?? "\u00a0"}
-      </div>
-      <svg
-        viewBox="0 0 100 24"
-        preserveAspectRatio="none"
-        aria-hidden
-        className="mt-2 h-6 w-full text-accent/55"
+      <Tooltip label={exact}>
+        <div className="w-fit pt-0.5 font-semibold text-title2 text-fg">
+          {count === undefined ? (
+            <RollingText>{value}</RollingText>
+          ) : (
+            <RollingNumber value={count} className="font-semibold text-title2 text-fg" />
+          )}
+        </div>
+      </Tooltip>
+      {scrubbed !== null ? (
+        <div className="min-h-8 text-caption text-fg-faint leading-4 tabular">
+          <span className="font-medium text-fg-muted">{shortDay(days![scrubbed]!)}</span> ·{" "}
+          {formatPoint ? formatPoint(series[scrubbed]) : String(series[scrubbed] ?? "—")}
+        </div>
+      ) : (
+        <Tooltip label={note}>
+          <div className="line-clamp-2 min-h-8 text-balance text-caption text-fg-faint leading-4">
+            {note ?? "\u00a0"}
+          </div>
+        </Tooltip>
+      )}
+      <div
+        role="img"
+        aria-label={seriesLabel}
+        className="relative mt-2 h-6 w-full"
+        onPointerMove={
+          days && series.length > 1
+            ? (event) => setScrub(pointAt(event.clientX, event.currentTarget.getBoundingClientRect()))
+            : undefined
+        }
+        onPointerLeave={() => setScrub(null)}
       >
-        <title>{seriesLabel}</title>
-        {path && (
-          <path
-            d={path}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />
+        <svg
+          viewBox="0 0 100 24"
+          preserveAspectRatio="none"
+          aria-hidden
+          className="h-6 w-full text-accent/55"
+        >
+          {path && (
+            <path
+              d={path}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
+        {scrubbed !== null && (
+          <>
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-0 bottom-0 w-px bg-border-strong"
+              style={{ left: `${(scrubbed / (series.length - 1)) * 100}%` }}
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent"
+              style={{
+                left: `${(scrubbed / (series.length - 1)) * 100}%`,
+                top: `${peak > 0 ? (1 - (filled[scrubbed] ?? 0) / peak) * 100 : 100}%`,
+              }}
+            />
+          </>
         )}
-      </svg>
+      </div>
     </div>
   );
 }
@@ -140,13 +208,6 @@ export const DAILY_METRICS: { value: DailyMetric; label: string }[] = [
   { value: "tokens", label: "Tokens" },
   { value: "cost", label: "Cost" },
 ];
-
-const shortDay = (day: string): string =>
-  new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
 
 /**
  * One bar per day, one measure at a time. The tooltip follows the pointer and
@@ -336,6 +397,11 @@ export function shareShade(index: number): string {
 const percentLabel = (part: number, whole: number): string =>
   whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
 
+const shareSentence = (share: HarnessShare, total: number, formatCost: (usd: number) => string) =>
+  `${share.label}: ${share.estimated ? "≈" : ""}${formatCost(share.usd)}, ${percentLabel(share.usd, total)} of the period${
+    share.estimated ? ", partly a list-price estimate" : ""
+  }`;
+
 /**
  * One bar split by harness, and a legend that both names the parts and picks
  * which of them the bar and the table show. A hidden harness leaves the bar and
@@ -369,18 +435,18 @@ export function CostShare({
         className="flex h-2.5 gap-px overflow-hidden rounded-full bg-fill-subtle"
       >
         {shown.map((share) => (
-          <span
-            key={share.key}
-            title={`${share.label}: ${formatCost(share.usd)} (${percentLabel(share.usd, total)})`}
-            onPointerEnter={() => onHover(share.key)}
-            onPointerLeave={() => onHover(null)}
-            className="h-full first:rounded-l-full last:rounded-r-full"
-            style={{
-              width: `${total > 0 ? (share.usd / total) * 100 : 0}%`,
-              background: shareShade(rank.get(share.key) ?? 0),
-              opacity: hovered && hovered !== share.key ? 0.45 : 1,
-            }}
-          />
+          <Tooltip key={share.key} label={shareSentence(share, total, formatCost)}>
+            <span
+              onPointerEnter={() => onHover(share.key)}
+              onPointerLeave={() => onHover(null)}
+              className="h-full first:rounded-l-full last:rounded-r-full"
+              style={{
+                width: `${total > 0 ? (share.usd / total) * 100 : 0}%`,
+                background: shareShade(rank.get(share.key) ?? 0),
+                opacity: hovered && hovered !== share.key ? 0.45 : 1,
+              }}
+            />
+          </Tooltip>
         ))}
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5">
@@ -389,7 +455,11 @@ export function CostShare({
           return (
             <Tooltip
               key={share.key}
-              label={off ? `Show ${share.label} again` : `Hide ${share.label} from the bar`}
+              label={
+                off
+                  ? `Show ${share.label} again`
+                  : `${shareSentence(share, total, formatCost)}. Click to hide it from the bar`
+              }
             >
               <button
                 type="button"

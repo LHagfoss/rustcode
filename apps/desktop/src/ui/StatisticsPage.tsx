@@ -227,6 +227,7 @@ export function StatisticsPage() {
   const previousEmpty = previousTotals?.turns === 0;
   const beforeCost = previousEmpty ? 0 : beforeCostTotals?.usd;
   const beforeTokens = previousEmpty ? 0 : previousTotals ? used(previousTotals) : undefined;
+  const pointDays = points.map((point) => point.day);
   const activeDays = points.filter((point) => point.turns > 0).length;
   const beforeActiveDays = beforePoints.filter((point) => point.turns > 0).length;
   const change = (now?: number, was?: number) => (period === "all" ? undefined : trend(now, was));
@@ -275,6 +276,8 @@ export function StatisticsPage() {
             compare={compare}
             series={points.map((point) => point.cost)}
             seriesLabel="Reported cost per day; estimates are not in the line"
+            days={pointDays}
+            formatPoint={(usd) => (usd === undefined ? "no cost reported" : `${formatCost(usd)} reported`)}
           />
           <Tile
             label="Tokens"
@@ -285,6 +288,10 @@ export function StatisticsPage() {
             compare={compare}
             series={points.map((point) => point.tokens)}
             seriesLabel="Input and output tokens per day"
+            days={pointDays}
+            formatPoint={(tokens) =>
+              tokens === undefined ? "no tokens reported" : `${tokensLabel(tokens)} tokens`
+            }
           />
           <Tile
             label="Turns"
@@ -299,6 +306,8 @@ export function StatisticsPage() {
             compare={compare}
             series={points.map((point) => point.turns)}
             seriesLabel="Turns per day"
+            days={pointDays}
+            formatPoint={(turns) => count(turns ?? 0, "turn")}
           />
           <Tile
             label="Active days"
@@ -309,6 +318,8 @@ export function StatisticsPage() {
             compare={compare}
             series={points.map((point) => (point.turns > 0 ? 1 : 0))}
             seriesLabel="Days with a turn, one mark each"
+            days={pointDays}
+            formatPoint={(active) => (active ? "active" : "no turns")}
           />
         </div>
         <div className="mt-2 max-w-[70ch] px-3 text-caption text-fg-faint sm:px-4">
@@ -325,7 +336,15 @@ export function StatisticsPage() {
 
       <Group
         title="Daily activity"
-        action={days.data?.truncated ? <Chip tone="warn">Day read capped</Chip> : undefined}
+        action={
+          days.data?.truncated ? (
+            <Tooltip label="The day read stopped at its row cap, so the earliest days may be missing">
+              <span>
+                <Chip tone="warn">Day read capped</Chip>
+              </span>
+            </Tooltip>
+          ) : undefined
+        }
         footer="One bar a day, in UTC."
         hint="Cost is what harnesses reported that day; the tiles add a list-price estimate where none was reported."
       >
@@ -569,7 +588,11 @@ function UsageTable({
                   <th scope="row" className="min-w-0 px-4 py-2 text-left font-medium">
                     <span className="flex min-w-0 items-center gap-2">
                       <HarnessIcon id={group.harness} name={names.get(group.harness)} size={13} />
-                      <span className="truncate">{names.get(group.harness) ?? group.harness}</span>
+                      <Tooltip
+                        label={`${count(group.models.length, "model")} · ${count(group.totals.turns, "turn")}`}
+                      >
+                        <span className="truncate">{names.get(group.harness) ?? group.harness}</span>
+                      </Tooltip>
                     </span>
                   </th>
                   <NumberCell
@@ -614,9 +637,11 @@ function UsageTable({
                     >
                       <td className="min-w-0 px-4 py-2 pl-9 text-fg-muted">
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate">
-                            {model.model ? modelTitle(model.model) : "Unknown model"}
-                          </span>
+                          <Tooltip label={model.model || "The harness did not record a model"}>
+                            <span className="truncate">
+                              {model.model ? modelTitle(model.model) : "Unknown model"}
+                            </span>
+                          </Tooltip>
                         </span>
                       </td>
                       <NumberCell
