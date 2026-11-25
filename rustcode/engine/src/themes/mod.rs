@@ -811,7 +811,7 @@ fn sync_builtins(dir: &Path) {
                 let stale = legacy_builtin(content) == Some(existing.as_str())
                     || previous_builtin(filename, &existing);
                 if stale {
-                    let _ = crate::worktrees::write_atomic(&path, content.as_bytes());
+                    let _ = crate::atomic_file::write_atomic(&path, content.as_bytes());
                 }
             }
             Err(_) => {

@@ -30,7 +30,7 @@
 3600 rustcode/engine/src/orchestration/local_threads.rs
 2500 rustcode/engine/src/orchestration/mcp_server.rs
 2700 rustcode/engine/src/orchestration/outside.rs
-2600 rustcode/engine/src/pull_requests.rs
+2523 rustcode/engine/src/pull_requests.rs
 2200 rustcode/engine/src/pull_watch.rs
 2500 rustcode/engine/src/remote/contract.rs
 2300 rustcode/engine/src/remote/ops.rs

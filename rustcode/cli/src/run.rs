@@ -1128,6 +1128,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     rustcode::logger::rotate_if_oversized();
     rustcode::logger::install_panic_hook();
+    rustcode::sessions::report_history_write_failures();
     hydrate_shell_provider_keys();
 
     if cli_args.init || matches!(cli_args.command.as_ref(), Some(crate::cli::Commands::Init)) {

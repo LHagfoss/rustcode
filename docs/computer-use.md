@@ -28,7 +28,10 @@ allowed_domains = ["example.com", "*.example.org"]
 Start a new thread after changing the setting. Ask it to open
 an allowed URL, approve the action in RustCode, then read, click a CSS selector,
 or type into a CSS selector. Each step asks for approval, including reads and
-screenshots. Turn `enabled` off to refuse subsequent calls. No browser is
+screenshots. Auto-approve does not skip these cards on any harness,
+and a headless `rc` run, which has nobody to ask, refuses the tools. Plan mode
+refuses `browser_open`, `browser_click` and `browser_type`; reads and
+screenshots still ask. Turn `enabled` off to refuse subsequent calls. No browser is
 installed or launched until the first approved action.
 
 Exact domain entries match only that host; `*.example.org` matches subdomains,
@@ -44,8 +47,11 @@ Chrome runs headless with a separate random profile for each thread below
 `<config>/computer-use/`; it never attaches to an everyday browser. Browser
 state stays within that profile. Profiles are removed when the browser exits
 normally; crashes may leave a directory that can be deleted when RustCode is
-stopped. Screenshots are returned in memory as PNG data, not saved to disk by
-this feature. Typed values are redacted from the engine's approval preview;
+stopped. External harnesses receive a screenshot as an MCP image. On the
+built-in harness the tool result is a short note, and the image is saved with
+the thread's attachments and shown to the model after the tool batch, like a
+pasted image (a model without image input gets it described by the configured
+`vision_model`). Typed values are redacted from the engine's approval preview;
 the harness may retain its own tool arguments in its transcript.
 
 This first slice supports one page per thread, standard macOS/Linux Chrome

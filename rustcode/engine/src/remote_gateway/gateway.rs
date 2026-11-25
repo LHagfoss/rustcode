@@ -628,6 +628,10 @@ impl Shared {
                 ErrorCode::InvalidFrame,
                 "token_ack is only valid after authenticating",
             )),
+            HandshakeRequest::Unpair => Err(HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "unpair is only valid after authenticating",
+            )),
         }
     }
 
@@ -1302,6 +1306,14 @@ impl Shared {
 
     /// Forget a device and close its live connections in one step. The store
     /// is written first: if that fails nothing changes and the caller is told.
+    /// End the pairing of the device signed in as `device_id`, at its own
+    /// request: the same revocation the owner's `rc remote revoke` makes.
+    pub(super) fn unpair(&self, device_id: &str) -> Result<()> {
+        let record = self.state().devices.select(device_id)?.clone();
+        anyhow::ensure!(record.id == device_id, "no device record {device_id}");
+        self.revoke(&record.id).map(drop)
+    }
+
     fn revoke(&self, selector: &str) -> Result<(DeviceRecord, usize)> {
         let mut state = self.state();
         let record = state.devices.select(selector)?.clone();

@@ -16,7 +16,8 @@
 //! tunnel's edge, verified against the operating system's trust store.
 
 use crate::protocol::{
-    AcpClientFrame, AcpServerFrame, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES,
+    AcpClientFrame, AcpServerFrame, ErrorCode, HandshakeRequest, HandshakeResponse,
+    MAX_HANDSHAKE_FRAME_BYTES,
 };
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::{SinkExt, StreamExt};
@@ -426,6 +427,29 @@ impl Connection {
             Ok(response) => Err(crate::machine::handshake_failure("hub_join", response)),
             Err(_) => bail!("the machine did not confirm hub_join"),
         }
+    }
+
+    /// Ask the machine to end this device's pairing (`unpair`). `true` once
+    /// it answers `revoked`; `false` when it does not within `timeout`, as a
+    /// machine older than `unpair` never does.
+    pub async fn unpair(self, timeout: Duration) -> Result<bool> {
+        let mut connection = self;
+        let unpair = serde_json::to_value(HandshakeRequest::Unpair)?;
+        connection.send_json(&unpair).await.context("send unpair")?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        while let Ok(Some(text)) = connection
+            .next_text_or_close(Some((deadline, timeout)))
+            .await
+        {
+            if let Ok(HandshakeResponse::Error {
+                code: ErrorCode::Revoked,
+                ..
+            }) = serde_json::from_str(&text)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn send_json(&mut self, frame: &Value) -> Result<()> {

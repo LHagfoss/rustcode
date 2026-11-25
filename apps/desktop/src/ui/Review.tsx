@@ -9,7 +9,8 @@ import { primaryModifier } from "../lib/platform";
 // draft a comment; the drafts go to the agent as one message, or to the pull
 // request as one review with line comments (`_rustcode/pulls/review`).
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -24,10 +25,28 @@ import {
   type PatchLine,
   parsePatch,
   type ReviewComment,
+  rangeLines,
   reviewMessage,
   splitRows,
 } from "../state/diff";
 import { loadPullDiff, prefetchPullDiff, usePullList } from "../state/pullQueries";
+import { pullDiffFiles } from "../state/pullReview";
+import {
+  draftCounts,
+  EMPTY_DRAFT,
+  type ReviewDraft,
+  reviewDraftKey,
+  setReviewDraft,
+  useReviewDrafts,
+} from "../state/reviewDrafts";
+import {
+  patchHash,
+  setViewed,
+  stepFile,
+  useReviewViewed,
+  viewedKey,
+  viewedState,
+} from "../state/reviewViewed";
 import {
   featureMissing,
   refreshCheckpoints,
@@ -41,17 +60,30 @@ import {
 } from "../state/store";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
-import { ChevronDown, ChevronRight, FileDiff, Folder, MessageSquarePlus, RefreshCw, Send, X } from "./icons";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FileDiff,
+  Folder,
+  MessageSquarePlus,
+  RefreshCw,
+  Send,
+  X,
+} from "./icons";
 import { ViewHeader } from "./MainHeader";
 import { cx, noTextHelpers, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 interface ReviewFile {
   path: string;
+  /** The path before a rename. */
+  oldPath?: string;
   status: string;
   added: number;
   removed: number;
   lines: PatchLine[];
+  binary?: boolean;
 }
 
 type Source =
@@ -118,21 +150,24 @@ interface LineProps {
   line: PatchLine;
   html: string | null | undefined;
   side: "LEFT" | "RIGHT";
-  onComment: () => void;
+  onComment: (extend: boolean) => void;
   commented: boolean;
+  /** Inside the range a comment is being written on. */
+  picked?: boolean;
 }
 
-function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
+function Gutter({ line, side, onComment, commented, picked }: Omit<LineProps, "html">) {
   const n = side === "LEFT" ? line.old : line.new;
   return (
     <button
       type="button"
-      onClick={onComment}
+      onClick={(e) => onComment(e.shiftKey)}
       disabled={n === undefined}
       aria-label={n === undefined ? undefined : `Comment on line ${n}`}
       className={cx(
         "group/g relative w-[6ch] shrink-0 pr-1.5 text-right text-fg-faint tabular enabled:hover:bg-accent/20 enabled:hover:text-accent",
         commented && "text-accent",
+        picked && "bg-accent/20 text-accent",
       )}
     >
       <span className="group-hover/g:invisible">{n ?? ""}</span>
@@ -183,7 +218,12 @@ const FileDiffView = memo(function FileDiffView({
   onAdd: (c: ReviewComment) => void;
   onRemove: (c: ReviewComment) => void;
 }) {
-  const [editing, setEditing] = useState<{ side: "LEFT" | "RIGHT"; line: number; code: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    side: "LEFT" | "RIGHT";
+    line: number;
+    startLine?: number;
+    code: string;
+  } | null>(null);
   // Every line highlighted once, split around the words that changed on it.
   const texts = useMemo(() => file.lines.map((line) => line.text), [file.lines]);
   const marks = useMemo(() => runWordMarks(file.lines), [file.lines]);
@@ -195,10 +235,23 @@ const FileDiffView = memo(function FileDiffView({
   };
   const at = (side: "LEFT" | "RIGHT", n?: number) =>
     n === undefined ? [] : comments.filter((c) => c.side === side && c.line === n);
-  const start = (line: PatchLine, side: "LEFT" | "RIGHT") => {
+  const start = (line: PatchLine, side: "LEFT" | "RIGHT", extend = false) => {
     const n = side === "LEFT" ? line.old : line.new;
-    if (n !== undefined) setEditing({ side, line: n, code: line.text });
+    if (n === undefined) return;
+    const anchor = editing?.side === side ? (editing.startLine ?? editing.line) : undefined;
+    const range = extend && anchor !== undefined ? rangeLines(file.lines, side, anchor, n) : null;
+    if (range && range.length > 1) {
+      const first = Math.min(anchor!, n);
+      const last = Math.max(anchor!, n);
+      setEditing({ side, line: last, startLine: first, code: range.map((l) => l.text).join("\n") });
+    } else setEditing({ side, line: n, code: line.text });
   };
+  const picked = (side: "LEFT" | "RIGHT", n?: number) =>
+    n !== undefined &&
+    editing?.side === side &&
+    editing.startLine !== undefined &&
+    n >= editing.startLine &&
+    n <= editing.line;
   const after = (line: PatchLine | undefined, side: "LEFT" | "RIGHT") => {
     if (!line) return null;
     const n = side === "LEFT" ? line.old : line.new;
@@ -225,7 +278,14 @@ const FileDiffView = memo(function FileDiffView({
           <CommentBox
             onCancel={() => setEditing(null)}
             onSave={(body) => {
-              onAdd({ path: file.path, line: editing.line, side, body, code: editing.code });
+              onAdd({
+                path: file.path,
+                line: editing.line,
+                ...(editing.startLine !== undefined ? { startLine: editing.startLine } : {}),
+                side,
+                body,
+                code: editing.code,
+              });
               setEditing(null);
             }}
           />
@@ -248,14 +308,16 @@ const FileDiffView = memo(function FileDiffView({
                     <Gutter
                       line={line}
                       side="LEFT"
-                      onComment={() => start(line, "LEFT")}
+                      onComment={(extend) => start(line, "LEFT", extend)}
                       commented={at("LEFT", line.old).length > 0}
+                      picked={picked("LEFT", line.old)}
                     />
                     <Gutter
                       line={line}
                       side="RIGHT"
-                      onComment={() => start(line, line.kind === "del" ? "LEFT" : "RIGHT")}
+                      onComment={(extend) => start(line, line.kind === "del" ? "LEFT" : "RIGHT", extend)}
                       commented={at("RIGHT", line.new).length > 0}
+                      picked={picked("RIGHT", line.new)}
                     />
                     <span
                       className={cx(
@@ -293,8 +355,9 @@ const FileDiffView = memo(function FileDiffView({
                               <Gutter
                                 line={shown}
                                 side={side}
-                                onComment={() => start(shown, side)}
+                                onComment={(extend) => start(shown, side, extend)}
                                 commented={at(side, side === "LEFT" ? shown.old : shown.new).length > 0}
+                                picked={picked(side, side === "LEFT" ? shown.old : shown.new)}
                               />
                               {code(shown)}
                             </>
@@ -327,15 +390,28 @@ export function Review({ threadId }: { threadId: string }) {
   // The diff column's own width decides: the file tree takes its share of the window.
   const [diffRef, diffWidth] = useDiffWidth<HTMLElement>();
   const { mode, wide } = useDiffLayout(diffWidth);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean | null>(null);
   // A diff for a source already left is dropped, not drawn over the one chosen after it.
   const [diff, runLoad] = useOp<ReviewFile[]>();
   const files = diff.data ?? null;
   const error = opError(diff);
   const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
-  const [comments, setComments] = useState<ReviewComment[]>([]);
-  const [note, setNote] = useState("");
+  const draftKey = reviewDraftKey(threadId, sourceKey(source));
+  const draft = useReviewDrafts((s) => s.book[draftKey]) ?? EMPTY_DRAFT;
+  const counts = useReviewDrafts(useShallow((s) => draftCounts(s.book, threadId)));
+  const { comments, note } = draft;
+  const writeDraft = (next: Partial<ReviewDraft>) => setReviewDraft(draftKey, { ...draft, ...next });
+  const setComments = (update: (all: ReviewComment[]) => ReviewComment[]) =>
+    writeDraft({ comments: update(comments) });
+  const setNote = (text: string) => writeDraft({ note: text });
+  const discard = () => {
+    const kept = draft;
+    setReviewDraft(draftKey, EMPTY_DRAFT);
+    toast("Review draft discarded", "info", {
+      action: { label: "Undo", run: () => setReviewDraft(draftKey, kept) },
+    });
+  };
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [post, runPost] = useOp();
   const posting = opRunning(post);
@@ -347,7 +423,7 @@ export function Review({ threadId }: { threadId: string }) {
   // A folded file opens again for the next one, and for another source.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fold belongs to one file of one source
   useEffect(() => {
-    setCollapsed(false);
+    setCollapsed(null);
   }, [selected, sourceKey(source)]);
 
   // The branch's pull request, from the pull store the panel and the sidebar
@@ -377,17 +453,15 @@ export function Review({ threadId }: { threadId: string }) {
             if (answer.error) {
               throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
             }
-            const chunks = splitUnifiedDiff(answer.diff ?? "");
-            out = Object.entries(chunks).map(([path, lines]) => {
-              const parsed = parsePatch(lines);
-              return {
-                path,
-                status: "M",
-                added: parsed.filter((l) => l.kind === "add").length,
-                removed: parsed.filter((l) => l.kind === "del").length,
-                lines: parsed,
-              };
-            });
+            out = pullDiffFiles(answer.diff ?? "").map((f) => ({
+              path: f.path,
+              ...(f.oldPath ? { oldPath: f.oldPath } : {}),
+              status: f.status,
+              added: f.added,
+              removed: f.removed,
+              lines: f.lines,
+              binary: f.binary,
+            }));
           } else {
             const folder = source.kind === "branch" && wt ? wt.path : cwd;
             const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
@@ -396,7 +470,9 @@ export function Review({ threadId }: { threadId: string }) {
             const chunks = splitUnifiedDiff(changes.diff);
             out = changes.files.map((f) => ({
               path: f.path,
+              ...(f.oldPath ? { oldPath: f.oldPath } : {}),
               status: f.status,
+              binary: f.binary,
               added: f.added,
               removed: f.removed,
               lines: parsePatch(chunks[f.path] ?? []),
@@ -418,25 +494,61 @@ export function Review({ threadId }: { threadId: string }) {
     void load();
   }, [load]);
   const tree = useMemo(() => fileTree((files ?? []).map((f) => f.path)), [files]);
+  const order = useMemo(() => tree.flatMap((group) => group.files), [tree]);
+  const viewedBook = useReviewViewed((s) => s.book);
+  const hashes = useMemo(() => new Map((files ?? []).map((f) => [f.path, patchHash(f.lines)])), [files]);
+  const viewedOf = (path: string) =>
+    viewedState(viewedBook, viewedKey(threadId, sourceKey(source), path), hashes.get(path) ?? "");
+  const viewedCount = order.filter((path) => viewedOf(path) === "viewed").length;
+  const toggleViewed = (path: string) => {
+    const hash = hashes.get(path);
+    if (hash === undefined) return;
+    const marking = viewedOf(path) !== "viewed";
+    setViewed(viewedKey(threadId, sourceKey(source), path), marking ? hash : null);
+    setCollapsed(null);
+    if (!marking) return;
+    const next = stepFile(order, path, 1, (p) => p === path || viewedOf(p) === "viewed", true);
+    if (next) setSelected(next);
+  };
+  const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keys.current = (e) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !order.length) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']"))
+      return;
+    if (e.key === "j" || e.key === "k") {
+      const next = stepFile(order, selected, e.key === "j" ? 1 : -1);
+      if (next) setSelected(next);
+    } else if (e.key === "v" && selected) toggleViewed(selected);
+    else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keys.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const file = files?.find((f) => f.path === selected);
+  const folded = collapsed ?? (file ? viewedOf(file.path) === "viewed" : false);
   const label = sourceLabel(source, wt?.branch);
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
   const base = source.kind === "branch" ? comparisonBase(wt) : undefined;
+  const counted = (key: string, label: string) => (counts[key] ? `${label} · ${counts[key]}` : label);
   const sources: { value: string; label: string }[] = [
-    { value: "uncommitted", label: "Uncommitted" },
-    ...(wt ? [{ value: "branch", label: "Branch" }] : []),
-    ...(pull ? [{ value: `pull:${pull.number}`, label: `PR #${pull.number}` }] : []),
+    { value: "uncommitted", label: counted("uncommitted", "Uncommitted") },
+    ...(wt ? [{ value: "branch", label: counted("branch", "Branch") }] : []),
+    ...(pull
+      ? [{ value: `pull:${pull.number}`, label: counted(`pull:${pull.number}`, `PR #${pull.number}`) }]
+      : []),
   ];
 
   const sendToAgent = () => {
     if (!comments.length && !note.trim()) return;
     selectThread(threadId);
+    const key = draftKey;
     void submit(reviewMessage(label, comments, note)).then((sent) => {
-      if (sent) {
-        setComments([]);
-        setNote("");
-      }
+      if (sent) setReviewDraft(key, EMPTY_DRAFT);
     });
   };
 
@@ -444,6 +556,7 @@ export function Review({ threadId }: { threadId: string }) {
     if (source.kind !== "pull") return;
     const repository = repositoryOf(source.pull.url);
     if (!repository) return;
+    const key = draftKey;
     await runPost(async () => {
       try {
         const r = (await request(
@@ -455,7 +568,13 @@ export function Review({ threadId }: { threadId: string }) {
             commitId: source.pull.headSha,
             event,
             body: note,
-            comments: comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+            comments: comments.map((c) => ({
+              path: c.path,
+              line: c.line,
+              side: c.side,
+              body: c.body,
+              ...(c.startLine !== undefined ? { start_line: c.startLine, start_side: c.side } : {}),
+            })),
           },
           60_000,
         )) as JsonObject;
@@ -463,8 +582,7 @@ export function Review({ threadId }: { threadId: string }) {
         if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "error");
         else {
           toast("Review posted", "success");
-          setComments([]);
-          setNote("");
+          setReviewDraft(key, EMPTY_DRAFT);
         }
       } catch (e) {
         toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -486,7 +604,9 @@ export function Review({ threadId }: { threadId: string }) {
           // click draws the files instead of waiting for `gh`.
           onIntent={(v) => v.startsWith("pull:") && prefetchPullDiff(cwd, Number(v.slice(5)))}
           options={
-            source.kind === "turn" ? [...sources, { value: "turn", label: `Turn ${source.turn}` }] : sources
+            source.kind === "turn"
+              ? [...sources, { value: "turn", label: counted(`turn:${source.turn}`, `Turn ${source.turn}`) }]
+              : sources
           }
         />
         {checkpoints && checkpoints.length > 0 ? (
@@ -500,7 +620,7 @@ export function Review({ threadId }: { threadId: string }) {
               { value: "", label: "Turn…" },
               ...checkpoints.map((c) => ({
                 value: String(c.turn),
-                label: `${c.turn}. ${clip(c.prompt, 40)}`,
+                label: counted(`turn:${c.turn}`, `${c.turn}. ${clip(c.prompt, 40)}`),
               })),
             ]}
           />
@@ -544,6 +664,13 @@ export function Review({ threadId }: { threadId: string }) {
           <div className="flex h-9 items-center gap-2 px-2">
             <span className="shrink-0 font-semibold text-body">Files</span>
             <span className="shrink-0 text-caption text-fg-faint tabular">{files?.length ?? 0}</span>
+            {files && files.length > 0 && (
+              <Tooltip label="J and K move between files, V marks one viewed">
+                <span className="shrink-0 text-caption text-fg-faint tabular">
+                  · {viewedCount} of {files.length} viewed
+                </span>
+              </Tooltip>
+            )}
             {base && (
               <Tooltip label={base}>
                 <span className="min-w-0 truncate text-caption text-fg-faint">vs {shortRef(base)}</span>
@@ -566,8 +693,13 @@ export function Review({ threadId }: { threadId: string }) {
               {group.files.map((path) => {
                 const f = files?.find((x) => x.path === path);
                 const n = comments.filter((c) => c.path === path).length;
+                const seen = viewedOf(path);
                 return (
-                  <Tooltip key={path} label={path} side="right">
+                  <Tooltip
+                    key={path}
+                    label={`${f?.oldPath ? `${f.oldPath} → ${path}` : path}${seen === "changed" ? " · changed since you viewed it" : ""}`}
+                    side="right"
+                  >
                     <button
                       type="button"
                       onClick={() => setSelected(path)}
@@ -575,6 +707,7 @@ export function Review({ threadId }: { threadId: string }) {
                       className={cx(
                         "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
                         selected === path ? "bg-fill" : "hover:bg-fill-subtle",
+                        seen === "viewed" && selected !== path && "text-fg-muted",
                       )}
                     >
                       {f ? <StatusMark status={f.status} /> : <span className="size-4 shrink-0" />}
@@ -584,7 +717,16 @@ export function Review({ threadId }: { threadId: string }) {
                       {n > 0 && (
                         <span className="rounded-full bg-accent/20 px-1.5 text-caption text-accent">{n}</span>
                       )}
-                      {f && <DiffCount added={f.added} removed={f.removed} />}
+                      {seen === "changed" && (
+                        <span className="size-1.5 shrink-0 rounded-full bg-accent">
+                          <span className="sr-only">Changed since viewed</span>
+                        </span>
+                      )}
+                      {seen === "viewed" ? (
+                        <Check size={12} aria-label="Viewed" className="shrink-0 text-success" />
+                      ) : (
+                        f && <DiffCount added={f.added} removed={f.removed} />
+                      )}
                     </button>
                   </Tooltip>
                 );
@@ -603,7 +745,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={setSelected}
                 options={files.map((f) => ({
                   value: f.path,
-                  label: `${f.path} +${f.added} −${f.removed}`,
+                  label: `${viewedOf(f.path) === "viewed" ? "✓ " : ""}${f.path} +${f.added} −${f.removed}`,
                 }))}
               />
             </div>
@@ -615,27 +757,40 @@ export function Review({ threadId }: { threadId: string }) {
                 <div className="sticky top-0 z-10 flex items-center gap-2 bg-bg px-4 py-2 text-callout">
                   <button
                     type="button"
-                    aria-expanded={!collapsed}
-                    aria-label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
-                    onClick={() => setCollapsed(!collapsed)}
+                    aria-expanded={!folded}
+                    aria-label={folded ? `Expand ${file.path}` : `Collapse ${file.path}`}
+                    onClick={() => setCollapsed(!folded)}
                     className="-ml-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
                   >
-                    {collapsed ? (
+                    {folded ? (
                       <ChevronRight size={13} strokeWidth={2.5} />
                     ) : (
                       <ChevronDown size={13} strokeWidth={2.5} />
                     )}
                   </button>
                   <FileDiff size={13} className="shrink-0 text-fg-muted" />
-                  <span className="selectable min-w-0 truncate font-mono">{file.path}</span>
+                  <span className="selectable min-w-0 truncate font-mono">
+                    {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+                  </span>
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
-                  <span className="shrink-0 text-caption text-fg-faint max-[1099px]:hidden">
-                    Click a line number to comment
+                  <span className="shrink-0 text-caption text-fg-faint max-[1300px]:hidden">
+                    Click a line number to comment, Shift-click another to cover a range
                   </span>
+                  <Tooltip label="Mark viewed (V)">
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-fg-muted hover:text-fg">
+                      <input
+                        type="checkbox"
+                        className="shrink-0 accent-[var(--rc-accent)]"
+                        checked={viewedOf(file.path) === "viewed"}
+                        onChange={() => toggleViewed(file.path)}
+                      />
+                      Viewed
+                    </label>
+                  </Tooltip>
                 </div>
                 <div className="px-4 pb-4">
-                  {collapsed ? null : file.lines.length ? (
+                  {folded ? null : file.lines.length ? (
                     <FileDiffView
                       key={`${sourceKey(source)}|${file.path}`}
                       file={file}
@@ -645,7 +800,9 @@ export function Review({ threadId }: { threadId: string }) {
                       onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
                     />
                   ) : (
-                    <p className="text-callout text-fg-muted">No text diff (a binary or very large file).</p>
+                    <p className="text-callout text-fg-muted">
+                      {file.binary ? "A binary file: no lines to show." : "No text diff to show."}
+                    </p>
                   )}
                 </div>
               </>
@@ -672,7 +829,7 @@ export function Review({ threadId }: { threadId: string }) {
                 className="resize-y rounded-lg bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Pill onClick={() => setComments([])}>Discard</Pill>
+                <Pill onClick={discard}>Discard</Pill>
                 {source.kind === "pull" && (
                   <>
                     <Segments

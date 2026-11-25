@@ -188,9 +188,7 @@ async fn configure_inner(r: ConfigureRequest) -> Result<Value> {
     }
     let path = file()?;
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, serde_json::to_vec_pretty(&config)?)?;
-    std::fs::rename(temporary, path)?;
+    crate::atomic_file::write_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(serde_json::to_value(config)?)
 }
 pub(crate) fn bounded(text: &str) -> String {

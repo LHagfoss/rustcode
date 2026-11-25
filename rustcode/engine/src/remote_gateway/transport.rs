@@ -603,6 +603,15 @@ async fn pump(
                             );
                             continue;
                         }
+                        SessionControl::Unpair => {
+                            return match shared.unpair(&connection.context.device_id) {
+                                Ok(()) => Some(ErrorCode::Revoked),
+                                Err(error) => {
+                                    crate::dbg_log!("remote gateway: unpair failed: {error:#}");
+                                    Some(ErrorCode::Internal)
+                                }
+                            };
+                        }
                         SessionControl::Malformed => return Some(ErrorCode::InvalidFrame),
                     }
                     if let Some((access, ask)) = super::hub_link::MemberFrame::parse_join(&text) {

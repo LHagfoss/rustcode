@@ -351,12 +351,7 @@ fn record_session_settings_inner(
     let Ok(json) = serde_json::to_string_pretty(&log) else {
         return;
     };
-    let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
-    if fs::write(&temporary, json).is_ok() {
-        let _ = fs::rename(&temporary, path);
-    } else {
-        let _ = fs::remove_file(temporary);
-    }
+    let _ = crate::atomic_file::write_atomic(&path, json.as_bytes());
 }
 
 #[cfg(test)]
