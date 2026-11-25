@@ -1,5 +1,6 @@
 // What the mock's threads spent, as `_rustcode/usage` reports it (acp/mock.ts).
 
+import { localDay } from "../state/period";
 import type { JsonObject } from "./jsonrpc";
 import type { MockThread } from "./mockSeeds";
 
@@ -302,7 +303,7 @@ export function mockUsageDays(index: number): string[] {
   const days = new Set<string>();
   for (let step = 0; step < count; step++) {
     const offset = MOCK_DAY_OFFSETS[(index + step * 3) % MOCK_DAY_OFFSETS.length] ?? 0;
-    days.add(new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10));
+    days.add(localDay(Date.now() - offset * 86_400_000));
   }
   return [...days];
 }

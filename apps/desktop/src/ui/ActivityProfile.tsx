@@ -107,8 +107,8 @@ export function ActivityProfile({ report, error }: { report: UsageReport | null;
         error
           ? `Could not read every day: ${error}`
           : summary?.since
-            ? `Every day since ${longDay(summary.since)}, on every machine in scope. Days are UTC.`
-            : "Every day recorded, on every machine in scope. Days are UTC."
+            ? `Every day since ${longDay(summary.since)}, on every machine in scope, by this computer's clock.`
+            : "Every day recorded, on every machine in scope, by this computer's clock."
       }
     >
       <div>

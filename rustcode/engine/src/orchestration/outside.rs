@@ -917,6 +917,7 @@ fn data_tool(tool: &str, args: &Value) -> rustcode_tools::ToolExecutionOutput {
                 since: text("since"),
                 group_by: text("group_by"),
                 project: text("project"),
+                utc_offset_minutes: None,
             }),
             super::QUERY_DATA => data::query(data::DataQueryRequest {
                 sql: text("sql").unwrap_or_default(),

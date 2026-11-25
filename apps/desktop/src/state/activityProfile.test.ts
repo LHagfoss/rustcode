@@ -15,7 +15,7 @@ const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   ...over,
 });
 
-const today = new Date("2026-06-10T12:00:00Z");
+const today = new Date("2026-06-10T12:00:00");
 
 describe("the activity profile summary", () => {
   const rows = [

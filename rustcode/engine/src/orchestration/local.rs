@@ -231,6 +231,7 @@ fn thread_usage(session_id: &str, args: &Value) -> Value {
         since: text("since"),
         group_by: text("group_by"),
         project,
+        utc_offset_minutes: None,
     };
     match crate::acp::data::usage(request) {
         Ok(mut answer) => {

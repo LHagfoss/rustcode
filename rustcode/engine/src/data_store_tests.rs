@@ -240,6 +240,33 @@ fn usage_groups_totals_and_scopes_by_project() {
 }
 
 #[test]
+fn usage_days_follow_the_callers_utc_offset() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = usage_store(dir.path());
+    let days = |answer: &Value| -> Vec<String> {
+        let mut days: Vec<String> = rows(answer)
+            .iter()
+            .map(|row| row["day"].as_str().unwrap().to_owned())
+            .collect();
+        days.sort();
+        days
+    };
+
+    let west = usage_in(&path, Some("2026-11-01"), GroupBy::Day, None, -660).unwrap();
+    assert_eq!(days(&west), ["2026-11-01", "2026-11-02"], "{west}");
+
+    let east = usage_in(&path, Some("2026-11"), GroupBy::Day, None, 840).unwrap();
+    assert_eq!(
+        days(&east),
+        ["2026-11-02", "2026-11-03", "2026-11-04"],
+        "{east}"
+    );
+
+    let utc = usage_in(&path, None, GroupBy::Day, None, 0).unwrap();
+    assert_eq!(days(&utc), ["2026-11-01", "2026-11-02", "2026-11-03"]);
+}
+
+#[test]
 fn a_thread_is_priced_only_when_its_turns_share_one_harness_and_model() {
     let dir = tempfile::tempdir().unwrap();
     let path = usage_store(dir.path());

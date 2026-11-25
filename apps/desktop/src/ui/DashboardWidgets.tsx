@@ -17,7 +17,15 @@ import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
 import { useInboxItems } from "../state/inboxRead";
-import { daysAgo, previousRows, sparklinePath, sparklineSeries, sumRows, trend } from "../state/period";
+import {
+  daysAgo,
+  previousRows,
+  sparklinePath,
+  sparklineSeries,
+  sumRows,
+  trend,
+  utcOffsetMinutes,
+} from "../state/period";
 import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import {
   cachedPulls,
@@ -79,7 +87,7 @@ import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
 import { useCardHeight, useWidgetRows, WidgetGrid } from "./WidgetGrid";
 
-/** The spend card's token line: the last thirty days, counted as whole UTC days. */
+/** The spend card's token line: the last thirty days, counted as whole local days. */
 const USAGE_DAYS = 30;
 
 /** A heatmap cell's smallest and largest side and the space between cells, in pixels: squares, as a contribution graph draws them. */
@@ -751,12 +759,22 @@ export function DashboardBody({ project }: { project: string }) {
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
   const usageSince = useMemo(() => daysAgo(new Date(), USAGE_DAYS - 1), []);
   const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
-  const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day", since });
+  const offset = utcOffsetMinutes();
+  const days = useEngineData(Method.dataUsage, parseUsageReport, {
+    groupBy: "day",
+    since,
+    utcOffsetMinutes: offset,
+  });
   const rows = days.data?.rows;
-  const month = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model", since: monthSince });
+  const month = useEngineData(Method.dataUsage, parseUsageReport, {
+    groupBy: "model",
+    since: monthSince,
+    utcOffsetMinutes: offset,
+  });
   const twoMonths = useEngineData(Method.dataUsage, parseUsageReport, {
     groupBy: "model",
     since: previousSince,
+    utcOffsetMinutes: offset,
   });
   const render = (id: WidgetId) => {
     switch (id) {

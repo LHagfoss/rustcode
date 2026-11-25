@@ -37,6 +37,7 @@ import {
   statsRange,
   sumRows,
   trend,
+  utcOffsetMinutes,
 } from "../state/period";
 import { type CostTotals, costLine, costOfRows, formatCost, PRICE_DATE } from "../state/pricing";
 import {
@@ -130,19 +131,24 @@ export function StatisticsPage() {
   const machineNames = useApp((s) => s.machineNames);
   const hosts = useMemo(() => scopeHosts(scope, connected), [scope, connected]);
   const fleet = { hosts, combine: combineReports };
+  const offset = utcOffsetMinutes();
 
   // The period, and the same-length period before it, each read on its own so
   // their totals are the store's own sums rather than a page slicing.
   const current = useEngineData(
     Method.dataUsage,
     parseUsageReport,
-    { groupBy: "model", ...(range.since ? { since: range.since } : {}) },
+    { groupBy: "model", utcOffsetMinutes: offset, ...(range.since ? { since: range.since } : {}) },
     fleet,
   );
   const before = useEngineData(
     Method.dataUsage,
     parseUsageReport,
-    { groupBy: "model", ...(range.previousSince ? { since: range.previousSince } : {}) },
+    {
+      groupBy: "model",
+      utcOffsetMinutes: offset,
+      ...(range.previousSince ? { since: range.previousSince } : {}),
+    },
     { skip: period === "all", ...fleet },
   );
   // One day read covers both periods: the sparklines and the daily chart draw
@@ -151,11 +157,20 @@ export function StatisticsPage() {
   const days = useEngineData(
     Method.dataUsage,
     parseUsageReport,
-    { groupBy: "day", ...(range.previousSince ? { since: range.previousSince } : {}) },
+    {
+      groupBy: "day",
+      utcOffsetMinutes: offset,
+      ...(range.previousSince ? { since: range.previousSince } : {}),
+    },
     fleet,
   );
   const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" }, fleet);
-  const lifetime = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day" }, fleet);
+  const lifetime = useEngineData(
+    Method.dataUsage,
+    parseUsageReport,
+    { groupBy: "day", utcOffsetMinutes: offset },
+    fleet,
+  );
 
   const sessions = useApp((s) => s.sessions);
   const sessionsCapped = useApp((s) => s.sessionsCapped);
@@ -345,7 +360,7 @@ export function StatisticsPage() {
             </Tooltip>
           ) : undefined
         }
-        footer="One bar a day, in UTC."
+        footer="One bar a day, by this computer's clock."
         hint="Cost is what harnesses reported that day; the tiles add a list-price estimate where none was reported."
       >
         {!days.data ? (
