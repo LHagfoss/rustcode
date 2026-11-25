@@ -28,6 +28,7 @@ import {
   splitRows,
 } from "../state/diff";
 import { loadPullDiff, prefetchPullDiff, usePullList } from "../state/pullQueries";
+import { pullDiffFiles } from "../state/pullReview";
 import {
   featureMissing,
   refreshCheckpoints,
@@ -48,10 +49,13 @@ import { DiffCount } from "./Rows";
 
 interface ReviewFile {
   path: string;
+  /** The path before a rename. */
+  oldPath?: string;
   status: string;
   added: number;
   removed: number;
   lines: PatchLine[];
+  binary?: boolean;
 }
 
 type Source =
@@ -377,17 +381,15 @@ export function Review({ threadId }: { threadId: string }) {
             if (answer.error) {
               throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
             }
-            const chunks = splitUnifiedDiff(answer.diff ?? "");
-            out = Object.entries(chunks).map(([path, lines]) => {
-              const parsed = parsePatch(lines);
-              return {
-                path,
-                status: "M",
-                added: parsed.filter((l) => l.kind === "add").length,
-                removed: parsed.filter((l) => l.kind === "del").length,
-                lines: parsed,
-              };
-            });
+            out = pullDiffFiles(answer.diff ?? "").map((f) => ({
+              path: f.path,
+              ...(f.oldPath ? { oldPath: f.oldPath } : {}),
+              status: f.status,
+              added: f.added,
+              removed: f.removed,
+              lines: f.lines,
+              binary: f.binary,
+            }));
           } else {
             const folder = source.kind === "branch" && wt ? wt.path : cwd;
             const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
@@ -396,7 +398,9 @@ export function Review({ threadId }: { threadId: string }) {
             const chunks = splitUnifiedDiff(changes.diff);
             out = changes.files.map((f) => ({
               path: f.path,
+              ...(f.oldPath ? { oldPath: f.oldPath } : {}),
               status: f.status,
+              binary: f.binary,
               added: f.added,
               removed: f.removed,
               lines: parsePatch(chunks[f.path] ?? []),
@@ -567,7 +571,7 @@ export function Review({ threadId }: { threadId: string }) {
                 const f = files?.find((x) => x.path === path);
                 const n = comments.filter((c) => c.path === path).length;
                 return (
-                  <Tooltip key={path} label={path} side="right">
+                  <Tooltip key={path} label={f?.oldPath ? `${f.oldPath} → ${path}` : path} side="right">
                     <button
                       type="button"
                       onClick={() => setSelected(path)}
@@ -627,7 +631,9 @@ export function Review({ threadId }: { threadId: string }) {
                     )}
                   </button>
                   <FileDiff size={13} className="shrink-0 text-fg-muted" />
-                  <span className="selectable min-w-0 truncate font-mono">{file.path}</span>
+                  <span className="selectable min-w-0 truncate font-mono">
+                    {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+                  </span>
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
                   <span className="shrink-0 text-caption text-fg-faint max-[1099px]:hidden">
@@ -645,7 +651,9 @@ export function Review({ threadId }: { threadId: string }) {
                       onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
                     />
                   ) : (
-                    <p className="text-callout text-fg-muted">No text diff (a binary or very large file).</p>
+                    <p className="text-callout text-fg-muted">
+                      {file.binary ? "A binary file: no lines to show." : "No text diff to show."}
+                    </p>
                   )}
                 </div>
               </>
