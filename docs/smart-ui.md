@@ -136,7 +136,7 @@ The catalog (`BLOCKS` in `shorthand.ts`; `CATALOG` in
 | `table`, `compare`, `heatmap` | `a \| b` rows, the first the heading | `.rc-table`; `compare` turns yes/no/partial into marks, `heatmap` shades numbers from smallest to largest |
 | `list`, `kv`, `cards` | `- Title \| detail \| value`, `- Key \| value`, `- Title \| body \| badge` | `.rc-list`, a key-value `dl.rc-kv`, `.rc-cards` |
 | `steps`, `timeline` | `- [x] text`, `- 10:02 \| event \| detail` | `.rc-steps`; a timeline's dot takes the item's tint |
-| `findings` | `- high \| where \| finding \| note` | `.rc-findings`; `{ok}` marks the note fixed |
+| `findings` | `- high \| where \| finding \| note` | `.rc-findings`; `{ok}` marks the note fixed; a finding with no note gets a **Fix** chip that sends it back, and two or more open ones a **Fix all open** chip, most urgent first |
 | `files`, `tags` | `- path \| +12 -3 \| note`, `- label` | `.rc-file` rows with coloured counts, a row of badges |
 | `term`, `code lang` | lines as written | `.rc-term`, `pre` |
 | `actions` | `- Label \| message` | `.rc-chip` follow-ups |

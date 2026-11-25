@@ -153,9 +153,20 @@ pub fn tools(settings: &Settings) -> Vec<Value> {
 }
 
 type Job = (String, Value, oneshot::Sender<Result<Value, String>>);
+/// A thread's browser closes after this long without a browser call.
+const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// The engine process that owns a profile, written into the profile.
+const OWNER_FILE: &str = "rustcode-owner";
+/// A profile with no owner file is left to a starting browser for this long.
+const UNOWNED_GRACE: Duration = Duration::from_secs(60 * 60);
 struct Browser {
     sender: mpsc::Sender<Job>,
     stop: tokio_util::sync::CancellationToken,
+}
+impl Browser {
+    fn stopped(&self) -> bool {
+        self.sender.is_closed()
+    }
 }
 impl Drop for Browser {
     fn drop(&mut self) {
@@ -245,10 +256,12 @@ pub(crate) fn executable(settings: &Settings) -> Option<PathBuf> {
 async fn start(settings: &Settings) -> Result<Browser, String> {
     let executable =
         executable(settings).ok_or("Chrome/Chromium not found; set computer_use.executable")?;
-    let profile = crate::config::get_config_dir()
+    let root = crate::config::get_config_dir()
         .ok_or("No config directory")?
-        .join("computer-use")
-        .join(format!("profile-{:032x}", rand::random::<u128>()));
+        .join("computer-use");
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| sweep_stale_profiles(&root, owner_alive));
+    let profile = root.join(format!("profile-{:032x}", rand::random::<u128>()));
     std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -256,6 +269,8 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    std::fs::write(profile.join(OWNER_FILE), std::process::id().to_string())
+        .map_err(|e| e.to_string())?;
     let child = Command::new(executable)
         .args([
             "--headless=new",
@@ -335,9 +350,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = cdp
             .command("Page.setDownloadBehavior", json!({"behavior":"deny"}))
             .await;
+        let idle = tokio::time::sleep(IDLE_LIMIT);
+        tokio::pin!(idle);
         loop {
             tokio::select! {
                 _ = stopped.cancelled() => break,
+                _ = &mut idle => break,
                 message = cdp.ws.next() => {
                     match message { Some(Ok(Message::Text(body))) => { if let Ok(event) = serde_json::from_str::<Value>(&body) { if cdp.intercept(&event).await.is_err() { break } } }, Some(Ok(_)) => {}, _ => break }
                 },
@@ -347,6 +365,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
                         _ = stopped.cancelled() => break,
                         result = tokio::time::timeout(Duration::from_secs(40), cdp.action(&tool, &args)) => result.unwrap_or_else(|_| Err("CDP timed out".into())),
                     };
+                    idle.as_mut().reset(tokio::time::Instant::now() + IDLE_LIMIT);
                     let failed = result.is_err(); let _ = answer.send(result); if failed { break }
                 }
             }
@@ -542,6 +561,9 @@ pub async fn run_approved(
         .or_default()
         .clone();
     let mut browser = slot.lock().await;
+    if browser.as_ref().is_some_and(Browser::stopped) {
+        *browser = None;
+    }
     if browser.is_none() {
         *browser = Some(tokio::select! {
             _ = cancel.cancelled() => return Err("Cancelled".into()),
@@ -564,6 +586,105 @@ pub async fn run_approved(
         *browser = None;
     }
     result.map(|value| value.to_string())
+}
+
+fn owner_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        i32::try_from(pid).is_ok_and(crate::orchestration::tool_socket::process_alive)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Remove browser profiles left by an engine that is no longer running, such
+/// as after a crash or a forced quit, when `Chrome`'s cleanup never ran.
+fn sweep_stale_profiles(root: &std::path::Path, alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with("profile-") || !path.is_dir() {
+            continue;
+        }
+        let owner = std::fs::read_to_string(path.join(OWNER_FILE))
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        let stale = match owner {
+            Some(pid) => pid != std::process::id() && !alive(pid),
+            None => entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > UNOWNED_GRACE),
+        };
+        if stale {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{Browser, OWNER_FILE, sweep_stale_profiles};
+
+    #[test]
+    fn sweep_removes_only_profiles_of_engines_that_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = |name: &str, owner: Option<String>| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            if let Some(owner) = owner {
+                std::fs::write(path.join(OWNER_FILE), owner).unwrap();
+            }
+            path
+        };
+        let dead = profile("profile-dead", Some("7".into()));
+        let live = profile("profile-live", Some("42".into()));
+        let own = profile("profile-own", Some(std::process::id().to_string()));
+        let starting = profile("profile-starting", None);
+        let other = profile("notes", Some("7".into()));
+        sweep_stale_profiles(root.path(), |pid| pid == 42);
+        assert!(!dead.exists());
+        assert!(live.exists());
+        assert!(own.exists());
+        assert!(
+            starting.exists(),
+            "a fresh profile without an owner may be starting"
+        );
+        assert!(other.exists(), "only profile directories are touched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_removes_old_profiles_without_an_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("profile-old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+        sweep_stale_profiles(root.path(), |_| true);
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn a_stopped_browser_is_replaced_on_the_next_call() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let browser = Browser {
+            sender,
+            stop: tokio_util::sync::CancellationToken::new(),
+        };
+        assert!(!browser.stopped());
+        drop(receiver);
+        assert!(browser.stopped());
+    }
 }
 
 /// Turn a native `browser_screenshot` result into a short text result and

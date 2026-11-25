@@ -57,7 +57,7 @@ pub(super) fn stamp(store: &Store, run_id: &str, owner: &str, at: i64) {
         beat_ms: at,
     };
     if let Ok(text) = serde_json::to_vec(&driver) {
-        let _ = crate::worktrees::write_atomic(&dir.join(DRIVER_FILE), &text);
+        let _ = crate::atomic_file::write_atomic(&dir.join(DRIVER_FILE), &text);
     }
 }
 
@@ -80,7 +80,7 @@ pub(super) fn mark_running(index: &Path, thread: &str, run_id: &str) {
     if !super::store::valid_run_id(run_id) || std::fs::create_dir_all(index).is_err() {
         return;
     }
-    let _ = crate::worktrees::write_atomic(&index.join(run_id), thread.as_bytes());
+    let _ = crate::atomic_file::write_atomic(&index.join(run_id), thread.as_bytes());
 }
 
 pub(super) fn unmark(index: &Path, run_id: &str) {

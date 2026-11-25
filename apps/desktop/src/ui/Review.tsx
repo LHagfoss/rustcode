@@ -17,7 +17,7 @@ import { Method } from "../acp/types";
 import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { comparisonBase, shortRef } from "../lib/gitRef";
-import { gitChanges } from "../lib/native";
+import { type GitCommit, gitChanges, gitCommitChanges, gitCommits } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
@@ -25,6 +25,7 @@ import {
   type PatchLine,
   parsePatch,
   type ReviewComment,
+  rangeLines,
   reviewMessage,
   splitRows,
 } from "../state/diff";
@@ -89,10 +90,17 @@ type Source =
   | { kind: "uncommitted" }
   | { kind: "branch" }
   | { kind: "turn"; turn: number }
-  | { kind: "pull"; pull: PullRequest };
+  | { kind: "pull"; pull: PullRequest }
+  | { kind: "commit"; sha: string };
 
 const sourceKey = (s: Source) =>
-  s.kind === "turn" ? `turn:${s.turn}` : s.kind === "pull" ? `pull:${s.pull.number}` : s.kind;
+  s.kind === "turn"
+    ? `turn:${s.turn}`
+    : s.kind === "pull"
+      ? `pull:${s.pull.number}`
+      : s.kind === "commit"
+        ? `commit:${s.sha}`
+        : s.kind;
 
 function sourceLabel(s: Source, branch?: string): string {
   switch (s.kind) {
@@ -104,7 +112,15 @@ function sourceLabel(s: Source, branch?: string): string {
       return `turn ${s.turn}`;
     case "pull":
       return `pull request #${s.pull.number}`;
+    case "commit":
+      return `commit ${shortRef(s.sha)}`;
   }
+}
+
+/** A commit in the picker: its short sha and subject, a merge named as one. */
+export function commitLabel(c: Pick<GitCommit, "sha" | "subject" | "parents">): string {
+  const merge = c.parents > 1 && !/^merge\b/i.test(c.subject) ? "Merge: " : "";
+  return `${shortRef(c.sha)} · ${merge}${clip(c.subject, 40)}`;
 }
 
 const STATUS_LETTER: Record<string, string> = { added: "A", deleted: "D", renamed: "R", modified: "M" };
@@ -149,21 +165,24 @@ interface LineProps {
   line: PatchLine;
   html: string | null | undefined;
   side: "LEFT" | "RIGHT";
-  onComment: () => void;
+  onComment: (extend: boolean) => void;
   commented: boolean;
+  /** Inside the range a comment is being written on. */
+  picked?: boolean;
 }
 
-function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
+function Gutter({ line, side, onComment, commented, picked }: Omit<LineProps, "html">) {
   const n = side === "LEFT" ? line.old : line.new;
   return (
     <button
       type="button"
-      onClick={onComment}
+      onClick={(e) => onComment(e.shiftKey)}
       disabled={n === undefined}
       aria-label={n === undefined ? undefined : `Comment on line ${n}`}
       className={cx(
         "group/g relative w-[6ch] shrink-0 pr-1.5 text-right text-fg-faint tabular enabled:hover:bg-accent/20 enabled:hover:text-accent",
         commented && "text-accent",
+        picked && "bg-accent/20 text-accent",
       )}
     >
       <span className="group-hover/g:invisible">{n ?? ""}</span>
@@ -214,7 +233,12 @@ const FileDiffView = memo(function FileDiffView({
   onAdd: (c: ReviewComment) => void;
   onRemove: (c: ReviewComment) => void;
 }) {
-  const [editing, setEditing] = useState<{ side: "LEFT" | "RIGHT"; line: number; code: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    side: "LEFT" | "RIGHT";
+    line: number;
+    startLine?: number;
+    code: string;
+  } | null>(null);
   // Every line highlighted once, split around the words that changed on it.
   const texts = useMemo(() => file.lines.map((line) => line.text), [file.lines]);
   const marks = useMemo(() => runWordMarks(file.lines), [file.lines]);
@@ -226,10 +250,23 @@ const FileDiffView = memo(function FileDiffView({
   };
   const at = (side: "LEFT" | "RIGHT", n?: number) =>
     n === undefined ? [] : comments.filter((c) => c.side === side && c.line === n);
-  const start = (line: PatchLine, side: "LEFT" | "RIGHT") => {
+  const start = (line: PatchLine, side: "LEFT" | "RIGHT", extend = false) => {
     const n = side === "LEFT" ? line.old : line.new;
-    if (n !== undefined) setEditing({ side, line: n, code: line.text });
+    if (n === undefined) return;
+    const anchor = editing?.side === side ? (editing.startLine ?? editing.line) : undefined;
+    const range = extend && anchor !== undefined ? rangeLines(file.lines, side, anchor, n) : null;
+    if (range && range.length > 1) {
+      const first = Math.min(anchor!, n);
+      const last = Math.max(anchor!, n);
+      setEditing({ side, line: last, startLine: first, code: range.map((l) => l.text).join("\n") });
+    } else setEditing({ side, line: n, code: line.text });
   };
+  const picked = (side: "LEFT" | "RIGHT", n?: number) =>
+    n !== undefined &&
+    editing?.side === side &&
+    editing.startLine !== undefined &&
+    n >= editing.startLine &&
+    n <= editing.line;
   const after = (line: PatchLine | undefined, side: "LEFT" | "RIGHT") => {
     if (!line) return null;
     const n = side === "LEFT" ? line.old : line.new;
@@ -256,7 +293,14 @@ const FileDiffView = memo(function FileDiffView({
           <CommentBox
             onCancel={() => setEditing(null)}
             onSave={(body) => {
-              onAdd({ path: file.path, line: editing.line, side, body, code: editing.code });
+              onAdd({
+                path: file.path,
+                line: editing.line,
+                ...(editing.startLine !== undefined ? { startLine: editing.startLine } : {}),
+                side,
+                body,
+                code: editing.code,
+              });
               setEditing(null);
             }}
           />
@@ -279,14 +323,16 @@ const FileDiffView = memo(function FileDiffView({
                     <Gutter
                       line={line}
                       side="LEFT"
-                      onComment={() => start(line, "LEFT")}
+                      onComment={(extend) => start(line, "LEFT", extend)}
                       commented={at("LEFT", line.old).length > 0}
+                      picked={picked("LEFT", line.old)}
                     />
                     <Gutter
                       line={line}
                       side="RIGHT"
-                      onComment={() => start(line, line.kind === "del" ? "LEFT" : "RIGHT")}
+                      onComment={(extend) => start(line, line.kind === "del" ? "LEFT" : "RIGHT", extend)}
                       commented={at("RIGHT", line.new).length > 0}
+                      picked={picked("RIGHT", line.new)}
                     />
                     <span
                       className={cx(
@@ -324,8 +370,9 @@ const FileDiffView = memo(function FileDiffView({
                               <Gutter
                                 line={shown}
                                 side={side}
-                                onComment={() => start(shown, side)}
+                                onComment={(extend) => start(shown, side, extend)}
                                 commented={at(side, side === "LEFT" ? shown.old : shown.new).length > 0}
+                                picked={picked(side, side === "LEFT" ? shown.old : shown.new)}
                               />
                               {code(shown)}
                             </>
@@ -365,6 +412,19 @@ export function Review({ threadId }: { threadId: string }) {
   const error = opError(diff);
   const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
+  const [commits, setCommits] = useState<GitCommit[] | null>(null);
+  useEffect(() => {
+    setCommits(null);
+    if (!wt?.path || !wt.base) return;
+    let live = true;
+    gitCommits(wt.path, wt.base).then(
+      (list) => live && setCommits(list),
+      () => live && setCommits(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [wt?.path, wt?.base]);
   const draftKey = reviewDraftKey(threadId, sourceKey(source));
   const draft = useReviewDrafts((s) => s.book[draftKey]) ?? EMPTY_DRAFT;
   const counts = useReviewDrafts(useShallow((s) => draftCounts(s.book, threadId)));
@@ -431,8 +491,11 @@ export function Review({ threadId }: { threadId: string }) {
               binary: f.binary,
             }));
           } else {
-            const folder = source.kind === "branch" && wt ? wt.path : cwd;
-            const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
+            const folder = (source.kind === "branch" || source.kind === "commit") && wt ? wt.path : cwd;
+            const changes =
+              source.kind === "commit"
+                ? await gitCommitChanges(folder, source.sha)
+                : await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
             if (!changes)
               throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
             const chunks = splitUnifiedDiff(changes.diff);
@@ -501,7 +564,12 @@ export function Review({ threadId }: { threadId: string }) {
   const label = sourceLabel(source, wt?.branch);
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
-  const base = source.kind === "branch" ? comparisonBase(wt) : undefined;
+  const base =
+    source.kind === "branch"
+      ? comparisonBase(wt)
+      : source.kind === "commit"
+        ? `${shortRef(source.sha)}^`
+        : undefined;
   const counted = (key: string, label: string) => (counts[key] ? `${label} · ${counts[key]}` : label);
   const sources: { value: string; label: string }[] = [
     { value: "uncommitted", label: counted("uncommitted", "Uncommitted") },
@@ -536,7 +604,13 @@ export function Review({ threadId }: { threadId: string }) {
             commitId: source.pull.headSha,
             event,
             body: note,
-            comments: comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+            comments: comments.map((c) => ({
+              path: c.path,
+              line: c.line,
+              side: c.side,
+              body: c.body,
+              ...(c.startLine !== undefined ? { start_line: c.startLine, start_side: c.side } : {}),
+            })),
           },
           60_000,
         )) as JsonObject;
@@ -557,7 +631,7 @@ export function Review({ threadId }: { threadId: string }) {
       <ViewHeader title={`Review · ${title}`}>
         <Segments
           label="Changes"
-          value={source.kind === "turn" ? "turn" : sourceKey(source)}
+          value={source.kind === "turn" ? "turn" : source.kind === "commit" ? "commit" : sourceKey(source)}
           onChange={(v) => {
             if (v === "uncommitted" || v === "branch") setSource({ kind: v });
             else if (v.startsWith("pull:") && pull) setSource({ kind: "pull", pull });
@@ -568,9 +642,33 @@ export function Review({ threadId }: { threadId: string }) {
           options={
             source.kind === "turn"
               ? [...sources, { value: "turn", label: counted(`turn:${source.turn}`, `Turn ${source.turn}`) }]
-              : sources
+              : source.kind === "commit"
+                ? [
+                    ...sources,
+                    {
+                      value: "commit",
+                      label: counted(`commit:${source.sha}`, `Commit ${shortRef(source.sha)}`),
+                    },
+                  ]
+                : sources
           }
         />
+        {commits && commits.length > 1 && (
+          <Select
+            label="One commit's changes"
+            size="sm"
+            className="max-w-[220px]"
+            value={source.kind === "commit" ? source.sha : ""}
+            onChange={(sha) => sha && setSource({ kind: "commit", sha })}
+            options={[
+              { value: "", label: "Commit…" },
+              ...commits.map((c) => ({
+                value: c.sha,
+                label: counted(`commit:${c.sha}`, commitLabel(c)),
+              })),
+            ]}
+          />
+        )}
         {checkpoints && checkpoints.length > 0 ? (
           <Select
             label="A turn's changes"
@@ -737,7 +835,7 @@ export function Review({ threadId }: { threadId: string }) {
                   <DiffCount added={file.added} removed={file.removed} />
                   <span className="flex-1" />
                   <span className="shrink-0 text-caption text-fg-faint max-[1300px]:hidden">
-                    Click a line number to comment
+                    Click a line number to comment, Shift-click another to cover a range
                   </span>
                   <Tooltip label="Mark viewed (V)">
                     <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-fg-muted hover:text-fg">

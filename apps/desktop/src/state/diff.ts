@@ -70,18 +70,29 @@ export function splitRows(lines: PatchLine[]): SplitRow[] {
 
 export interface ReviewComment {
   path: string;
+  /** The last line commented on; with `startLine`, the end of the range. */
   line: number;
+  /** The first line of a range, on the same side. */
+  startLine?: number;
   side: "LEFT" | "RIGHT";
   body: string;
-  /** The line commented on, quoted in the message. */
+  /** The lines commented on, quoted in the message. */
   code: string;
 }
+
+/** Lines of a range quoted in a message; the rest is elided. */
+export const QUOTED_LINES = 6;
 
 /** The comments as one message for the agent working on these changes. */
 export function reviewMessage(source: string, comments: ReviewComment[], note = ""): string {
   const items = comments.map((c) => {
-    const quote = c.code.trim() ? `\n  > ${c.code.trim()}` : "";
-    return `- \`${c.path}:${c.line}\`${c.side === "LEFT" ? " (removed line)" : ""}: ${c.body.trim()}${quote}`;
+    const ranged = c.startLine !== undefined && c.startLine !== c.line;
+    const where = ranged ? `${c.path}:${c.startLine}-${c.line}` : `${c.path}:${c.line}`;
+    const code = c.code.split("\n");
+    const shown = code.slice(0, QUOTED_LINES).map((line) => `\n  > ${line.trimEnd()}`);
+    const quote = c.code.trim() ? shown.join("") + (code.length > QUOTED_LINES ? "\n  > …" : "") : "";
+    const removed = c.side === "LEFT" ? (ranged ? " (removed lines)" : " (removed line)") : "";
+    return `- \`${where}\`${removed}: ${c.body.trim()}${quote}`;
   });
   return [`Review comments on ${source}:`, note.trim(), items.join("\n")].filter(Boolean).join("\n\n");
 }
@@ -95,4 +106,31 @@ export function fileTree(paths: string[]): { dir: string; files: string[] }[] {
     byDir.set(dir, [...(byDir.get(dir) ?? []), p]);
   }
   return [...byDir.entries()].map(([dir, files]) => ({ dir, files }));
+}
+
+/**
+ * The lines numbered `from` to `to` on one side of a file's patch, in order, or null when the
+ * range crosses a hunk header (lines the diff does not show) or a number is missing.
+ */
+export function rangeLines(
+  lines: readonly PatchLine[],
+  side: "LEFT" | "RIGHT",
+  from: number,
+  to: number,
+): PatchLine[] | null {
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  const out: PatchLine[] = [];
+  let open = false;
+  for (const line of lines) {
+    if (line.kind === "hunk") {
+      if (open) return null;
+      continue;
+    }
+    const n = side === "LEFT" ? line.old : line.new;
+    if (n === undefined) continue;
+    if (n === lo) open = true;
+    if (open) out.push(line);
+    if (n === hi) return open ? out : null;
+  }
+  return null;
 }

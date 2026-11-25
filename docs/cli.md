@@ -36,7 +36,7 @@ still works under its old top-level name (`rc mcp list` is
 | `rustcode init` | Create a project `.rustcode/config.toml` from the global defaults | Project config |
 | `rustcode acp` | Run as an ACP server over stdio (what an editor starts) | — |
 | `rc up` | Make this computer pairable in one step: background server from login, remote access on, a connect code | Service, remote access |
-| `rustcode doctor` | Check config, binaries and skills | Creates missing folders with `--fix` |
+| `rustcode doctor` | Check config, binaries, harnesses (install, version, sign-in, named accounts) and skills | Creates missing folders with `--fix` |
 | `rustcode bench` | Inspect or compare structured turn telemetry | — |
 | `rc export [<id>]` | Export a thread as a zip (same as `threads export`) | A zip file |
 | `rustcode discord` | Discord Rich Presence setup and status | Config |
