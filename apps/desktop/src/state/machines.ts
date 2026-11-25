@@ -1345,18 +1345,24 @@ export function removeMachine(machine: Machine, onRemoved?: () => void): void {
     action: "Remove",
     destructive: true,
     run: () => {
-      void shellCall<string | null>("machines_remove", { id: machine.id }).then(
-        async (message) => {
-          detach(machine.id);
-          void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
-          toast(message || `Removed ${name}.`, "success");
-          await refreshMachines();
+      void forgetMachine(machine).then(
+        (message) => {
+          toast(message, "success");
           onRemoved?.();
         },
         (error) => toast(errorText(error), "error"),
       );
     },
   });
+}
+
+/** Forget a machine without asking (the caller did): answers what to tell the owner. */
+export async function forgetMachine(machine: Machine): Promise<string> {
+  const message = await shellCall<string | null>("machines_remove", { id: machine.id });
+  detach(machine.id);
+  void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
+  await refreshMachines();
+  return message || `Removed ${machineName(machine)}.`;
 }
 
 /** A probe in words: `Reachable · 4 ms`, `Refused · 2 ms`, `Timed out`, `Not tested`. */
