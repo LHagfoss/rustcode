@@ -10,6 +10,7 @@ import { primaryModifier } from "../lib/platform";
 // request as one review with line comments (`_rustcode/pulls/review`).
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -29,6 +30,14 @@ import {
 } from "../state/diff";
 import { loadPullDiff, prefetchPullDiff, usePullList } from "../state/pullQueries";
 import { pullDiffFiles } from "../state/pullReview";
+import {
+  draftCounts,
+  EMPTY_DRAFT,
+  type ReviewDraft,
+  reviewDraftKey,
+  setReviewDraft,
+  useReviewDrafts,
+} from "../state/reviewDrafts";
 import {
   featureMissing,
   refreshCheckpoints,
@@ -338,8 +347,21 @@ export function Review({ threadId }: { threadId: string }) {
   const error = opError(diff);
   const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
-  const [comments, setComments] = useState<ReviewComment[]>([]);
-  const [note, setNote] = useState("");
+  const draftKey = reviewDraftKey(threadId, sourceKey(source));
+  const draft = useReviewDrafts((s) => s.book[draftKey]) ?? EMPTY_DRAFT;
+  const counts = useReviewDrafts(useShallow((s) => draftCounts(s.book, threadId)));
+  const { comments, note } = draft;
+  const writeDraft = (next: Partial<ReviewDraft>) => setReviewDraft(draftKey, { ...draft, ...next });
+  const setComments = (update: (all: ReviewComment[]) => ReviewComment[]) =>
+    writeDraft({ comments: update(comments) });
+  const setNote = (text: string) => writeDraft({ note: text });
+  const discard = () => {
+    const kept = draft;
+    setReviewDraft(draftKey, EMPTY_DRAFT);
+    toast("Review draft discarded", "info", {
+      action: { label: "Undo", run: () => setReviewDraft(draftKey, kept) },
+    });
+  };
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [post, runPost] = useOp();
   const posting = opRunning(post);
@@ -427,20 +449,21 @@ export function Review({ threadId }: { threadId: string }) {
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
   const base = source.kind === "branch" ? comparisonBase(wt) : undefined;
+  const counted = (key: string, label: string) => (counts[key] ? `${label} · ${counts[key]}` : label);
   const sources: { value: string; label: string }[] = [
-    { value: "uncommitted", label: "Uncommitted" },
-    ...(wt ? [{ value: "branch", label: "Branch" }] : []),
-    ...(pull ? [{ value: `pull:${pull.number}`, label: `PR #${pull.number}` }] : []),
+    { value: "uncommitted", label: counted("uncommitted", "Uncommitted") },
+    ...(wt ? [{ value: "branch", label: counted("branch", "Branch") }] : []),
+    ...(pull
+      ? [{ value: `pull:${pull.number}`, label: counted(`pull:${pull.number}`, `PR #${pull.number}`) }]
+      : []),
   ];
 
   const sendToAgent = () => {
     if (!comments.length && !note.trim()) return;
     selectThread(threadId);
+    const key = draftKey;
     void submit(reviewMessage(label, comments, note)).then((sent) => {
-      if (sent) {
-        setComments([]);
-        setNote("");
-      }
+      if (sent) setReviewDraft(key, EMPTY_DRAFT);
     });
   };
 
@@ -448,6 +471,7 @@ export function Review({ threadId }: { threadId: string }) {
     if (source.kind !== "pull") return;
     const repository = repositoryOf(source.pull.url);
     if (!repository) return;
+    const key = draftKey;
     await runPost(async () => {
       try {
         const r = (await request(
@@ -467,8 +491,7 @@ export function Review({ threadId }: { threadId: string }) {
         if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "error");
         else {
           toast("Review posted", "success");
-          setComments([]);
-          setNote("");
+          setReviewDraft(key, EMPTY_DRAFT);
         }
       } catch (e) {
         toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -490,7 +513,9 @@ export function Review({ threadId }: { threadId: string }) {
           // click draws the files instead of waiting for `gh`.
           onIntent={(v) => v.startsWith("pull:") && prefetchPullDiff(cwd, Number(v.slice(5)))}
           options={
-            source.kind === "turn" ? [...sources, { value: "turn", label: `Turn ${source.turn}` }] : sources
+            source.kind === "turn"
+              ? [...sources, { value: "turn", label: counted(`turn:${source.turn}`, `Turn ${source.turn}`) }]
+              : sources
           }
         />
         {checkpoints && checkpoints.length > 0 ? (
@@ -504,7 +529,7 @@ export function Review({ threadId }: { threadId: string }) {
               { value: "", label: "Turn…" },
               ...checkpoints.map((c) => ({
                 value: String(c.turn),
-                label: `${c.turn}. ${clip(c.prompt, 40)}`,
+                label: counted(`turn:${c.turn}`, `${c.turn}. ${clip(c.prompt, 40)}`),
               })),
             ]}
           />
@@ -680,7 +705,7 @@ export function Review({ threadId }: { threadId: string }) {
                 className="resize-y rounded-lg bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Pill onClick={() => setComments([])}>Discard</Pill>
+                <Pill onClick={discard}>Discard</Pill>
                 {source.kind === "pull" && (
                   <>
                     <Segments
