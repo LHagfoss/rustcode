@@ -9,6 +9,7 @@ export const WorkflowMethod = {
   list: "_rustcode/workflows/list",
   stop: "_rustcode/workflows/stop",
   resume: "_rustcode/workflows/resume",
+  retry: "_rustcode/workflows/retry",
   wake: "_rustcode/workflows/wake",
   changed: "_rustcode/workflows/changed",
 } as const;

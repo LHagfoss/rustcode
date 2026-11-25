@@ -12,12 +12,14 @@ import { selectThread } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import {
+  canRetry,
   elapsedMs,
   isLive,
   type PhaseStepState,
   phaseSteps,
   progressText,
   resumeWorkflow,
+  retryWorkflow,
   runLine,
   runTitle,
   statusWord,
@@ -154,6 +156,30 @@ function ResumeButton({ run, threadId }: { run: WorkflowRun; threadId: string })
   );
 }
 
+function RetryButton({ run, threadId }: { run: WorkflowRun; threadId: string }) {
+  const [pending, setPending] = useState(false);
+  return (
+    <Tooltip label="Run the failed and unfinished workers again; finished ones are kept">
+      <button
+        type="button"
+        disabled={pending}
+        aria-label={`Retry ${runTitle(run)}`}
+        className="shrink-0 rounded-sm px-1.5 py-0.5 text-accent hover:bg-fill disabled:opacity-50"
+        onClick={async () => {
+          setPending(true);
+          try {
+            await retryWorkflow(threadId, run.id);
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        {pending ? "Retrying…" : "Retry"}
+      </button>
+    </Tooltip>
+  );
+}
+
 function StopButton({ run, threadId }: { run: WorkflowRun; threadId: string }) {
   const stopping = useWorkflows((s) => s.stopping[run.id] === true);
   return (
@@ -256,6 +282,7 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
         <span className="ml-auto shrink-0 text-fg-faint">{formatDuration(elapsedMs(run, now))}</span>
         {live && !run.driven && <ResumeButton run={run} threadId={threadId} />}
         {live && <StopButton run={run} threadId={threadId} />}
+        {canRetry(run) && <RetryButton run={run} threadId={threadId} />}
       </div>
       <div className="px-2">
         <PhaseSteps run={run} />
