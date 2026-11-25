@@ -29,7 +29,7 @@ export type ThreadStatus = "idle" | "running" | "needs_input" | "stalled" | "rev
 export const STATUS_LABEL: Record<ThreadStatus, string> = {
   idle: "Idle",
   running: "Running",
-  needs_input: "Needs input",
+  needs_input: "Needs you",
   stalled: "Stalled",
   review: "Review",
   done: "Settled",

@@ -73,6 +73,28 @@ export async function gitChanges(
   }
 }
 
+export interface GitCommit {
+  sha: string;
+  subject: string;
+  author: string;
+  /** Seconds since the epoch. */
+  time: number;
+  /** More than one for a merge. */
+  parents: number;
+}
+
+/** The commits HEAD made since it left `base`, newest first; null outside the desktop app. */
+export async function gitCommits(cwd: string, base: string): Promise<GitCommit[] | null> {
+  if (!isTauri() && !hasShell()) return null;
+  return invoke<GitCommit[]>("git_commits", { cwd, base });
+}
+
+/** One commit's changes against its first parent; null outside the desktop app. */
+export async function gitCommitChanges(cwd: string, sha: string): Promise<GitChanges | null> {
+  if (!isTauri() && !hasShell()) return null;
+  return invoke<GitChanges>("git_commit_changes", { cwd, sha });
+}
+
 /**
  * The branch and per-file counts only, without the diff body: what a count or a branch name needs,
  * read on every selection and turn end without sending up to 2 MB of diff over IPC.
