@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { OUTSIDE_SCOPES, type OutsideScope, SCOPE_HELP, SCOPE_LABEL } from "../acp/outside";
 import { hasShell } from "../lib/shell";
-import { type HubMember, refreshHub, setHub, useHub } from "../state/hub";
+import { type HubMember, hubChanging, hubError, hubStatus, refreshHub, setHub, useHub } from "../state/hub";
 import { machineName, useMachines } from "../state/machines";
 import { Switch } from "./primitives";
 import { Action, Chip, Group, Row, Select } from "./settingsKit";
@@ -17,9 +17,9 @@ const POLL_MS = 10_000;
 const SCOPE_OPTIONS = OUTSIDE_SCOPES.map((scope) => ({ value: scope, label: SCOPE_LABEL[scope] }));
 
 export function HubGroup() {
-  const status = useHub((s) => s.status);
-  const error = useHub((s) => s.error);
-  const busy = useHub((s) => s.busy);
+  const status = useHub(hubStatus);
+  const error = useHub(hubError);
+  const busy = useHub(hubChanging);
 
   useEffect(() => {
     if (!hasShell()) return;
@@ -35,7 +35,7 @@ export function HubGroup() {
       title="Hub (optional)"
       hint="Most setups need no hub: paired machines talk to each other directly. A hub is a machine that is always on, such as a VPS, that your other machines keep a link open to. Agents on the hub then reach a laptop behind a router with no open port, and work sent to a sleeping machine waits on the hub until it wakes. Threads still run where they started."
     >
-      {error && !status && (
+      {error && (
         <Row title="Could not read the hub role" status={<span className="text-warning">{error}</span>} />
       )}
       <Row
@@ -99,8 +99,8 @@ function Members({ members }: { members: HubMember[] | null }) {
 }
 
 function Membership() {
-  const member = useHub((s) => s.status?.member);
-  const busy = useHub((s) => s.busy);
+  const member = useHub((s) => hubStatus(s)?.member);
+  const busy = useHub(hubChanging);
   if (!member) return null;
   return (
     <Row
@@ -121,7 +121,7 @@ function Membership() {
 
 function JoinRows() {
   const machines = useMachines((s) => s.machines);
-  const busy = useHub((s) => s.busy);
+  const busy = useHub(hubChanging);
   const [machine, setMachine] = useState("");
   const [access, setAccess] = useState<OutsideScope>("admin");
   const [ask, setAsk] = useState(false);

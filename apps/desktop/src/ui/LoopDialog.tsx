@@ -13,7 +13,7 @@ import { useFleet } from "../state/fleet";
 import { jobMachineTargets, remoteLoopError, runThreadKey, targetKeyOf } from "../state/fleetLoops";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
 import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
-import { type HubStatus, refreshHub, useHub } from "../state/hub";
+import { type HubStatus, hubStatus, refreshHub, useHub } from "../state/hub";
 import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
@@ -329,7 +329,7 @@ export function LoopDialog({
   // The webhook URL a save just made: shown once, in place of the form, until the dialog closes.
   const [madeWebhook, setMadeWebhook] = useState<LoopWebhook | null>(null);
 
-  const hub = useHub((s) => s.status);
+  const hub = useHub(hubStatus);
   useEffect(() => {
     if (open) void refreshHub();
   }, [open]);
