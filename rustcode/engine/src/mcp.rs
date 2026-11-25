@@ -10,6 +10,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::{Mutex, Notify, mpsc};
 
+mod client_metadata;
+
 pub struct McpClient {
     pub name: String,
     transport: Transport,
@@ -1850,6 +1852,13 @@ impl McpClient {
         }
         .filter(|id| !id.trim().is_empty());
         let mut code_granted = plan.registration_grants.contains(&"authorization_code");
+        if client_id.is_none() && client_metadata::prefers_client_metadata(&meta) {
+            let document = client_metadata::client_metadata_registration();
+            client_id = Some(client_metadata::RUSTCODE_CLIENT_METADATA_URL.to_string());
+            flow = select_registered_oauth_flow(&meta, Some(&document))
+                .map_err(|detail| auth_required_error(&name, &mcp_url, &detail))?;
+            code_granted = true;
+        }
         if client_id.is_none() {
             let endpoint = registration_endpoint.ok_or_else(|| auth_required_error(
                 &name, &mcp_url, "configure a pre-registered `client_id`; the server offers no dynamic registration endpoint",

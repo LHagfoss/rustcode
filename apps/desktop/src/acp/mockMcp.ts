@@ -10,8 +10,8 @@ const signedOut = (server: JsonObject): JsonObject => ({
 });
 
 /**
- * The mock's remote MCP servers that sign in with OAuth: the seeded `sentry` row and any server
- * added through `_rustcode/capabilities/mcp/add`, which signs itself in a moment later as the
+ * The mock's remote MCP servers that sign in with OAuth: the seeded `sentry` row, a `vercel` row
+ * whose sign-in failed, and any server added through `_rustcode/capabilities/mcp/add`, which signs itself in a moment later as the
  * engine's browser login would. Reconnecting one signs it in; logging out forgets it.
  */
 export class MockAddedMcp {
@@ -24,6 +24,16 @@ export class MockAddedMcp {
       scope: "user",
       error: null,
     }),
+    {
+      name: "vercel",
+      transport: "http",
+      target: "https://mcp.vercel.com",
+      enabled: true,
+      scope: "user",
+      connection: "failed",
+      tools: 0,
+      error: "MCP OAuth for 'vercel': token request failed (HTTP 401): invalid_client",
+    },
   ];
 
   apply(method: string, params: JsonObject) {
@@ -61,7 +71,13 @@ export class MockAddedMcp {
     if (!this.servers.some((server) => str(server.name) === name)) return false;
     this.servers = this.servers.map((server) =>
       str(server.name) === name
-        ? { ...server, connection: "connected", tools: name === "sentry" ? 58 : 12, auth: "signed_in" }
+        ? {
+            ...server,
+            connection: "connected",
+            tools: name === "sentry" ? 58 : 12,
+            auth: "signed_in",
+            error: null,
+          }
         : server,
     );
     return true;
