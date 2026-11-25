@@ -123,6 +123,9 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             )
             .await
         }
+        MachineCommands::RevokeEverywhere { machine } => {
+            crate::machines_revoke::revoke_everywhere(&config_dir, machine).await
+        }
         MachineCommands::Remove { machine, local } => remove(&config_dir, machine, *local).await,
         MachineCommands::Discover { secs, json } => {
             discover(Duration::from_secs(*secs), *json).await
@@ -1033,7 +1036,11 @@ fn discovered_table(found: &[DiscoveredMachine]) -> String {
     columns(&table)
 }
 
-async fn remove(config_dir: &std::path::Path, selector: &str, local: bool) -> Result<()> {
+pub(crate) async fn remove(
+    config_dir: &std::path::Path,
+    selector: &str,
+    local: bool,
+) -> Result<()> {
     let machine = MachineRegistry::load(config_dir)?.select(selector)?.clone();
     let tokens = TokenStore::open(config_dir);
     let unpaired = match (&tokens, local) {

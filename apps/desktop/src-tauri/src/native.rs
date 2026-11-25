@@ -21,12 +21,12 @@ fn is_known_login_tool(tool: &str) -> bool {
     LOGIN_TOOLS.contains(&tool)
 }
 
-const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 /// An untracked file's lines are counted up to this size; a larger one counts as binary, so a
 /// stray log or build output is not read whole for a number.
 const MAX_COUNTED_BYTES: u64 = 1024 * 1024;
 
-fn absolute_dir(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn absolute_dir(path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     if !path.is_absolute() || !path.is_dir() {
         return Err(format!("Not a folder: {}", path.display()));
@@ -264,12 +264,12 @@ pub struct FileChange {
 
 #[derive(Serialize)]
 pub struct GitChanges {
-    branch: Option<String>,
-    files: Vec<FileChange>,
-    diff: String,
+    pub(crate) branch: Option<String>,
+    pub(crate) files: Vec<FileChange>,
+    pub(crate) diff: String,
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let out = crate::process::command("git")
         .arg("-C")
         .arg(cwd)
@@ -285,7 +285,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
 
 /// A ref or commit the webview names as the base of a branch diff: no
 /// option-like or odd characters, and it must resolve to a commit.
-fn valid_base(base: &str) -> bool {
+pub(crate) fn valid_base(base: &str) -> bool {
     !base.is_empty()
         && base.len() <= 200
         && !base.starts_with('-')
@@ -343,6 +343,59 @@ fn added_file_patch(path: &str, text: &str) -> String {
     out
 }
 
+/// The files `git diff -M <range>` changes, with their status, old path and
+/// line counts (none for a binary file).
+pub(crate) fn diff_files(cwd: &Path, range: &[&str]) -> Result<Vec<FileChange>, String> {
+    let status = git(cwd, &[&["diff", "--name-status", "-M"], range].concat())?;
+    let numstat = git(cwd, &[&["diff", "--numstat", "-M"], range].concat())?;
+    let counts: Vec<(Option<u64>, Option<u64>)> = numstat
+        .lines()
+        .map(|l| {
+            let mut parts = l.split('\t');
+            (
+                parts.next().and_then(|a| a.parse().ok()),
+                parts.next().and_then(|r| r.parse().ok()),
+            )
+        })
+        .collect();
+    let mut files = Vec::new();
+    for (i, line) in status.lines().enumerate() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        let code = parts
+            .first()
+            .map(|c| c.chars().next().unwrap_or('M'))
+            .unwrap_or('M');
+        let (path, old_path) = match parts.as_slice() {
+            [_, old, new] => (new.to_string(), Some(old.to_string())),
+            [_, path] => (path.to_string(), None),
+            _ => continue,
+        };
+        let (added, removed) = counts.get(i).copied().unwrap_or((None, None));
+        files.push(FileChange {
+            path,
+            status: code.to_string(),
+            old_path,
+            added: added.unwrap_or(0),
+            removed: removed.unwrap_or(0),
+            binary: added.is_none(),
+        });
+    }
+    Ok(files)
+}
+
+/// `git diff -M <range>`, cut to [`MAX_DIFF_BYTES`] on a character boundary.
+pub(crate) fn capped_diff(cwd: &Path, range: &[&str]) -> Result<String, String> {
+    let mut diff = git(cwd, &[&["diff", "--no-color", "-M"], range].concat())?;
+    if diff.len() > MAX_DIFF_BYTES {
+        let mut cut = MAX_DIFF_BYTES;
+        while !diff.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        diff.truncate(cut);
+    }
+    Ok(diff)
+}
+
 /// Uncommitted changes against HEAD, plus untracked files. With `base`
 /// (a worktree's base commit or branch), everything since the branch left
 /// it: its commits and the working tree, against their merge base. With
@@ -380,40 +433,7 @@ pub fn git_changes(
     };
     let base = base.as_slice();
 
-    let mut files = Vec::new();
-    let status = git(&cwd, &[&["diff", "--name-status", "-M"], base].concat())?;
-    let numstat = git(&cwd, &[&["diff", "--numstat", "-M"], base].concat())?;
-    let counts: Vec<(Option<u64>, Option<u64>)> = numstat
-        .lines()
-        .map(|l| {
-            let mut parts = l.split('\t');
-            (
-                parts.next().and_then(|a| a.parse().ok()),
-                parts.next().and_then(|r| r.parse().ok()),
-            )
-        })
-        .collect();
-    for (i, line) in status.lines().enumerate() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        let code = parts
-            .first()
-            .map(|c| c.chars().next().unwrap_or('M'))
-            .unwrap_or('M');
-        let (path, old_path) = match parts.as_slice() {
-            [_, old, new] => (new.to_string(), Some(old.to_string())),
-            [_, path] => (path.to_string(), None),
-            _ => continue,
-        };
-        let (added, removed) = counts.get(i).copied().unwrap_or((None, None));
-        files.push(FileChange {
-            path,
-            status: code.to_string(),
-            old_path,
-            added: added.unwrap_or(0),
-            removed: removed.unwrap_or(0),
-            binary: added.is_none(),
-        });
-    }
+    let mut files = diff_files(&cwd, base)?;
     let mut added_patches = Vec::new();
     for path in git(&cwd, &["ls-files", "--others", "--exclude-standard"])?.lines() {
         let text = untracked_text(&cwd.join(path));
@@ -439,14 +459,7 @@ pub fn git_changes(
             diff: String::new(),
         });
     }
-    let mut diff = git(&cwd, &[&["diff", "--no-color", "-M"], base].concat())?;
-    if diff.len() > MAX_DIFF_BYTES {
-        let mut cut = MAX_DIFF_BYTES;
-        while !diff.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        diff.truncate(cut);
-    }
+    let mut diff = capped_diff(&cwd, base)?;
     for patch in added_patches {
         if diff.len() + patch.len() + 1 > MAX_DIFF_BYTES {
             break;
