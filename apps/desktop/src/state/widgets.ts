@@ -7,7 +7,7 @@
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
 import { sameProject } from "./orchestration";
-import { DAY_MS } from "./period";
+import { DAY_MS, localDay } from "./period";
 
 /** The most weeks the activity card reads and draws: a year. */
 export const HEATMAP_WEEKS = 52;
@@ -20,7 +20,7 @@ export interface HeatCell {
   level: 0 | 1 | 2 | 3 | 4;
 }
 
-/** The UTC day `n` days after `day`; the store groups by the same UTC day. */
+/** The calendar day `n` days after `day`, for the local days the store groups by. */
 export function plusDays(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
@@ -30,7 +30,7 @@ export function weekday(day: string): number {
   return (new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7;
 }
 
-/** What each UTC day in a report ran, added up over its harness and model rows. */
+/** What each day in a report ran, added up over its harness and model rows. */
 export function turnsPerDay(rows: readonly UsageRow[]): Map<string, number> {
   const turns = new Map<string, number>();
   for (const row of rows) {
@@ -49,7 +49,7 @@ export function weeksOfHistory(turns: ReadonlyMap<string, number>, today: Date =
   let first: string | undefined;
   for (const [day, value] of turns) if (value > 0 && (!first || day < first)) first = day;
   if (!first) return 0;
-  const last = today.toISOString().slice(0, 10);
+  const last = localDay(today);
   const days = Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) / DAY_MS);
   return Math.floor((days + 6 - weekday(last)) / 7) + 1;
 }
@@ -66,7 +66,7 @@ export function heatmapWeeks(
   today: Date = new Date(),
 ): (HeatCell | null)[][] {
   if (weeks <= 0) return [];
-  const last = today.toISOString().slice(0, 10);
+  const last = localDay(today);
   const first = plusDays(last, -((weeks - 1) * 7 + weekday(last)));
   let busiest = 0;
   for (const value of turns.values()) if (value > busiest) busiest = value;
@@ -108,7 +108,7 @@ export interface Streak {
  */
 export function streakOf(turns: ReadonlyMap<string, number>, today: Date = new Date()): Streak {
   const active = (day: string) => (turns.get(day) ?? 0) > 0;
-  const last = today.toISOString().slice(0, 10);
+  const last = localDay(today);
   const days = new Set<string>();
   const ranToday = active(last);
   for (let day = ranToday ? last : plusDays(last, -1); active(day); day = plusDays(day, -1)) days.add(day);
@@ -123,10 +123,10 @@ export function streakOf(turns: ReadonlyMap<string, number>, today: Date = new D
   return { current: days.size, longest, today: ranToday, days };
 }
 
-/** The UTC days a month starts on: this one, and the one before it. */
+/** The local days a month starts on: this one, and the one before it. */
 export function monthBounds(now: Date = new Date()): { since: string; previousSince: string } {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
+  const year = now.getFullYear();
+  const month = now.getMonth();
   const day = (at: number) => new Date(Date.UTC(year, at, 1)).toISOString().slice(0, 10);
   return { since: day(month), previousSince: day(month - 1) };
 }
@@ -148,9 +148,7 @@ export function activitySummary(
   turns: ReadonlyMap<string, number>,
   today: Date = new Date(),
 ): { week: number; busiest?: { day: string; turns: number } } {
-  const from = new Date(Date.parse(`${today.toISOString().slice(0, 10)}T00:00:00Z`) - 6 * DAY_MS)
-    .toISOString()
-    .slice(0, 10);
+  const from = new Date(Date.parse(`${localDay(today)}T00:00:00Z`) - 6 * DAY_MS).toISOString().slice(0, 10);
   let week = 0;
   let busiest: { day: string; turns: number } | undefined;
   for (const [day, count] of turns) {

@@ -564,8 +564,12 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
         None => None,
     };
     rustcode::data_store::ensure_ready()?;
-    let answer =
-        rustcode::data_store::usage(since.as_deref(), rustcode::data_store::GroupBy::Model, None)?;
+    let answer = rustcode::data_store::usage(
+        since.as_deref(),
+        rustcode::data_store::GroupBy::Model,
+        None,
+        0,
+    )?;
     let rows = answer
         .get("rows")
         .and_then(serde_json::Value::as_array)

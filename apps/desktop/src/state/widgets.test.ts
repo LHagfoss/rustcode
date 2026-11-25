@@ -40,7 +40,7 @@ const session = (over: Partial<SessionSummary> = {}): SessionSummary => ({
 
 describe("the activity heatmap", () => {
   // A Wednesday: the last column holds three days, so the days after today are blank.
-  const today = new Date("2026-06-10T12:00:00Z");
+  const today = new Date("2026-06-10T12:00:00");
 
   test("one column per week, Monday first, ending on the week of today", () => {
     const weeks = heatmapWeeks(new Map(), 4, today);
@@ -105,14 +105,14 @@ describe("the activity heatmap", () => {
 
 describe("a month's bounds", () => {
   test("the first day of this month and of the one before", () => {
-    expect(monthBounds(new Date("2026-06-10T12:00:00Z"))).toEqual({
+    expect(monthBounds(new Date("2026-06-10T12:00:00"))).toEqual({
       since: "2026-06-01",
       previousSince: "2026-05-01",
     });
   });
 
   test("January compares with the December before it", () => {
-    expect(monthBounds(new Date("2026-01-04T00:00:00Z"))).toEqual({
+    expect(monthBounds(new Date("2026-01-04T00:00:00"))).toEqual({
       since: "2026-01-01",
       previousSince: "2025-12-01",
     });
@@ -144,7 +144,7 @@ describe("a project's threads", () => {
 });
 
 describe("the activity streak", () => {
-  const today = new Date("2026-06-10T12:00:00Z");
+  const today = new Date("2026-06-10T12:00:00");
   const days = (...entries: [string, number][]) => new Map(entries);
 
   test("counts the days in a row up to today", () => {
@@ -184,7 +184,7 @@ describe("activitySummary", () => {
       ["2026-11-18", 9],
       ["2026-10-01", 4],
     ]);
-    expect(activitySummary(turns, new Date("2026-11-25T12:00:00Z"))).toEqual({
+    expect(activitySummary(turns, new Date("2026-11-25T12:00:00"))).toEqual({
       week: 5,
       busiest: { day: "2026-11-18", turns: 9 },
     });

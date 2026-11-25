@@ -5,6 +5,7 @@
  */
 
 import type { UsageRow } from "../acp/rustcode";
+import { localDay } from "./period";
 import { usedTokens } from "./statistics";
 import { plusDays, type Streak, streakOf, turnsPerDay, weekday } from "./widgets";
 
@@ -45,7 +46,7 @@ export interface ProfileSummary {
   since?: string;
 }
 
-/** Input and output tokens per UTC day, added over every row of that day. */
+/** Input and output tokens per day, added over every row of that day. */
 export function tokensPerDay(rows: readonly UsageRow[]): Map<string, number> {
   const tokens = new Map<string, number>();
   for (const row of rows) {
@@ -104,7 +105,7 @@ export function profileWeeks(
   if (weeks <= 0) return [];
   const tokens = tokensPerDay(rows);
   const turns = turnsPerDay(rows);
-  const last = today.toISOString().slice(0, 10);
+  const last = localDay(today);
   const first = plusDays(last, -((weeks - 1) * 7 + weekday(last)));
   let running = 0;
   for (const [day, value] of tokens) if (day < first) running += value;

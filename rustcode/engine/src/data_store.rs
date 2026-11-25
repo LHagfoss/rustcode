@@ -311,32 +311,47 @@ pub fn parse_since(value: &str) -> Result<String, String> {
 /// Tokens and reported cost over `turns`, grouped as asked, for `thread_usage`.
 /// Read-only, like [`query`], and bounded to [`MAX_ROWS`] groups. A cost is
 /// only ever the USD a harness reported: nothing here prices a request.
+/// Days start at `utc_offset_minutes` east of UTC; zero keeps UTC days.
 pub fn usage(
     since: Option<&str>,
     group_by: GroupBy,
     project: Option<&str>,
+    utc_offset_minutes: i32,
 ) -> Result<Value, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
-    usage_at(&path, since, group_by, project)
+    usage_in(&path, since, group_by, project, utc_offset_minutes)
 }
 
-/// [`usage`] against one store file, so a test can read a temporary one.
+/// [`usage`] against one store file in UTC days, for a test or a peer.
 pub fn usage_at(
     path: &Path,
     since: Option<&str>,
     group_by: GroupBy,
     project: Option<&str>,
 ) -> Result<Value, String> {
+    usage_in(path, since, group_by, project, 0)
+}
+
+/// [`usage_at`] with days at `utc_offset_minutes` east of UTC.
+pub fn usage_in(
+    path: &Path,
+    since: Option<&str>,
+    group_by: GroupBy,
+    project: Option<&str>,
+    utc_offset_minutes: i32,
+) -> Result<Value, String> {
+    let offset = crate::usage_days::clamp(utc_offset_minutes);
     // The key column is the one grouped on, so a row says what it is.
-    let (key, group) = match group_by {
-        GroupBy::Harness => ("COALESCE(t.harness, 'unknown') AS harness", "1"),
+    let (key, group): (std::borrow::Cow<str>, &str) = match group_by {
+        GroupBy::Harness => ("COALESCE(t.harness, 'unknown') AS harness".into(), "1"),
         GroupBy::Model => (
             "COALESCE(t.harness, 'unknown') AS harness, names.model AS model, \
-             json_group_array(DISTINCT t.model) AS raw_models",
+             json_group_array(DISTINCT t.model) AS raw_models"
+                .into(),
             "1, 2",
         ),
-        GroupBy::Day => ("date(t.started_at) AS day", "1"),
-        GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project", "1"),
+        GroupBy::Day => (crate::usage_days::day_key(offset).into(), "1"),
+        GroupBy::Project => ("COALESCE(th.project, th.cwd, '') AS project".into(), "1"),
         // A thread's display harness may be its latest one, but pricing needs
         // the pair its turns actually ran. `model`/`model_harness` are present
         // only when every turn shared one harness and model; otherwise a row
@@ -349,7 +364,8 @@ pub fn usage_at(
                   THEN MAX(t.model) END AS model, \
              CASE WHEN COUNT(DISTINCT COALESCE(t.harness, '') || '/' || COALESCE(t.model, '')) = 1 \
                   THEN MAX(t.harness) END AS model_harness, \
-             th.parent_id AS parent_id, th.parent_title AS parent_title",
+             th.parent_id AS parent_id, th.parent_title AS parent_title"
+                .into(),
             "1",
         ),
     };
@@ -393,9 +409,7 @@ pub fn usage_at(
     }
     let mut filters: Vec<String> = Vec::new();
     if let Some(since) = since.filter(|since| !since.trim().is_empty()) {
-        // RFC 3339 in UTC sorts by string, so a day or a month both work and
-        // the column's index still can.
-        filters.push(format!("t.started_at >= '{}'", since.replace('\'', "")));
+        filters.push(crate::usage_days::since_filter(since, offset));
     }
     if let Some(project) = project.filter(|project| !project.trim().is_empty()) {
         filters.push(format!(

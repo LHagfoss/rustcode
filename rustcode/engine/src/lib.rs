@@ -73,6 +73,7 @@ mod thread_parent;
 mod thread_status;
 pub mod tools;
 pub mod update;
+mod usage_days;
 mod workflow;
 mod workspace_intelligence;
 mod worktrees;

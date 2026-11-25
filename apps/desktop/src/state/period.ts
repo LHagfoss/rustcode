@@ -1,6 +1,6 @@
 // The period Settings › Statistics draws (Today, 7 days, 30 days, every day
 // recorded), and the numbers the page puts on top of it: the same-length period
-// before, the change between the two, and one point per UTC day for a sparkline
+// before, the change between the two, and one point per local day for a sparkline
 // or the daily chart.
 //
 // The store groups turns by one key at a time (`_rustcode/data/usage`), so the
@@ -27,17 +27,33 @@ export const STATS_PERIODS: readonly { value: StatsPeriod; label: string }[] = [
 
 export const DAY_MS = 86_400_000;
 
-/** The UTC day the store groups by (`date(started_at)`), `days` days before `now`. */
+/** The calendar day `at` falls on by this computer's clock, as `YYYY-MM-DD`. */
+export function localDay(at: Date | number = new Date()): string {
+  const date = typeof at === "number" ? new Date(at) : at;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * Minutes east of UTC this computer's clock is at `now`. A usage read passes it
+ * as `utcOffsetMinutes`, so the store's days and `since` start at local
+ * midnight rather than UTC's.
+ */
+export function utcOffsetMinutes(now: Date = new Date()): number {
+  return -now.getTimezoneOffset();
+}
+
+/** The local day the store groups by, `days` days before `now`. */
 export function daysAgo(now: Date, days: number): string {
-  const today = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
+  const today = Date.parse(`${localDay(now)}T00:00:00Z`);
   return new Date(today - days * DAY_MS).toISOString().slice(0, 10);
 }
 
 /** What one period asks the store for, and the period it is compared with. */
 export interface StatsRange {
-  /** The first UTC day in the period; absent for every day recorded. */
+  /** The first local day in the period; absent for every day recorded. */
   since?: string;
-  /** The first UTC day of the same-length period before it; absent when there is none. */
+  /** The first local day of the same-length period before it; absent when there is none. */
   previousSince?: string;
   /** How many days the period holds; 0 for every day recorded. */
   days: number;
@@ -45,7 +61,7 @@ export interface StatsRange {
 
 /**
  * The day a period starts on, and the day its comparison period starts on. A
- * period is whole UTC days, so "Today" is one day and "7 days" is today and the
+ * period is whole local days, so "Today" is one day and "7 days" is today and the
  * six days before it (the store's own `since` is a day or month, compared as a
  * string against `started_at`).
  */
@@ -55,7 +71,7 @@ export function statsRange(period: StatsPeriod, now = new Date()): StatsRange {
   return { since: daysAgo(now, days - 1), previousSince: daysAgo(now, days * 2 - 1), days };
 }
 
-/** The UTC days a range covers, oldest first; empty for every day recorded. */
+/** The local days a range covers, oldest first; empty for every day recorded. */
 export function rangeDays(since: string | undefined, days: number): string[] {
   if (!since || days <= 0) return [];
   const start = Date.parse(`${since}T00:00:00Z`);
@@ -140,7 +156,7 @@ export function sumRows(rows: readonly UsageRow[]): UsageTotals {
   return total;
 }
 
-/** One UTC day of the page: what was recorded that day. */
+/** One local day of the page: what was recorded that day. */
 export interface DayPoint {
   day: string;
   turns: number;

@@ -35,6 +35,9 @@ pub(crate) struct DataUsageRequest {
     /// One project's absolute path; absent reads every project.
     #[serde(default)]
     pub project: Option<String>,
+    /// Minutes east of UTC the caller's days start at; absent keeps UTC days.
+    #[serde(default)]
+    pub utc_offset_minutes: Option<i32>,
 }
 
 /// `_rustcode/data/query`: one read-only statement through the same guards
@@ -225,8 +228,12 @@ pub(crate) fn usage(request: DataUsageRequest) -> Result<Value, String> {
             )
         })?,
     };
-    let mut answer =
-        crate::data_store::usage(since.as_deref(), group_by, request.project.as_deref())?;
+    let mut answer = crate::data_store::usage(
+        since.as_deref(),
+        group_by,
+        request.project.as_deref(),
+        request.utc_offset_minutes.unwrap_or(0),
+    )?;
     if let Some(object) = answer.as_object_mut() {
         object.insert("version".to_owned(), serde_json::json!(DATA_METHOD_VERSION));
     }

@@ -800,7 +800,7 @@
 5 rustcode/engine/src/daemon/scheduler.rs
 15 rustcode/engine/src/daemon/server.rs
 10 rustcode/engine/src/daemon/store.rs
-52 rustcode/engine/src/data_store.rs
+50 rustcode/engine/src/data_store.rs
 22 rustcode/engine/src/data_store/links.rs
 12 rustcode/engine/src/data_store/migrations.rs
 6 rustcode/engine/src/data_store/receipts.rs

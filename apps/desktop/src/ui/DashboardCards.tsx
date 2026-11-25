@@ -10,7 +10,7 @@ import { useMemo } from "react";
 import type { UsageRow } from "../acp/rustcode";
 import { count } from "../lib/plural";
 import { useInboxItems } from "../state/inboxRead";
-import { DAY_MS, daysAgo, previousRows, trend } from "../state/period";
+import { DAY_MS, daysAgo, localDay, previousRows, trend } from "../state/period";
 import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import { useApp } from "../state/store";
 import { formatTokens } from "../state/thread";
@@ -35,7 +35,7 @@ const RECENT_DAYS = 30;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const WEEKDAY_NAMES = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay();
 const lastDays = (days: number) => Array.from({ length: days }, (_, i) => daysAgo(new Date(), days - 1 - i));
 
 function useHarnessNames(): Map<string, string> {
@@ -74,7 +74,7 @@ export function DashboardFigures({
       daysAgo(new Date(), RECENT_DAYS),
     );
     const weekFrom = Date.now() - 7 * DAY_MS;
-    const dayOf = (at?: number) => (at ? new Date(at).toISOString().slice(0, 10) : "");
+    const dayOf = (at?: number) => (at ? localDay(at) : "");
     return {
       week,
       weekBefore,

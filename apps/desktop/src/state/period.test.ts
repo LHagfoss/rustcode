@@ -6,6 +6,7 @@ import type { UsageRow } from "../acp/rustcode";
 import {
   dailySeries,
   daysAgo,
+  localDay,
   previousRows,
   rangeDays,
   sparklinePath,
@@ -13,9 +14,10 @@ import {
   statsRange,
   sumRows,
   trend,
+  utcOffsetMinutes,
 } from "./period";
 
-const at = new Date("2026-11-10T15:30:00Z");
+const at = new Date("2026-11-10T15:30:00");
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   harness: "codex",
@@ -47,9 +49,13 @@ describe("a period's days", () => {
     expect(statsRange("all", at)).toEqual({ days: 0 });
   });
 
-  test("days are UTC, so the store's date() and the range agree", () => {
-    expect(daysAgo(new Date("2026-01-01T00:30:00Z"), 0)).toBe("2026-01-01");
-    expect(daysAgo(new Date("2026-01-01T00:30:00Z"), 1)).toBe("2025-12-31");
+  test("days follow this computer's clock, as the store groups them with its offset", () => {
+    expect(daysAgo(new Date(2026, 0, 1, 0, 30), 0)).toBe("2026-01-01");
+    expect(daysAgo(new Date(2026, 0, 1, 0, 30), 1)).toBe("2025-12-31");
+    expect(daysAgo(new Date(2025, 11, 31, 23, 30), 0)).toBe("2025-12-31");
+    expect(localDay(new Date(2026, 2, 9, 0, 5))).toBe("2026-03-09");
+    expect(localDay(new Date(2026, 2, 9, 23, 55).getTime())).toBe("2026-03-09");
+    expect(utcOffsetMinutes(new Date(2026, 5, 1))).toBe(-new Date(2026, 5, 1).getTimezoneOffset());
     expect(rangeDays("2026-11-08", 3)).toEqual(["2026-11-08", "2026-11-09", "2026-11-10"]);
     expect(rangeDays(undefined, 30)).toEqual([]);
   });
