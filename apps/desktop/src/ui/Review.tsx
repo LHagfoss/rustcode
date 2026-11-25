@@ -645,7 +645,7 @@ export function Review({ threadId }: { threadId: string }) {
                       onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
                     />
                   ) : (
-                    <p className="text-callout text-fg-muted">No text diff (binary or untracked file).</p>
+                    <p className="text-callout text-fg-muted">No text diff (a binary or very large file).</p>
                   )}
                 </div>
               </>
