@@ -510,12 +510,12 @@ const STATUS_TINT: Record<RowStatusKind, string> = {
 /**
  * What a row's first line says before its time, as T3 Code's sidebar does: an icon and a word in
  * the state's tone, medium weight. `Working` turns slowly (respecting reduced motion); `Approval`,
- * `Input`, `Waiting`, `Failed`, `Done` until you open it and `Review` hold still. The long form is the
+ * `Question`, `Waiting`, `Failed`, `Done` until you open it and `Review` hold still. The long form is the
  * tooltip. An idle row has none (state/sidebarRows.ts `rowStatus`).
  */
 function RowStatusLabel({ status }: { status: RowStatus }) {
   const kind = status.kind;
-  const word = kind === "needs" ? (status.approval ? "Approval" : "Input") : status.label;
+  const word = kind === "needs" ? (status.approval ? "Approval" : "Question") : status.label;
   return (
     <span
       title={status.title ?? status.label}
