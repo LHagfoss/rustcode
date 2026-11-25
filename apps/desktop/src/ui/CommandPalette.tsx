@@ -97,6 +97,9 @@ const SETTINGS: Record<SettingsSection, string> = {
 /** Actions other views add (board, review, …), so the palette lists them without knowing them. */
 const extra: (() => PaletteAction[])[] = [];
 
+/** Title matches shown above the threads; the rest follow the threads, so threads stay in view. */
+const LEADING_ACTIONS = 3;
+
 export function registerPaletteActions(provider: () => PaletteAction[]) {
   extra.push(provider);
 }
@@ -409,7 +412,8 @@ export function CommandPalette() {
       !result.action.disabled &&
       (result.action.group === undefined || result.action.group === "Settings") &&
       titleMatches(result.action.label, q);
-    return [...destinations.filter(leads), ...threads, ...destinations.filter((result) => !leads(result))];
+    const leading = destinations.filter(leads).slice(0, LEADING_ACTIONS);
+    return [...leading, ...threads, ...destinations.filter((result) => !leading.includes(result))];
   }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits, sort, liveThreads]);
 
   const choose = (i: number) => {
