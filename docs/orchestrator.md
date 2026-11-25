@@ -7,6 +7,9 @@ threads) checks the rules, asks the user, and carries the call out. v2 adds
 worktree threads, thread status, starting threads on any harness, fan-out,
 per-turn checkpoints, and the same tools for external harnesses.
 
+Long, multi-step work (an objective) runs as a workflow run whose starting
+thread coordinates it: [ADR 0009](adr/0009-objectives-and-coordination.md).
+
 ## Worktree threads
 
 A thread can run in its own git worktree, so parallel threads never edit the
