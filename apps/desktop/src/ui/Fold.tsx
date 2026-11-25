@@ -29,33 +29,35 @@ export function Fold({
       let frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => setShown(true));
       });
-      const settle = setTimeout(() => setStill(true), FOLD_SETTLE_MS);
-      return () => {
-        cancelAnimationFrame(frame);
-        clearTimeout(settle);
-      };
+      return () => cancelAnimationFrame(frame);
     }
     setStill(false);
     setShown(false);
     const settle = setTimeout(() => setMounted(false), FOLD_SETTLE_MS);
     return () => clearTimeout(settle);
   }, [open]);
+  useEffect(() => {
+    if (!open || !shown) return;
+    const settle = setTimeout(() => setStill(true), FOLD_SETTLE_MS);
+    return () => clearTimeout(settle);
+  }, [open, shown]);
   if (!mounted) return null;
+  const clipped = !still || !shown;
   return (
     <div
       data-fold={shown ? "open" : "closed"}
       className={cx(
         "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-200 ease-snappy",
-        !still && "overflow-hidden",
+        clipped && "overflow-hidden",
       )}
       style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0 }}
       onTransitionEnd={(e) => {
         if (e.target !== e.currentTarget || e.propertyName !== "grid-template-rows") return;
-        if (open) setStill(true);
+        if (open && shown) setStill(true);
         else setMounted(false);
       }}
     >
-      <div className={cx("min-h-0 min-w-0", !still && "overflow-hidden", className)}>{children}</div>
+      <div className={cx("min-h-0 min-w-0", clipped && "overflow-hidden", className)}>{children}</div>
     </div>
   );
 }
