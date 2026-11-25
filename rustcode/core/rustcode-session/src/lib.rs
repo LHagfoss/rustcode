@@ -545,10 +545,27 @@ pub fn write_history_file(path: &Path, history: &[ChatMessage]) {
     }
 }
 
+/// Write `name` in a thread's folder, which must exist: a scratch request's
+/// folder is never created (`is_scratch_session_id`).
+fn write_session_file(directory: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    if !directory.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} does not exist", directory.display()),
+        ));
+    }
+    write_atomic(&directory.join(name), bytes)
+}
+
 fn write_history_file_unguarded(path: &Path, history: &[ChatMessage]) {
     let written = serde_json::to_vec(history)
         .map_err(std::io::Error::other)
-        .and_then(|json| write_atomic(path, &json));
+        .and_then(|json| {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            write_atomic(path, &json)
+        });
     report_history_write(path, written);
 }
 
@@ -1049,7 +1066,7 @@ impl SessionStore {
         let Ok(json) = serde_json::to_string_pretty(&metadata) else {
             return;
         };
-        let _ = write_atomic(&path, json.as_bytes());
+        let _ = write_session_file(directory, SESSION_METADATA_FILE, json.as_bytes());
     }
 
     fn history_path_for_id(&self, session_id: &str) -> PathBuf {
@@ -1260,7 +1277,7 @@ impl SessionStore {
 
     pub fn save_session_title(&self, session_id: &str, title: &str) {
         let session_dir = self.ensure_session(session_id);
-        let _ = write_atomic(&session_dir.join("title.txt"), title.as_bytes());
+        let _ = write_session_file(&session_dir, "title.txt", title.as_bytes());
     }
 
     /// Persist the deterministic title derived from the first user prompt only
@@ -1298,7 +1315,7 @@ impl SessionStore {
         }
         let session_dir = self.ensure_session(session_id);
         if let Ok(json) = serde_json::to_string_pretty(cache) {
-            let _ = write_atomic(&session_dir.join(IMAGE_CACHE_FILE), json.as_bytes());
+            let _ = write_session_file(&session_dir, IMAGE_CACHE_FILE, json.as_bytes());
         }
     }
 
@@ -1312,7 +1329,7 @@ impl SessionStore {
     pub fn save_segment_checkpoint<T: Serialize>(&self, session_id: &str, checkpoint: &T) {
         let session_dir = self.ensure_session(session_id);
         if let Ok(json) = serde_json::to_string_pretty(checkpoint) {
-            let _ = write_atomic(&session_dir.join(SEGMENT_CHECKPOINT_FILE), json.as_bytes());
+            let _ = write_session_file(&session_dir, SEGMENT_CHECKPOINT_FILE, json.as_bytes());
         }
     }
 
@@ -1558,7 +1575,7 @@ impl SessionStore {
         }
         let directory = self.ensure_session(session_id);
         let contents = serde_json::to_vec(workspace).map_err(std::io::Error::other)?;
-        write_atomic(&directory.join(SESSION_WORKSPACE_FILE), &contents)
+        write_session_file(&directory, SESSION_WORKSPACE_FILE, &contents)
     }
 
     pub fn load_session_workspace(&self, session_id: &str) -> Option<SessionWorkspace> {
@@ -1744,7 +1761,7 @@ impl SessionStore {
             return Ok(());
         }
         let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
-        write_atomic(&directory.join(SESSION_METADATA_FILE), &contents)
+        write_session_file(&directory, SESSION_METADATA_FILE, &contents)
     }
 
     /// The session's recorded YOLO setting, if it was ever set.

@@ -89,6 +89,9 @@ pub(crate) fn save(session_id: &str, record: &HarnessRecord) {
     let Some(path) = record_path(session_id) else {
         return;
     };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let Ok(text) = serde_json::to_string_pretty(record) else {
         return;
     };

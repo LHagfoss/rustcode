@@ -1226,6 +1226,9 @@ fn stable_hash(value: &str) -> u64 {
 fn write_descriptor(descriptor: &WorkspaceDescriptor) -> Result<(), WorkspaceError> {
     let json = serde_json::to_string_pretty(descriptor)
         .map_err(|error| WorkspaceError::Json(error.to_string()))?;
+    if let Some(parent) = descriptor.descriptor_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     crate::write_atomic(&descriptor.descriptor_path, json.as_bytes())
         .map_err(|error| WorkspaceError::Io(error.to_string()))
 }

@@ -187,6 +187,7 @@ async fn configure_inner(r: ConfigureRequest) -> Result<Value> {
         _ => bail!("Unknown configuration action"),
     }
     let path = file()?;
+    std::fs::create_dir_all(path.parent().unwrap())?;
     crate::atomic_file::write_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(serde_json::to_value(config)?)
 }

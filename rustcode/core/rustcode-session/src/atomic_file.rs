@@ -9,14 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Write `bytes` to `path` so a reader sees either the old file or the whole
 /// new one, never a truncated mix, even after a crash or power loss: a
 /// temporary file beside it that no other writer shares, flushed to disk,
-/// renamed over `path`, and on Unix the directory entry flushed too.
+/// renamed over `path`, and on Unix the directory entry flushed too. The
+/// folder must exist: a write never brings back a folder that was removed.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
     let temporary = temporary_path(path);
     let written = fs::OpenOptions::new()
         .write(true)
@@ -130,9 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn writes_creates_parents_and_leaves_no_temporary() {
+    fn writes_and_leaves_no_temporary() {
         let directory = tempfile::TempDir::new().unwrap();
-        let path = directory.path().join("a").join("b").join("file.json");
+        let path = directory.path().join("file.json");
 
         write_atomic(&path, b"first").unwrap();
         write_atomic(&path, b"second").unwrap();
@@ -143,6 +138,16 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["file.json"]);
+    }
+
+    #[test]
+    fn a_missing_folder_is_not_created() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let folder = directory.path().join("removed");
+
+        assert!(write_atomic(&folder.join("file.json"), b"x").is_err());
+
+        assert!(!folder.exists());
     }
 
     #[test]
