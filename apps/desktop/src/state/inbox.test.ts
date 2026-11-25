@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest, SessionSummary } from "../acp/types";
-import { DECIDED_MAX, deriveInbox, foldDecided, groupInbox, type InboxItem, showsNeedsYou } from "./inbox";
+import {
+  DECIDED_MAX,
+  deriveInbox,
+  foldDecided,
+  groupInbox,
+  type InboxItem,
+  readOnlyApprovals,
+  showsNeedsYou,
+} from "./inbox";
 import type { Link } from "./orchestration";
 
 const NOW = 1_700_000_000_000;
@@ -285,5 +293,41 @@ describe("the decided section", () => {
     const folded = foldDecided([gone], [], many, { now: NOW });
     expect(folded).toHaveLength(DECIDED_MAX);
     expect(folded[0]!.key).toBe(gone.key);
+  });
+});
+
+describe("allowing the read-only approvals", () => {
+  test("only plainly read-only calls count, never a write, an unknown call or a question", () => {
+    const items = deriveInbox(
+      {
+        sessions,
+        threads: {
+          one: {
+            permissions: [
+              request("one", 1, NOW - 4_000, { title: "read_file src/a.ts", toolKind: "read" }),
+              request("one", 2, NOW - 3_000, { input: { command: "rm -rf build" } }),
+              request("one", 3, NOW - 2_000, { title: "mystery_tool" }),
+            ],
+          },
+          two: {
+            permissions: [
+              request("two", 4, NOW - 1_000, { title: "grep needle", toolKind: "search" }),
+              request("two", 5, NOW - 500, {
+                title: "Pick one",
+                question: { multiple: false } as PermissionRequest["question"],
+              }),
+            ],
+          },
+        },
+        failed: {},
+        links: [],
+      },
+      NOW,
+    );
+    expect(
+      readOnlyApprovals(items)
+        .map((item) => item.request?.rpcId)
+        .sort(),
+    ).toEqual([1, 4]);
   });
 });

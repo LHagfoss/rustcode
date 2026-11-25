@@ -10,7 +10,7 @@
 // (state/inboxDismissed.ts).
 
 import type { PermissionRequest, SessionSummary } from "../acp/types";
-import { approvalSubject, commandOf } from "../lib/approval";
+import { approvalSubject, assessApproval, commandOf } from "../lib/approval";
 import { type InboxDismissals, isDismissed } from "./inboxDismissed";
 import type { Link } from "./orchestration";
 
@@ -284,4 +284,19 @@ export function foldDecided(
  */
 export function showsNeedsYou(items: readonly InboxItem[]): boolean {
   return items.length > 0;
+}
+
+/**
+ * The approvals waiting across every thread that only read: plainly read-only tools and commands
+ * (`assessApproval` says `safe`). Questions are not approvals, and anything unknown is not safe,
+ * so "Allow read-only" never answers a call that could change something.
+ */
+export function readOnlyApprovals(items: readonly InboxItem[]): InboxItem[] {
+  return items.filter(
+    (item) =>
+      item.kind === "approval" &&
+      !!item.request &&
+      !item.request.question &&
+      assessApproval(item.request, item.project).level === "safe",
+  );
 }

@@ -11,7 +11,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
 import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
 import { useClock } from "../lib/useNow";
-import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
+import {
+  type DecidedItem,
+  foldDecided,
+  groupInbox,
+  type InboxGroup,
+  type InboxItem,
+  readOnlyApprovals,
+} from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import { filteredNeedsCount } from "../state/sidebarGroups";
 import {
@@ -411,6 +418,17 @@ export function Inbox() {
     dismissInbox(items);
   }, [items]);
 
+  const readOnly = useMemo(() => readOnlyApprovals(items), [items]);
+  const allowReadOnly = useCallback(() => {
+    for (const item of readOnly) {
+      const option =
+        item.request && orderedOptions(item.request.options).find((o) => optionScope(o) === "once");
+      if (!item.request || !option) continue;
+      labels.current[item.key] = "Approved";
+      answerPermission(item.request, option);
+    }
+  }, [readOnly]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
@@ -469,6 +487,13 @@ export function Inbox() {
           </span>
         }
       >
+        {readOnly.length > 1 && (
+          <Tooltip label="Approve once every waiting call that only reads: listing, searching, viewing files">
+            <Pill size="sm" onClick={allowReadOnly}>
+              Allow {readOnly.length} read-only
+            </Pill>
+          </Tooltip>
+        )}
         {items.length > 0 && (
           <Pill size="sm" quiet onClick={dismissAll}>
             Dismiss all
