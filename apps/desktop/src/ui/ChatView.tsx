@@ -6,6 +6,7 @@ import { isLoading, openError } from "../state/thread";
 
 import { Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { displayPath, projectName } from "../acp/types";
 import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
@@ -43,6 +44,7 @@ import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { NewThreadLight, ThreadLight } from "./ChatLight";
 import { Composer } from "./Composer";
+import { focusComposerField, useTypeToCompose, WriteMessagePill } from "./ComposerAway";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import {
   ChevronDown,
@@ -703,8 +705,17 @@ export function ChatView() {
   const roomForOverview = isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT;
   const docked = roomForOverview && overview;
   const overviewDocked = roomForOverview && (overview || overviewLeaving);
+  /** The composer is inert behind the overview, so it is let back in before its field takes focus. */
+  const revealComposer = () => {
+    flushSync(() => {
+      if (overview) toggleOverview();
+    });
+    focusComposerField();
+  };
+  useTypeToCompose(docked, revealComposer);
   const overviewToggles = (
     <div className="flex shrink-0 items-center gap-1">
+      {docked && <WriteMessagePill glass={showsBanner} onPress={revealComposer} />}
       <button
         type="button"
         aria-expanded={overview}
@@ -819,8 +830,10 @@ export function ChatView() {
                 ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` }
                 : undefined
             }
+            inert={docked || undefined}
             className={cx(
               "rc-lane-inset rc-lane-stack absolute bottom-4 mx-auto flex flex-col gap-2",
+              docked && "rc-composer-away",
               // An empty thread's cards are a dashboard, not a lane: they take the wider measure
               // (up to 1100px) while the field and everything over it keep the chat's own.
               isNew ? "max-w-[1100px]" : "max-w-[var(--rc-chat-content-max-width)]",
@@ -930,7 +943,7 @@ export function ChatView() {
               )}
               style={
                 overviewDocked
-                  ? { top: HEADER_HEIGHT + 24, bottom: stackHeight + 24 }
+                  ? { top: HEADER_HEIGHT + 24, bottom: 16 }
                   : { top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }
               }
             >

@@ -39,6 +39,7 @@ import {
   useMachineOfThread,
 } from "../state/store";
 import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
+import { focusComposerField } from "./ComposerAway";
 import { overQuestionDrop, QUESTION_DROP_ATTR } from "./folderDropTarget";
 import {
   ArrowUpRight,
@@ -506,11 +507,6 @@ export function ResolvedApprovalBar({ approval }: { approval: ResolvedApproval }
 
 /** How tall a question's own text reads before it scrolls, so a long one leaves its answers in view. */
 const QUESTION_TEXT_MAX = 168;
-
-/** The composer's field, where focus goes back once a question is answered from its form. */
-function focusComposerField() {
-  document.querySelector<HTMLTextAreaElement>('[data-rc-composer] textarea[aria-label="Message"]')?.focus();
-}
 
 /**
  * A question over the composer, in place of nothing it covers: the composer stays below with its

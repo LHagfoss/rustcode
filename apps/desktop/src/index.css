@@ -1451,7 +1451,15 @@
 }
 /* The composer's stack eases its `bottom` as a new thread fills, and its `right` with the lane. */
 .rc-lane-stack {
-  transition: bottom 500ms var(--ease-snappy);
+  transition:
+    bottom 500ms var(--ease-snappy),
+    opacity 200ms ease-out,
+    translate 320ms var(--ease-snappy);
+}
+.rc-composer-away {
+  opacity: 0;
+  translate: 0 24px;
+  pointer-events: none;
 }
 .rc-panel-moving .rc-lane-stack {
   transition:

@@ -206,6 +206,9 @@ profile and stale dependency version leaves artifacts behind.
   `screenshot <file.png>` saves a PNG; `--selector "<css>"` crops it to that
   element and `--clip <x>,<y>,<w>,<h>` to a viewport rectangle, so no image
   tool is needed.
+- Show a UI change to the user in both themes: take each screenshot in light
+  and in dark mode (`(await import("/src/state/viewActions.ts")).setTheme("light")`,
+  then `"dark"`), and put the pair side by side in the reply.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is
