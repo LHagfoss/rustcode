@@ -88,7 +88,13 @@ export function ActivityProfile({ report, error }: { report: UsageReport | null;
       title="Your activity"
       action={
         <div className="flex items-center gap-2">
-          {report?.truncated && <Chip tone="warn">Day read capped</Chip>}
+          {report?.truncated && (
+            <Tooltip label="The day read stopped at its row cap, so the grid may miss the earliest days">
+              <span>
+                <Chip tone="warn">Day read capped</Chip>
+              </span>
+            </Tooltip>
+          )}
           <Choice<ProfileMode>
             label="Grid"
             value={mode}
