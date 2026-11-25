@@ -398,9 +398,8 @@ fn eval_project_and_worktree_isolation() {
     let nested = repo_a.join("src");
     fs::create_dir_all(&nested).unwrap();
     assert!(render_relevant(Some(&nested), query, TURN_TOKENS).is_some());
-    // Design note (measured): each linked worktree has its own store, so a
-    // fact saved from the main checkout is not injected in a task worktree.
-    assert!(render_relevant(Some(&worktree), query, TURN_TOKENS).is_none());
+    // Every linked worktree shares the repository's store (#4372).
+    assert!(render_relevant(Some(&worktree), query, TURN_TOKENS).is_some());
 
     // Global facts are injected in every repository by design.
     upsert_global(fact("preference", "postgres_client", "use psql", "user")).unwrap();
