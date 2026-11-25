@@ -40,6 +40,13 @@ pub(crate) struct WorkerRequest {
     pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// A saved delegate preset, expanded like `start_session`'s (#4384).
+    pub preset: Option<String>,
+    /// `ask`, `edits` or `full`: only ever lowers what the worker gets.
+    pub access: Option<String>,
+    pub account: Option<String>,
+    pub project: Option<String>,
+    pub worktree: Option<bool>,
     /// The same for the same call of the same run, so asking again after a
     /// restart finds the thread the first ask started.
     pub request_id: String,
@@ -81,10 +88,18 @@ pub(super) struct AgentOptions {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub title: Option<String>,
+    pub preset: Option<String>,
+    pub access: Option<String>,
+    pub account: Option<String>,
+    pub project: Option<String>,
+    pub worktree: Option<bool>,
 }
 
 impl AgentOptions {
-    const KNOWN: [&'static str; 5] = ["schema", "harness", "model", "effort", "title"];
+    const KNOWN: [&'static str; 10] = [
+        "schema", "harness", "model", "effort", "title", "preset", "access", "account", "project",
+        "worktree",
+    ];
 
     pub(super) fn parse(options: &Value) -> Result<Self, String> {
         let Some(map) = options.as_object() else {
@@ -110,12 +125,30 @@ impl AgentOptions {
                 return Err("agent option \"schema\" must be a JSON Schema object".to_owned());
             }
         };
+        let access = text("access")?;
+        if let Some(access) = access.as_deref()
+            && !matches!(access, "ask" | "edits" | "full")
+        {
+            return Err(format!(
+                "agent option \"access\" is ask, edits or full, not \"{access}\""
+            ));
+        }
+        let worktree = match map.get("worktree") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(worktree)) => Some(*worktree),
+            Some(_) => return Err("agent option \"worktree\" must be true or false".to_owned()),
+        };
         Ok(Self {
             schema,
             harness: text("harness")?,
             model: text("model")?,
             effort: text("effort")?,
             title: text("title")?,
+            preset: text("preset")?,
+            access,
+            account: text("account")?,
+            project: text("project")?,
+            worktree,
         })
     }
 }
@@ -349,6 +382,11 @@ impl Run {
             harness: call.options.harness.clone(),
             model: call.options.model.clone(),
             effort: call.options.effort.clone(),
+            preset: call.options.preset.clone(),
+            access: call.options.access.clone(),
+            account: call.options.account.clone(),
+            project: call.options.project.clone(),
+            worktree: call.options.worktree,
             request_id: format!(
                 "wf:{}:{}-{}-{}",
                 self.id(),
@@ -983,6 +1021,51 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("no option \"colour\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_role_preset_access_account_project_and_worktree_reach_the_worker() {
+        let setup = setup();
+        let runner = Fake::echo();
+        let record = run_to_end(
+            &setup,
+            runner.clone(),
+            r#"
+            await agent("review", { preset: "reviewer", access: "ask", account: "work", project: "/code/app", worktree: false });
+            const refused = [];
+            for (const bad of [{ access: "root" }, { worktree: "yes" }, { preset: "" }]) {
+              try { await agent("x", bad); } catch (error) { refused.push(error.message); }
+            }
+            return refused;
+            "#,
+            limits(),
+        )
+        .await;
+        let started = runner.started.lock().unwrap().clone();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].preset.as_deref(), Some("reviewer"));
+        assert_eq!(started[0].access.as_deref(), Some("ask"));
+        assert_eq!(started[0].account.as_deref(), Some("work"));
+        assert_eq!(started[0].project.as_deref(), Some("/code/app"));
+        assert_eq!(started[0].worktree, Some(false));
+        let refused = record.result.unwrap();
+        let refused = refused.as_array().unwrap();
+        assert_eq!(refused.len(), 3, "{refused:?}");
+        assert!(refused[0].as_str().unwrap().contains("ask, edits or full"));
+        assert!(refused[1].as_str().unwrap().contains("true or false"));
+        assert!(refused[2].as_str().unwrap().contains("non-empty"));
+    }
+
+    #[test]
+    fn a_new_option_changes_the_calls_key() {
+        assert_ne!(
+            call_hash("review", &json!({})),
+            call_hash("review", &json!({"access": "ask"}))
+        );
+        assert_ne!(
+            call_hash("review", &json!({"preset": "a"})),
+            call_hash("review", &json!({"preset": "b"}))
         );
     }
 

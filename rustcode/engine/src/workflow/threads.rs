@@ -70,6 +70,36 @@ impl ThreadRunner {
     }
 }
 
+/// The `start_session` call a worker is started with, its delegate preset
+/// expanded as an agent's own call would be (#4384).
+pub(super) fn start_args(request: &WorkerRequest) -> Result<Value, String> {
+    let mut args = json!({
+        "prompt": request.prompt,
+        "title": request.title,
+        "client_request_id": request.request_id,
+    });
+    for (key, value) in [
+        ("harness", &request.harness),
+        ("model", &request.model),
+        ("effort", &request.effort),
+        ("preset", &request.preset),
+        ("access", &request.access),
+        ("account", &request.account),
+        ("project", &request.project),
+    ] {
+        if let Some(value) = value {
+            args[key] = json!(value);
+        }
+    }
+    if let Some(worktree) = request.worktree {
+        args["worktree"] = json!(worktree);
+    }
+    match crate::orchestration::with_preset(START_SESSION, &args) {
+        Ok(expanded) => Ok(expanded.unwrap_or(args)),
+        Err(refused) => Err(refused.content),
+    }
+}
+
 async fn pause(cancel: &CancellationToken) -> bool {
     tokio::select! {
         _ = cancel.cancelled() => false,
@@ -84,20 +114,7 @@ impl AgentRunner for ThreadRunner {
         cancel: &'a CancellationToken,
     ) -> Fut<'a, Result<Worker, String>> {
         Box::pin(async move {
-            let mut args = json!({
-                "prompt": request.prompt,
-                "title": request.title,
-                "client_request_id": request.request_id,
-            });
-            for (key, value) in [
-                ("harness", &request.harness),
-                ("model", &request.model),
-                ("effort", &request.effort),
-            ] {
-                if let Some(value) = value {
-                    args[key] = json!(value);
-                }
-            }
+            let args = start_args(request)?;
             loop {
                 match self.call(START_SESSION, args.clone(), cancel).await {
                     Ok(answer) => {
@@ -189,5 +206,44 @@ impl AgentRunner for ThreadRunner {
                 )
                 .await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> WorkerRequest {
+        WorkerRequest {
+            prompt: "Review a.rs".to_owned(),
+            title: "Review".to_owned(),
+            harness: Some("codex".to_owned()),
+            model: None,
+            effort: None,
+            preset: None,
+            access: Some("ask".to_owned()),
+            account: Some("work".to_owned()),
+            project: Some("/code/app".to_owned()),
+            worktree: Some(false),
+            request_id: "wf-1-2-call-0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_workers_start_carries_every_option_it_was_given() {
+        let args = start_args(&request()).unwrap();
+        assert_eq!(
+            args,
+            json!({
+                "prompt": "Review a.rs",
+                "title": "Review",
+                "client_request_id": "wf-1-2-call-0",
+                "harness": "codex",
+                "access": "ask",
+                "account": "work",
+                "project": "/code/app",
+                "worktree": false,
+            })
+        );
     }
 }
