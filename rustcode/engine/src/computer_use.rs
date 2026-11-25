@@ -132,6 +132,10 @@ const NAMES: [&str; 5] = [
 pub fn is_tool(name: &str) -> bool {
     NAMES.contains(&name)
 }
+/// Tools that change a page or what it loads, refused in Plan mode.
+pub fn acts_on_pages(name: &str) -> bool {
+    matches!(name, "browser_open" | "browser_click" | "browser_type")
+}
 pub fn tools(settings: &Settings) -> Vec<Value> {
     if !settings.enabled {
         return vec![];

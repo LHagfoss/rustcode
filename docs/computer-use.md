@@ -28,7 +28,10 @@ allowed_domains = ["example.com", "*.example.org"]
 Start a new thread after changing the setting. Ask it to open
 an allowed URL, approve the action in RustCode, then read, click a CSS selector,
 or type into a CSS selector. Each step asks for approval, including reads and
-screenshots. Turn `enabled` off to refuse subsequent calls. No browser is
+screenshots. Auto-approve does not skip these cards on any harness,
+and a headless `rc` run, which has nobody to ask, refuses the tools. Plan mode
+refuses `browser_open`, `browser_click` and `browser_type`; reads and
+screenshots still ask. Turn `enabled` off to refuse subsequent calls. No browser is
 installed or launched until the first approved action.
 
 Exact domain entries match only that host; `*.example.org` matches subdomains,
