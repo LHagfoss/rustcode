@@ -138,6 +138,23 @@ export function useLocalIdentity(): MachineIdentity {
   return useMachines((state) => state.local);
 }
 
+/** How far ahead of this computer's clock a rename time may be, as the engine allows. */
+export const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+
+/** `stamp`, no later than [`MAX_CLOCK_SKEW_MS`] after `now`: a clock that is ahead cannot pin a name. */
+export function boundedStamp(stamp: string, now = Date.now()): string {
+  const time = Date.parse(stamp);
+  return Number.isFinite(time) && time > now + MAX_CLOCK_SKEW_MS
+    ? new Date(now + MAX_CLOCK_SKEW_MS).toISOString()
+    : stamp;
+}
+
+/** The stamp of a rename made now: after the one it replaces, so it always wins. */
+export function renameStamp(current: string | null | undefined, now = Date.now()): string {
+  const after = current ? Date.parse(current) + 1 : Number.NaN;
+  return new Date(Number.isFinite(after) ? Math.max(now, after) : now).toISOString();
+}
+
 /**
  * Rename this computer, or give it a glyph. A rename is stamped, so the machine sync
  * (`state/fleet.ts`) tells every paired computer and the newest rename wins; a name another
@@ -151,7 +168,9 @@ export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
     icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
     tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
     nameUpdatedAt: renamed
-      ? (patch.nameUpdatedAt ?? new Date().toISOString())
+      ? patch.nameUpdatedAt
+        ? boundedStamp(patch.nameUpdatedAt)
+        : renameStamp(current.nameUpdatedAt)
       : (current.nameUpdatedAt ?? null),
   };
   // A full or disabled store keeps the choice for this run only.

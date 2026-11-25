@@ -701,6 +701,9 @@ fn find_machine<'a>(machines: &'a mut [Machine], host_id: &str) -> Result<&'a mu
         .ok_or_else(|| anyhow::anyhow!("no saved machine has host id {host_id}"))
 }
 
+/// How far ahead of this computer's clock a fleet rename time may be.
+pub const MAX_CLOCK_SKEW_MINUTES: i64 = 5;
+
 /// The saved machines, loaded once and written through.
 #[derive(Debug)]
 pub struct MachineRegistry {
@@ -965,7 +968,8 @@ impl MachineRegistry {
         })
     }
 
-    /// Rename a machine, now. A blank name clears it, so the reported name is
+    /// Rename a machine, now. The stamp is after any it already has, so a
+    /// rename always wins over one a clock that is ahead made. A blank name clears it, so the reported name is
     /// shown again. The rename is stamped, so the machine sync carries it
     /// to the machine and the rest of the fleet; pairing again keeps it.
     pub fn set_display_name(&mut self, host_id: &str, display_name: Option<&str>) -> Result<()> {
@@ -991,7 +995,10 @@ impl MachineRegistry {
                 bail!("no saved machine has host id {host_id}");
             };
             machine.display_name = display_name;
-            machine.name_updated_at = Some(now);
+            let after_known = machine
+                .name_updated_at
+                .map(|known| known + chrono::Duration::milliseconds(1));
+            machine.name_updated_at = Some(after_known.map_or(now, |after| after.max(now)));
             Ok(())
         })
     }
@@ -1006,6 +1013,20 @@ impl MachineRegistry {
         name: &str,
         updated_at: DateTime<Utc>,
     ) -> Result<bool> {
+        self.apply_fleet_name_at(host_id, name, updated_at, Utc::now())
+    }
+
+    /// [`Self::apply_fleet_name`] at a given time. A stamp more than
+    /// [`MAX_CLOCK_SKEW_MINUTES`] ahead of `now` is taken as that far ahead,
+    /// so a computer whose clock is ahead cannot pin a name.
+    pub fn apply_fleet_name_at(
+        &mut self,
+        host_id: &str,
+        name: &str,
+        updated_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let updated_at = updated_at.min(now + chrono::Duration::minutes(MAX_CLOCK_SKEW_MINUTES));
         let name = name.trim().to_owned();
         if name.is_empty() {
             return Ok(false);
@@ -2293,6 +2314,31 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(store.machines().len(), 1);
+    }
+
+    #[test]
+    fn a_rename_from_a_clock_that_is_ahead_is_bounded_and_the_next_rename_wins() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "studio.local", "10.0.0.2:17879"))
+            .unwrap();
+        let ten_years = minutes(10 * 365 * 24 * 60);
+        assert!(
+            store
+                .apply_fleet_name_at("gw-a", "Wrong", ten_years, minutes(10))
+                .unwrap()
+        );
+        assert_eq!(
+            store.machines()[0].name_updated_at,
+            Some(minutes(10 + MAX_CLOCK_SKEW_MINUTES))
+        );
+        store
+            .set_display_name_at("gw-a", Some("Right"), minutes(11))
+            .unwrap();
+        let renamed = store.machines()[0].name_updated_at.unwrap();
+        assert!(renamed > minutes(10 + MAX_CLOCK_SKEW_MINUTES));
+        assert_eq!(store.machines()[0].display(), "Right");
     }
 
     #[test]
