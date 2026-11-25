@@ -360,12 +360,29 @@ describe("loop follow-ups (issue 3937)", () => {
     // Turning the webhook off sends nothing, which drops it; a stale rotate is not sent either.
     const off = saveParams({ ...base, webhook: false, rotateWebhook: true }, "Europe/Oslo");
     expect("webhook" in off || "rotateWebhook" in off).toBe(false);
+    expect(
+      saveParams({ ...base, webhook: true, webhookEvents: " check_suite, push  push\npull_request.opened" })
+        .webhookEvents,
+    ).toEqual(["check_suite", "push", "pull_request.opened"]);
+    expect(saveParams({ ...base, webhook: true }).webhookEvents).toEqual([]);
+    expect("webhookEvents" in saveParams({ ...base, webhookEvents: "push" })).toBe(false);
 
     const parsed = parseLoops({
       daemonRunning: true,
-      loops: [{ id: "l", name: "L", schedule: { kind: "manual" }, webhook: true, nextDueAt: null, runs: [] }],
+      loops: [
+        {
+          id: "l",
+          name: "L",
+          schedule: { kind: "manual" },
+          webhook: true,
+          webhookEvents: ["check_suite", 3],
+          nextDueAt: null,
+          runs: [],
+        },
+      ],
     });
     const manual = parsed.loops[0];
+    expect(manual?.webhookEvents).toEqual(["check_suite"]);
     expect(manual?.schedule).toEqual({ kind: "manual" });
     expect(manual && scheduleInWords(manual.schedule)).toBe("No schedule");
     expect(manual && nextRunText(manual, NOW)).toBe("On webhook");
