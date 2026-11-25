@@ -294,6 +294,19 @@
         "type"
       ],
       "type": "object"
+    },
+    {
+      "description": "End this device's own pairing, after authenticating: the host revokes the record the socket signed in as and closes it with `revoked`.",
+      "properties": {
+        "type": {
+          "const": "unpair",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
     }
   ],
   "title": "HandshakeRequest"

@@ -46,6 +46,7 @@ pub mod ssh;
 pub mod tokens;
 pub mod transport;
 pub mod tunnel;
+pub mod unpair;
 
 pub use connect_code::ConnectCode;
 pub use discovery::{DiscoveredMachine, SERVICE_TYPE, browse, browse_async};
@@ -73,3 +74,4 @@ pub use routes::{
 };
 pub use tokens::{Access, TokenStore};
 pub use transport::{AcpChannel, DEFAULT_PORT, MAX_FRAME_BYTES};
+pub use unpair::{UNPAIR_TIMEOUT, Unpaired, removal_message, unpair_machine};

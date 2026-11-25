@@ -245,6 +245,16 @@ used again, and a signature cannot, because it is good for one socket only.
   have not registered a key. An older gateway ignores `public_key`, sends no
   `challenge`, and a device keeps its token there.
 
+### Ending a pairing from the device
+
+An authenticated device may send `{"type": "unpair"}` to end its own pairing.
+The gateway revokes the device record the socket signed in as (the frame names
+no device, so a device can end only its own), closes every connection of that
+record with the bare `error` frame `revoked`, and refuses its tokens and key
+from then on. As a first frame it is refused with `invalid_frame`. A gateway
+older than `unpair` does not answer it with `revoked`; a client that sees no
+`revoked` within its timeout must assume the pairing still stands.
+
 ### Rotating tokens, no expiry
 
 A device that names `"capabilities": ["token_rotation"]` in `pair` gets no
