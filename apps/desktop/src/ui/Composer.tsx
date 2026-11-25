@@ -15,7 +15,7 @@ import { primaryModifier } from "../lib/platform";
 
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { projectName, type SlashCommand } from "../acp/types";
+import type { SlashCommand } from "../acp/types";
 import { fieldBeat } from "../lib/backdrop/events";
 import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
@@ -48,10 +48,8 @@ import {
   rankThreads,
   sentMessages,
   slashToken,
-  type ThreadChoice,
   trackPastes,
 } from "../state/compose";
-import { agentStateOf, type DelegateNode, delegateTree } from "../state/delegates";
 import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles } from "../state/fileRefs";
 import { controlDisabledReason } from "../state/harness";
 import { useMachineReconnecting } from "../state/machines";
@@ -98,16 +96,12 @@ import {
 import { UsageMeter } from "./ComposerUsage";
 import {
   ALL_MATCHES,
-  agentChoices,
   type DrawerEntry,
   type DrawerPick,
   type DrawerRowItem,
   FILES_FRESH_MS,
   keywordEntries,
-  mentionStateOf,
-  NO_PLANS,
   NOT_EXPANDED,
-  projectKeyOf,
 } from "./composerMentions";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
 import { draftMirror, listContinuation } from "./DraftMirror";
@@ -122,6 +116,7 @@ import { cx, noTextHelpers, Pill, Spinner, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { SendLaterDialog } from "./SendLaterDialog";
+import { useMentionSources } from "./useMentionSources";
 
 export { PermissionMenu } from "./ComposerFooter";
 
@@ -263,99 +258,12 @@ export const Composer = memo(function Composer({
   // What is typed after the trigger, and the group the trigger narrowed to (`#` narrows to threads).
   const mentionQuery = hash?.query ?? at?.query ?? "";
   const scope: MentionScope | null = hash ? "threads" : (at?.scope ?? null);
-  const sessions = useApp((s) => s.sessions);
-  const links = useApp((s) => s.links);
-  const planCache = useApp((s) => s.planCache);
-  // The harness and login a new thread would start on: what a delegate it names would inherit.
-  const newHarness = useApp((s) => newThreadChoice(s)?.harness);
-  const newAccount = useApp((s) => s.newThreadAccount);
-  const signedOut = useApp((s) => s.signedOutLogins);
-  const openId = thread?.id;
-  // The open thread's project: its own, or the folder a new thread will start in.
-  const home = useMemo(() => {
-    const open = openId ? sessions.find((s) => s.id === openId) : undefined;
-    return open ? projectKeyOf(open) : cwdForFiles;
-  }, [sessions, openId, cwdForFiles]);
-  // The threads that work or ask right now, as their rows say it: read as lists so a streamed chunk
-  // somewhere else does not redraw the composer.
-  const working = useApp(
-    useShallow((s) => Object.values(s.threads).flatMap((t) => (isRunning(t) ? [t.id] : []))),
-  );
-  const asking = useApp(
-    useShallow((s) => Object.values(s.threads).flatMap((t) => (t.permissions.length ? [t.id] : []))),
-  );
-  const threadChoices = useMemo(() => {
-    const workingIds = new Set(working);
-    const askingIds = new Set(asking);
-    return sessions.flatMap((session): ThreadChoice[] => {
-      const title = session.title?.trim();
-      // A thread cannot point at itself, and one with no name has nothing to match or to write.
-      if (!title || session.id === openId) return [];
-      const project = projectKeyOf(session);
-      return [
-        {
-          id: session.id,
-          title,
-          harness: session.harness,
-          project: project ? projectName(project) : undefined,
-          home: project === home || session.cwd === home,
-          state: mentionStateOf(session, workingIds.has(session.id), askingIds.has(session.id)),
-          updatedAt: session.updatedAt,
-        },
-      ];
-    });
-  }, [sessions, openId, home, working, asking]);
-  // The threads this one started and still runs, at any depth: the tree the details panel draws.
-  const delegates = useMemo(() => {
-    if (!openId) return [];
-    const workingIds = new Set(working);
-    const askingIds = new Set(asking);
-    const found: ThreadChoice[] = [];
-    const walk = (nodes: readonly DelegateNode[]) => {
-      for (const node of nodes) {
-        const session = sessions.find((s) => s.id === node.id);
-        const title = session?.title?.trim();
-        // What the thread itself reports wins over the link's own record, as the details tree reads
-        // it (state/delegates.ts `agentStateOf`); the app's live turn, when it has one, first of all.
-        const activity = askingIds.has(node.id)
-          ? "needs_input"
-          : workingIds.has(node.id)
-            ? "running"
-            : session?.status;
-        const state = agentStateOf(node.link, activity);
-        if (session && title && (state === "working" || state === "needs")) {
-          found.push({
-            id: node.id,
-            title,
-            harness: session.harness,
-            state,
-            delegate: true,
-            home: true,
-            updatedAt: session.updatedAt,
-          });
-        }
-        walk(node.children);
-      }
-    };
-    walk(delegateTree(openId, links.links));
-    return found;
-  }, [openId, sessions, links, working, asking]);
-  // `@`'s agents: who a delegate could run on, on which model, at which effort.
-  // The thread a delegate would be started from: a child on this harness inherits its login.
-  const parent = useMemo(
-    () => ({
-      harness: openId ? sessions.find((x) => x.id === openId)?.harness : newHarness,
-      account: openId ? (sessions.find((x) => x.id === openId)?.account ?? null) : newAccount,
-    }),
-    [openId, sessions, newHarness, newAccount],
-  );
-  // A machine's harness rows carry no plan: `planCache` is this computer's `_rustcode/plans`,
-  // and a login that runs there is not the one whose windows it read.
-  const plans = host ? NO_PLANS : planCache;
-  const agents = useMemo(
-    () => agentChoices(harnesses ?? [], plans, signedOut, parent),
-    [harnesses, plans, signedOut, parent],
-  );
+  const { home, threadChoices, delegates, agents } = useMentionSources({
+    openId: thread?.id,
+    host,
+    harnesses,
+    cwdForFiles,
+  });
   const mentioning = !!hash || !!at;
   // `@`'s machines: where the agent should run the work, so it need not look for one.
   const machineMentions = useMachineMentions(host);
