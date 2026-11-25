@@ -63,10 +63,10 @@ export const NEW_THREAD_WIDGETS_MIN_HEIGHT = 700;
 /** A day's shade in the heatmap, as the design system's own fills and accent. */
 const SHADE: Record<HeatCell["level"], string> = {
   0: "bg-fill-subtle",
-  1: "bg-accent/20",
-  2: "bg-accent/35",
-  3: "bg-accent/55",
-  4: "bg-accent/80",
+  1: "bg-accent/25",
+  2: "bg-accent/45",
+  3: "bg-accent/70",
+  4: "bg-accent",
 };
 
 /** One card: a small icon and label, then whatever the card has to say. */
@@ -131,17 +131,13 @@ function CardRow({ onClick, title, children }: { onClick: () => void; title: str
   );
 }
 
-/** Streak lengths worth a little more warmth: a week, a month, a hundred days. */
-const MILESTONES = [7, 30, 100] as const;
-
 /**
  * The streak at the end of the activity card's label: a flame and the days in a row
  * with a turn. It is lit once today counts; until then it is quiet and says what keeps
- * the run going. A run that reaches a milestone glows.
+ * the run going.
  */
 function StreakBadge({ streak }: { streak: Streak }) {
   if (streak.current === 0 && streak.longest === 0) return null;
-  const milestone = [...MILESTONES].reverse().find((days) => streak.current >= days);
   const best = streak.longest > streak.current ? ` · best ${count(streak.longest, "day")}` : "";
   const label =
     streak.current === 0
@@ -157,7 +153,6 @@ function StreakBadge({ streak }: { streak: Streak }) {
         className={cx(
           "rc-streak flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-caption font-medium tabular",
           streak.today ? "bg-accent/15 text-accent" : "bg-fill-subtle text-fg-muted",
-          streak.today && milestone && "rc-streak-milestone",
         )}
       >
         <Flame size={12} className={cx("shrink-0", streak.today && "rc-streak-flame")} />
@@ -185,7 +180,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
     >
       {rows === undefined ? (
-        <Skeleton className="h-[62px] w-full flex-1" />
+        <Skeleton className="h-[73px] w-full flex-1" />
       ) : totalTurns === 0 ? (
         <div className="flex flex-1 items-center">
           <Nothing>No turns recorded yet.</Nothing>
@@ -194,20 +189,16 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
         <div
           role="img"
           aria-label={`Turns per day over the last ${HEATMAP_WEEKS} weeks: ${count(totalTurns, "turn")}.`}
-          className="flex flex-1 items-end gap-[3px]"
+          className="flex flex-1 items-end gap-1"
         >
           {columns.map((week, index) => (
-            <div key={week.find(Boolean)?.day ?? index} className="flex min-w-0 flex-1 flex-col gap-[3px]">
+            <div key={week.find(Boolean)?.day ?? index} className="flex min-w-0 flex-1 flex-col gap-1">
               {week.map((cell, day) =>
                 cell ? (
                   <span
                     key={cell.day}
                     title={`${cell.day} · ${count(cell.turns, "turn")}`}
-                    className={cx(
-                      "rc-heat-cell h-[7px] w-full",
-                      SHADE[cell.level],
-                      streak.days.has(cell.day) && "rc-heat-streak",
-                    )}
+                    className={cx("rc-heat-cell h-[7px] w-full", SHADE[cell.level])}
                   />
                 ) : (
                   <span key={`future-${index}-${day}`} className="h-[7px] w-full" />
