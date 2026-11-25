@@ -286,6 +286,10 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
     }
     let stored_keys: Vec<String> = stored.keys().cloned().collect();
     let mut answer = json!({ "values": values, "stored": stored_keys, "sources": sources });
+    if request.keys.is_none() {
+        let workspace = request.project.as_deref().map(Path::new);
+        answer["configIssues"] = config_issues_json(&crate::config::config_load_issues(workspace));
+    }
     if let Some(project) = project {
         answer["project"] = json!({
             "path": project,
@@ -294,6 +298,22 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         });
     }
     Ok(answer)
+}
+
+/// The config files the engine could not read, for the Settings notice.
+fn config_issues_json(issues: &[crate::config::ConfigLoadIssue]) -> Value {
+    Value::Array(
+        issues
+            .iter()
+            .map(|issue| {
+                json!({
+                    "path": issue.path.display().to_string(),
+                    "scope": issue.scope,
+                    "message": issue.message,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// One setting's current value, for engine code that has to apply a
