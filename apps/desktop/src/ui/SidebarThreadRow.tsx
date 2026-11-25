@@ -575,7 +575,7 @@ const NO_AGENTS: SubagentInfo[] = [];
  * cut and one line's right part never narrows another line's left one.
  */
 export const ROW_HEIGHT = 54;
-/** Two lines: the title with its state and time; where it runs, its marks and its model. */
+/** Two lines: the title with its time; its state, where it runs, its marks and its model. */
 const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
 /** Line 2 starts where the title does, past the project mark (14px and its 6px gap). */
 const ROW_INDENT = "pl-5";
@@ -890,13 +890,6 @@ export const ThreadRow = memo(function ThreadRow({
       </span>
     </span>
   );
-  // The roomy row says what the thread is doing in words before its time.
-  const state = (
-    <span className="flex shrink-0 items-center gap-1.5">
-      {chip && <RowStatusLabel status={chip} />}
-      {time}
-    </span>
-  );
   return (
     <ContextMenu.Root
       onOpenChange={(open) => {
@@ -1001,7 +994,7 @@ export const ThreadRow = memo(function ThreadRow({
                 </>
               ) : (
                 <>
-                  {/* Line 1: the title, then its state and time (hover actions take their place). */}
+                  {/* Line 1: the title at full width, then its time (hover actions take its place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
                       <ProjectMark name={project} size={14} className={markTint} />
@@ -1019,18 +1012,19 @@ export const ThreadRow = memo(function ThreadRow({
                         {session.title || "New thread"}
                       </span>
                     </span>
-                    {/* What it is doing and since when; the hover actions take its place. */}
+                    {/* Since when; the hover actions take its place. */}
                     <span
                       title={chip?.title}
                       className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                     >
-                      <span className="flex min-w-0 items-center justify-end">{state}</span>
+                      <span className="flex min-w-0 items-center justify-end">{time}</span>
                     </span>
                   </span>
-                  {/* Line 2: the computer it runs on, from the first frame (a branch read later would
+                  {/* Line 2: its state, the computer it runs on, from the first frame (a branch read later would
                       swap it out), then its marks and its model against the edge. Its branch and
                       folder are on the hover card. */}
                   <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
+                    {chip && <RowStatusLabel status={chip} />}
                     <RowMachine hostId={session.host} unsynced={unsynced} />
                     {details}
                     {modelMark && <span className="flex shrink-0">{modelMark}</span>}
