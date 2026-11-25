@@ -1320,12 +1320,43 @@ fn empty_book() -> Value {
 }
 
 /// The app's book, read from the same store it reads.
-fn link_book() -> Value {
+pub(super) fn link_book() -> Value {
     crate::data_store::load_link_book()
         .ok()
         .and_then(|stored| stored.get("book").cloned())
         .filter(Value::is_object)
         .unwrap_or_else(empty_book)
+}
+
+/// Stop the running turns of `targets` on this engine over one connection.
+pub(super) async fn cancel_turns(targets: &[String]) -> Result<(), Value> {
+    let engine = Engine::open(Access::Ask).await?;
+    for target in targets {
+        engine
+            .cancel(target)
+            .map_err(|reason| failed(format!("the stop did not reach the engine: {reason}")))?;
+    }
+    Ok(())
+}
+
+/// Settle link `id` as stopped, already heard, as the app's stop does.
+pub(super) fn stop_link(id: &str) {
+    let at = now();
+    let _ = crate::data_store::change_link(id, |link| {
+        if link
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(is_active)
+        {
+            link_after(
+                link,
+                &json!({"state": "cancelled", "settledAt": at, "notifiedAt": at}),
+                at,
+            )
+        } else {
+            link
+        }
+    });
 }
 
 /// Abandon links a settled sender was waiting on, without interrupting their targets.
