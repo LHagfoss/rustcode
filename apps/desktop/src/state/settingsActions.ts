@@ -22,7 +22,7 @@ import {
   MIN_DELEGATES_TOTAL,
   WAKE_BATCH_MAX_S,
 } from "./orchestration";
-import { parseRecapMinutes, pruneSeen } from "./recap";
+import { type OpenRecap, parseRecapMinutes, pruneSeen, recapAfterMessages } from "./recap";
 import { useApp } from "./store";
 
 const get = () => useApp.getState();
@@ -46,7 +46,7 @@ export function setNotificationsBackgroundOnly(on: boolean) {
 }
 
 export function setChatRecaps(on: boolean) {
-  set({ chatRecaps: on, ...(on ? {} : { chatRecap: null }) });
+  set({ chatRecaps: on, ...(on ? {} : { recaps: {} }) });
   store(STORAGE.chatRecaps, on ? "1" : "0");
 }
 
@@ -56,14 +56,34 @@ export function setRecapMinutes(minutes: number) {
   store(STORAGE.recapMinutes, String(kept));
 }
 
-/** A return to a chat after a long enough gap: its recap, from when it was last seen. */
-export function openChatRecap(threadId: string, since: number) {
-  set({ chatRecap: { threadId, since } });
+/** A return to a chat after a long enough quiet: its recap, from when it went quiet. */
+export function openChatRecap(threadId: string, since: number, messages?: number) {
+  set((s) => ({ recaps: { ...s.recaps, [threadId]: { since, messages } } }));
 }
 
-/** Puts the chat's recap away until the next return after a gap. */
-export function dismissChatRecap() {
-  set({ chatRecap: null });
+/** Puts a chat's recap away until the next return after a long enough quiet. */
+export function dismissChatRecap(threadId: string) {
+  set((s) => {
+    if (!s.recaps[threadId]) return s;
+    const { [threadId]: _gone, ...rest } = s.recaps;
+    return { recaps: rest };
+  });
+}
+
+/** Counts each open recap's messages once its chat has loaded, and closes one when more arrive. */
+export function settleRecaps(counts: (threadId: string) => number | undefined) {
+  set((s) => {
+    let next: Record<string, OpenRecap> | undefined;
+    for (const [id, recap] of Object.entries(s.recaps)) {
+      const count = counts(id);
+      const kept = recapAfterMessages(recap, count);
+      if (kept === recap) continue;
+      next ??= { ...s.recaps };
+      if (kept) next[id] = kept;
+      else delete next[id];
+    }
+    return next ? { recaps: next } : s;
+  });
 }
 
 /** When each chat was last on screen, from app storage. */

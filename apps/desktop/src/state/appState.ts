@@ -34,7 +34,7 @@ import {
   MIN_DELEGATES_TOTAL,
 } from "./orchestration";
 import { type PermissionMode, parsePermissionMode } from "./permissions";
-import { RECAP_MINUTES_DEFAULT } from "./recap";
+import { type OpenRecap, RECAP_MINUTES_DEFAULT } from "./recap";
 import type { PhonePairing } from "./remotePairing";
 import type { ScheduleBook } from "./schedule";
 import type { PendingSetup } from "./setup";
@@ -301,8 +301,8 @@ export interface AppState {
   chatRecaps: boolean;
   /** How long a chat goes unseen before that recap is due, in minutes. */
   recapMinutes: number;
-  /** The chat whose recap is on screen and when it was last seen before; null when none is. */
-  chatRecap: { threadId: string; since: number } | null;
+  /** The chats whose recap is open, each with when it went quiet (`state/recap.ts`). */
+  recaps: Record<string, OpenRecap>;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
