@@ -43,11 +43,31 @@ return { reviews, verdict };
 
 | Global | What it does |
 | --- | --- |
-| `agent(prompt, options?)` | Starts a normal delegate thread with `prompt` and resolves to its reply. Options: `schema` (a JSON Schema: the worker is asked for JSON, and the reply is parsed and checked against it), `harness`, `model`, `effort`, `title`. Rejects when the worker fails or its reply breaks the schema, so a script can `try`/`catch` it. |
+| `agent(prompt, options?)` | Starts a normal delegate thread with `prompt` and resolves to its reply. Options: `schema` (a JSON Schema: the worker is asked for JSON, and the reply is parsed and checked against it), `harness`, `model`, `effort`, `title`, and what `start_session` takes for a delegate: `preset` (a saved delegate preset), `access` (`ask`, `edits` or `full`; it only lowers), `account`, `project` and `worktree`. Rejects when the worker fails or its reply breaks the schema, so a script can `try`/`catch` it. |
 | `parallel(items)` | `Promise.all` over an array of functions (called in order) or promises. Results come back in the array's order. The run's concurrency limit, not `parallel`, decides how many workers run at once. |
 | `phase(title)` | Names the step the next calls belong to. Phases and the workers in them are what the run reports. |
 | `log(...parts)` | Adds a line to the run's log (at most 200 are kept). |
 | `args` | The JSON the run was started with. |
+
+### Roles
+
+A role is a delegate preset (Settings › Delegation › Delegate presets): its
+harness, model, effort, account, access, worktree and instructions. `agent()`
+expands `preset` the way `start_session` does, on the app's path and with no
+app, and an unknown name rejects the call with the saved names (#4384). A
+reviewer or verifier that must not edit runs at `access: "ask"`:
+
+```js
+const plan = await agent(args.goal, { preset: "planner", schema: PLAN });
+const done = await parallel(
+  plan.tasks.map((task) => () => agent(task.prompt, { preset: "implementer" })),
+);
+const review = await agent("Review these branches: " + JSON.stringify(done), {
+  preset: "reviewer",
+  access: "ask",
+  schema: VERDICT,
+});
+```
 
 Without a `schema` the resolved value is the worker's reply text. A worker's
 reply reaches the script cut at 8 KiB, like a `wait_session` answer, so ask for
