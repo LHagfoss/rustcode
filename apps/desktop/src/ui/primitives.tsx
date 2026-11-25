@@ -275,7 +275,11 @@ export function MenuQuickActions({
             )}
           >
             <span aria-hidden>{action.icon}</span>
-            <span className="w-full truncate text-center">{action.label}</span>
+            <span className="flex h-7 w-full items-center justify-center">
+              <span className="line-clamp-2 text-balance break-words text-center leading-[14px]">
+                {action.label}
+              </span>
+            </span>
           </Item>
         </Tooltip>
       ))}

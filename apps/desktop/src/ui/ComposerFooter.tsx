@@ -395,20 +395,20 @@ export function PlusMenu({
         actions={[
           { label: "Attach", description: attachLabel, icon: <Paperclip />, onSelect: onAttach },
           {
-            label: "Later",
+            label: "Send later",
             description: sendLaterDisabled ? `Send later: ${sendLaterTip}` : "Send later…",
             icon: <Clock />,
             onSelect: onSendLater,
             disabled: sendLaterDisabled,
           },
           {
-            label: "New",
+            label: "New thread",
             description: `New Thread · ${formatBinding("mod+n")}`,
             icon: <SquarePen />,
             onSelect: () => startNewThread(),
           },
           {
-            label: "Folder",
+            label: "In folder",
             description: "New Thread in Folder…",
             icon: <Folder />,
             onSelect: () =>
