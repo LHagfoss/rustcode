@@ -182,6 +182,10 @@ opened or started on a harness with the orchestration tools). Until then
 `workflow_status` reports the run as `running` with a note that it is not being
 driven. The workflow card and status row offer **Resume** while the run is undriven.
 Replay reads finished calls from disk and continues with the unfinished work.
+A run resumed from **Resume** starts its workers through the app that pressed
+it, with approval cards like any delegate the thread starts (#4380); the
+engine answers the calls itself only when no app hosts the thread's
+orchestration, and then only a thread at Full access starts workers.
 
 ## Limits
 

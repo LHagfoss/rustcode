@@ -430,18 +430,42 @@ fn resume_in(store: &Store, runner: &Arc<dyn AgentRunner>) -> usize {
 // Serialize the transition between a saved run and a live driver.
 static DRIVER_TRANSITION: Mutex<()> = Mutex::new(());
 
-pub(crate) fn resume_run(thread: &str, run_id: &str) -> Result<Value, String> {
+/// Resume one saved run for a client that asked: its workers go through
+/// `client` (the app that pressed Resume) when it hosts orchestration, and
+/// through the engine's own answer only when no client does.
+pub(crate) fn resume_run(
+    thread: &str,
+    run_id: &str,
+    client: Option<Arc<dyn crate::preview::PreviewClient>>,
+    version: u8,
+) -> Result<Value, String> {
     validate(STOP_TOOL_NAME, &json!({ "run_id": run_id }))?;
     let store = Store::for_thread(thread)
         .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
-    resume_one(
-        &store,
-        run_id,
-        ThreadRunner::new(thread, None, crate::orchestration::VERSION),
-    )?;
+    let version = resume_version(client.is_some(), version);
+    resume_run_in(&store, run_id, ThreadRunner::new(thread, client, version))
+}
+
+/// The orchestration version a resumed run's workers are started with: the
+/// asking client's, never above the engine's, or the engine's own when the
+/// engine answers the calls itself.
+fn resume_version(hosted_by_client: bool, client_version: u8) -> u8 {
+    if hosted_by_client {
+        client_version.min(crate::orchestration::VERSION)
+    } else {
+        crate::orchestration::VERSION
+    }
+}
+
+fn resume_run_in(
+    store: &Store,
+    run_id: &str,
+    runner: Arc<dyn AgentRunner>,
+) -> Result<Value, String> {
+    resume_one(store, run_id, runner)?;
     store
         .load(run_id)
-        .map(|record| summary(&store, &record))
+        .map(|record| summary(store, &record))
         .ok_or_else(|| format!("no run {run_id} in this thread"))
 }
 
@@ -1018,6 +1042,41 @@ mod tests {
         assert_eq!(echo.started.load(Ordering::SeqCst), 1);
         // A finished run is not picked up again.
         assert_eq!(resume_in(&store, &runner), 0);
+    }
+
+    #[tokio::test]
+    async fn a_resume_the_app_asks_for_drives_the_run_with_the_runner_it_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let record = new_record(
+            "1784626803679",
+            None,
+            Value::Null,
+            Limits {
+                concurrency: 1,
+                call_budget: 5,
+                timeout_secs: 30,
+            },
+        );
+        store
+            .create(&record, r#"return await agent("one");"#)
+            .unwrap();
+
+        let summary = resume_run_in(&store, &record.id, runner).unwrap();
+        assert_eq!(summary["run_id"], json!(record.id));
+        let finished = settled(&store, &record.id).await;
+        assert_eq!(finished.status, RunStatus::Done, "{:?}", finished.error);
+        assert_eq!(finished.result, Some(json!("done by session-1")));
+        assert_eq!(echo.started.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_resumed_run_uses_the_asking_clients_version_and_the_engines_without_one() {
+        let engine = crate::orchestration::VERSION;
+        assert_eq!(resume_version(true, 2), 2);
+        assert_eq!(resume_version(true, engine.saturating_add(5)), engine);
+        assert_eq!(resume_version(false, 0), engine);
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@
 //! a run, and claims the one wake that tells the starting thread the run ended.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -54,8 +55,15 @@ pub(crate) struct WorkflowResumeRequest {
     pub run_id: String,
 }
 
-pub(crate) fn resume(request: WorkflowResumeRequest) -> Value {
-    match crate::workflow::resume_run(&request.session_id, &request.run_id) {
+pub(crate) fn resume(
+    request: WorkflowResumeRequest,
+    host: Option<(Arc<dyn crate::preview::PreviewClient>, u8)>,
+) -> Value {
+    let (client, version) = match host {
+        Some((client, version)) => (Some(client), version),
+        None => (None, 0),
+    };
+    match crate::workflow::resume_run(&request.session_id, &request.run_id, client, version) {
         Ok(run) => json!({ "run": run }),
         Err(message) => json!({ "error": { "code": "failed", "message": message } }),
     }
