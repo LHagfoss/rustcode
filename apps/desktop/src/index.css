@@ -1297,6 +1297,13 @@
   overflow: hidden;
   transition: background-color 160ms ease-out;
 }
+.rc-panel-card {
+  background: var(--rc-composer-bg);
+  @apply glass-filter;
+  box-shadow:
+    0 3px 12px -4px var(--rc-shadow-soft),
+    0 0 0 1px var(--rc-separator);
+}
 /* The tray is the card's last row, not a slab of its own: the card's one glass carries it. Its
    controls come from four files and each sets its own height (`h-7` on the pills, the round send
    and + buttons one step up on both ends of the row), so no rule here reaches into another
