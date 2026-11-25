@@ -1571,6 +1571,18 @@ async fn execute_tool_batch_validated(
                 )
                 .await
             };
+            let execution = if name_clone == "browser_screenshot" && execution.success {
+                let (output, image) = crate::computer_use::attach_screenshot(
+                    &execution.content,
+                    crate::controller::save_image_attachment,
+                );
+                if let Some(path) = image {
+                    state_clone.lock().await.pending_preview_images.push(path);
+                }
+                output
+            } else {
+                execution
+            };
 
             {
                 let mut s = state_clone.lock().await;
