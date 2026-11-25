@@ -49,6 +49,7 @@ import {
 } from "../state/statistics";
 import { openSettings, useApp } from "../state/store";
 import { formatTokens as compactTokens, relativeAge } from "../state/thread";
+import { ActivityProfile } from "./ActivityProfile";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { ChevronRight } from "./icons";
@@ -154,6 +155,7 @@ export function StatisticsPage() {
     fleet,
   );
   const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" }, fleet);
+  const lifetime = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day" }, fleet);
 
   const sessions = useApp((s) => s.sessions);
   const sessionsCapped = useApp((s) => s.sessionsCapped);
@@ -196,7 +198,13 @@ export function StatisticsPage() {
   const refresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([current.reload(), before.reload(), days.reload(), threads.reload()]);
+      await Promise.all([
+        current.reload(),
+        before.reload(),
+        days.reload(),
+        threads.reload(),
+        lifetime.reload(),
+      ]);
     } finally {
       setRefreshing(false);
     }
@@ -227,6 +235,7 @@ export function StatisticsPage() {
 
   return (
     <>
+      <ActivityProfile report={lifetime.data} error={lifetime.error} />
       <section className="mb-6 scroll-mt-5" data-setting="Totals">
         <SectionTitle
           title="Totals"

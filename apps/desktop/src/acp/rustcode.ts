@@ -687,6 +687,8 @@ export interface UsageRow extends UsageTotals {
   parentId?: string;
   /** A parent known only by title, for a thread an older release started. */
   parentTitle?: string;
+  /** The wall time of the group's longest turn; absent from an older engine. */
+  longestTurnMs?: number;
 }
 
 export interface UsageReport {
@@ -749,6 +751,7 @@ export function parseUsageReport(result: Json | undefined): UsageReport {
           day: str(o.day) || undefined,
           parentId: str(o.parent_id) || undefined,
           parentTitle: str(o.parent_title) || undefined,
+          longestTurnMs: num(o.longest_turn_ms),
           ...parseTotals(o),
         },
       ];
