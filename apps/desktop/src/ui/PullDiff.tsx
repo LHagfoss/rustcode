@@ -12,8 +12,9 @@ import { formatBinding } from "../lib/keys";
 import { opError, opRunning, useOp } from "../lib/op";
 import { primaryModifier } from "../lib/platform";
 import { count } from "../lib/plural";
-import { appendToDraft, type FeedbackItem, feedbackItems, formatReviewFeedback } from "../lib/reviewFeedback";
+import { type FeedbackItem, feedbackItems, formatReviewFeedback } from "../lib/reviewFeedback";
 import { runWordMarks } from "../lib/wordDiff";
+import { appendToComposer } from "../state/composerInsert";
 import type { PatchLine } from "../state/diff";
 import {
   applyCompletion,
@@ -43,7 +44,7 @@ import {
   reviewConversations,
   unresolvedFeedback,
 } from "../state/pullReview";
-import { setDraft, toast, useApp } from "../state/store";
+import { toast } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { StatusMark } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
@@ -65,15 +66,7 @@ import { DiffCount } from "./Rows";
  */
 export function addFeedbackToThread(items: readonly FeedbackItem[], pull: PullRequest) {
   if (items.length === 0) return;
-  const key = useApp.getState().selectedId ?? "new";
-  const draft = useApp.getState().drafts[key] ?? "";
-  setDraft(key, appendToDraft(draft, formatReviewFeedback(items, pull)));
-  requestAnimationFrame(() => {
-    const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
-    if (!field) return;
-    field.focus();
-    field.setSelectionRange(field.value.length, field.value.length);
-  });
+  appendToComposer(formatReviewFeedback(items, pull));
 }
 
 const tint = (kind: PatchLine["kind"]) =>

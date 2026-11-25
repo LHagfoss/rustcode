@@ -82,6 +82,7 @@ import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "./icons"
 import { PlanCard } from "./PlanCard";
 import { cx, noTextHelpers } from "./primitives";
 import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
+import { QuoteSelection } from "./QuoteSelection";
 import {
   AssistantRow,
   CompletionCard,
@@ -1428,6 +1429,7 @@ export function Transcript({
         ) : null}
       </div>
       {stuckHeader}
+      {!peek && <QuoteSelection container={scrollRef} />}
       <TimelineRail
         turns={turns}
         current={railCurrent}
