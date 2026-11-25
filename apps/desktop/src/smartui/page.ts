@@ -377,6 +377,7 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
 .rc-finding > * { grid-column: 2; margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .rc-finding-note { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
 .rc-finding-note.rc-ok::before { content: "\\2713\\00a0"; color: var(--rc-success); }
+.rc-finding-fix { justify-self: start; margin-top: 4px; }
 
 .rc-details { border-bottom: 1px solid var(--rc-separator); }
 .rc-details:last-child { border-bottom: 0; }
