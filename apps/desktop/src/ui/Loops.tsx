@@ -83,6 +83,16 @@ function jobAgent(
     .join(" · ");
 }
 
+/** The local harness a job runs on when it is turned off in Settings, so the card can turn it back on. */
+function offHarnessOf(
+  loop: Loop,
+  harnesses: HarnessSnapshot | null,
+): { id: string; name: string } | undefined {
+  if (loop.threadId || loop.host || loop.machine || !harnesses) return undefined;
+  const harness = harnesses.harnesses.find((item) => item.id === (loop.harness || harnesses.default.harness));
+  return harness?.installed && !harness.enabled ? { id: harness.id, name: harness.name } : undefined;
+}
+
 export function Loops() {
   const enginePhase = useApp((s) => s.engine.phase);
   const connectedHosts = useApp((s) => s.connectedHosts);
@@ -502,6 +512,7 @@ export function Loops() {
                             loop={loop}
                             now={now}
                             agent={jobAgent(loop, loopHarnesses, signedOut)}
+                            offHarness={offHarnessOf(loop, harnesses)}
                             machineLabel={
                               showMachineTag || loop.machine
                                 ? loopMachineLabel(loop, machines, localName)
