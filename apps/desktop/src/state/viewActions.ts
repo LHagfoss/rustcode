@@ -33,6 +33,14 @@ const set = (patch: Partial<AppState> | ((state: AppState) => Partial<AppState>)
 
 // ---------------------------------------------------------------- views and worktrees
 
+/**
+ * Whether the main column shows a page of its own (Dashboard, Jobs, the inbox, the board) rather
+ * than a thread, so the sidebar lights that page and no thread row beside it.
+ */
+export function showsPage(view: AppState["view"]): boolean {
+  return view.kind === "dashboard" || view.kind === "loops" || view.kind === "inbox" || view.kind === "board";
+}
+
 export function setView(view: AppState["view"]) {
   dismissOverlays();
   set({ view, switcherOpen: false, settings: null });
