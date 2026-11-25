@@ -10,8 +10,8 @@ import { readFlag, writeFlag } from "../lib/storage";
 import { sameProject } from "./orchestration";
 import { DAY_MS } from "./period";
 
-/** How many weeks the activity card draws: about four months, in one row of columns. */
-export const HEATMAP_WEEKS = 17;
+/** The most weeks the activity card reads and draws: about six months. */
+export const HEATMAP_WEEKS = 26;
 
 /** One day of the heatmap: what ran on it, and how dark its cell is. */
 export interface HeatCell {

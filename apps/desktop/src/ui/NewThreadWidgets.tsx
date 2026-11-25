@@ -1,29 +1,29 @@
-// The cards under the composer on a new thread: what this computer recorded lately
-// (the activity heatmap, this month's turns and spend), the project's recent
-// threads and pull requests, and the last thirty days of reported usage. Devin's
-// home screen is the shape: a quiet dashboard of see-through glass cards under
-// the field, wider than the field itself, so the picture behind them shows.
-//
-// Every card draws from a read the app already makes: one `_rustcode/data/usage`
-// report grouped by day (the Activity, Usage and This month cards all slice it),
-// the session list the sidebar shows, and the project's pulls cache
-// (`state/pulls.ts`, the one the sidebar's rows read). No new engine call.
-//
-// The optional overview sits outside the composer's centring stack. Cards keep
-// a consistent height while reads land; empty cards explain what is missing.
+/**
+ * The cards under the composer on a new thread: what this computer recorded lately (the activity
+ * heatmap and the month's spend), the project's recent threads and pull requests, what waits on
+ * the user and what is running. The user picks, orders and sizes them (`WidgetGrid.tsx`).
+ *
+ * Every card draws from a read the app already makes: one `_rustcode/data/usage` report grouped
+ * by day, two by model to price the spend, the session list the sidebar shows, the inbox, and the
+ * project's pulls cache (`state/pulls.ts`). No new engine call.
+ *
+ * Every card is one height, so two rows fit under the composer in a laptop window. Lists show
+ * three rows and say how many more there are at the end of their label row.
+ */
 
-import { type ReactNode, useEffect, useMemo, useSyncExternalStore } from "react";
+import { type ReactNode, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { PullRequest, UsageRow } from "../acp/rustcode";
 import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
 import { useInboxItems } from "../state/inboxRead";
-import { daysAgo, previousRows, sumRows, trend } from "../state/period";
+import { daysAgo, previousRows, sparklinePath, sparklineSeries, sumRows, trend } from "../state/period";
 import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import { cachedPulls, loadPulls, pullState, pullsVersion, subscribePulls } from "../state/pulls";
 import { openSettings, selectThread, setPanel, setView, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
+import { isRunning } from "../state/turn";
 import type { WidgetId } from "../state/widgetLayout";
 import {
   HEATMAP_WEEKS,
@@ -37,7 +37,6 @@ import {
 } from "../state/widgets";
 import {
   Activity,
-  CalendarDays,
   Flame,
   Gauge,
   GitMerge,
@@ -48,19 +47,24 @@ import {
   Hand,
   History,
   type LucideIcon,
+  Play,
 } from "./icons";
 import { cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
 import { useWidgetEditClass, useWidgetId, useWidgetSpan, WidgetChrome, WidgetGrid } from "./WidgetGrid";
 
-/** How many of each list a card shows before it says how many are left. */
-const SHOWN_THREADS = 3;
-const SHOWN_PULLS = 3;
-const SHOWN_NEEDS = 3;
+/** How many rows a list card shows before its label says how many are left. */
+const SHOWN_ROWS = 3;
 
-/** The usage card's window: the last thirty days, counted as whole UTC days. */
+/** The spend card's token line: the last thirty days, counted as whole UTC days. */
 const USAGE_DAYS = 30;
+
+/** A heatmap cell's side and the space between cells, in pixels: squares, as a contribution graph draws them. */
+const HEAT_CELL = 8;
+const HEAT_GAP = 2;
+/** The fewest weeks the heatmap draws, however narrow its card. */
+const MIN_WEEKS = 8;
 
 /** Short columns leave the overview out to keep space for the composer. */
 export const NEW_THREAD_WIDGETS_MIN_HEIGHT = 700;
@@ -74,7 +78,12 @@ const SHADE: Record<HeatCell["level"], string> = {
   4: "bg-accent",
 };
 
-/** One card: a small icon and label, then whatever the card has to say. */
+/**
+ * One card: a small icon and label, then whatever the card has to say. It is see-through glass
+ * with a hairline edge drawn inside it, so the overview's scroll box never clips the edge. The
+ * surface is the stable part: the overview's open and close fade its fill and move what is
+ * inside it, never the blur (index.css, `rc-overview`).
+ */
 function Card({
   label,
   icon: Icon,
@@ -93,21 +102,17 @@ function Card({
     <section
       aria-label={label}
       data-widget={useWidgetId()}
-      // One height for every card and state. It is see-through: a quarter of
-      // the surface and the glass filter, no edge ring, so the picture runs on behind it.
-      // The surface is the stable part: the overview's open and close fades its fill and moves
-      // what is inside it, never the blur (index.css, `rc-overview`).
       className={cx(
-        "rc-glass-faint rc-overview-card flex min-h-[132px] w-[240px] shrink-0 snap-start flex-col rounded-xl p-3 lg:w-auto",
+        "rc-glass-faint rc-overview-card flex h-[128px] w-[240px] shrink-0 snap-start flex-col overflow-hidden rounded-xl p-3 ring-inset lg:w-auto",
         span,
-        editClass,
+        editClass ?? "ring-1 ring-border-strong",
       )}
     >
       <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
-        <div className="flex shrink-0 items-center justify-between gap-2">
+        <div className="flex h-5 shrink-0 items-center justify-between gap-2">
           <h3 className="flex min-w-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
             <Icon size={12} className="shrink-0" />
-            {label}
+            <span className="truncate">{label}</span>
           </h3>
           <WidgetChrome fallback={aside} />
         </div>
@@ -119,7 +124,35 @@ function Card({
 
 /** A card's one quiet line when it has nothing else to draw. */
 function Nothing({ children }: { children: ReactNode }) {
-  return <p className="text-caption text-fg-muted">{children}</p>;
+  return (
+    <div className="flex flex-1 items-center">
+      <p className="text-caption text-fg-muted">{children}</p>
+    </div>
+  );
+}
+
+/** A small count at the end of a label row, or a link where it opens what it counts. */
+function LabelNote({
+  children,
+  onClick,
+  title,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  title: string;
+}) {
+  const className = "shrink-0 rounded-sm text-caption text-fg-muted tabular";
+  return (
+    <Tooltip label={title}>
+      {onClick ? (
+        <button type="button" onClick={onClick} className={cx(className, "hover:text-fg")}>
+          {children}
+        </button>
+      ) : (
+        <span className={className}>{children}</span>
+      )}
+    </Tooltip>
+  );
 }
 
 /** A row in a card's list: a control, so the card is walkable with the keyboard. */
@@ -129,7 +162,7 @@ function CardRow({ onClick, title, children }: { onClick: () => void; title: str
       <button
         type="button"
         onClick={onClick}
-        className="-mx-1 flex h-6 min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle"
+        className="-mx-1 flex h-6 min-w-0 shrink-0 items-center gap-2 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle"
       >
         {children}
       </button>
@@ -137,10 +170,13 @@ function CardRow({ onClick, title, children }: { onClick: () => void; title: str
   );
 }
 
+function CardList({ children }: { children: ReactNode }) {
+  return <div className="-mt-1 flex min-h-0 flex-1 flex-col">{children}</div>;
+}
+
 /**
- * The streak at the end of the activity card's label: a flame and the days in a row
- * with a turn. It is lit once today counts; until then it is quiet and says what keeps
- * the run going.
+ * The streak at the end of the activity card's label: a flame and the days in a row with a turn.
+ * It is lit once today counts; until then it is quiet and says what keeps the run going.
  */
 function StreakBadge({ streak }: { streak: Streak }) {
   if (streak.current === 0 && streak.longest === 0) return null;
@@ -157,7 +193,7 @@ function StreakBadge({ streak }: { streak: Streak }) {
         role="img"
         aria-label={label}
         className={cx(
-          "rc-streak flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-caption font-medium tabular",
+          "rc-streak flex shrink-0 items-center gap-1 rounded-full px-2 text-caption font-medium tabular",
           streak.today ? "bg-accent/15 text-accent" : "bg-fill-subtle text-fg-muted",
         )}
       >
@@ -168,12 +204,37 @@ function StreakBadge({ streak }: { streak: Streak }) {
   );
 }
 
+/** How many whole weeks of square cells fit the heatmap's width; the ref goes on the heatmap's box. */
+function useFittedWeeks() {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [weeks, setWeeks] = useState(MIN_WEEKS);
+  useEffect(() => {
+    if (!element) return;
+    const fit = () =>
+      setWeeks(
+        Math.max(
+          MIN_WEEKS,
+          Math.min(HEATMAP_WEEKS, Math.floor((element.clientWidth + HEAT_GAP) / (HEAT_CELL + HEAT_GAP))),
+        ),
+      );
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, weeks] as const;
+}
+
 function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   const sessions = useApp((s) => s.sessions);
+  const [box, weeks] = useFittedWeeks();
   const turns = useMemo(() => turnsPerDay(rows ?? []), [rows]);
-  const columns = useMemo(() => heatmapWeeks(turns, HEATMAP_WEEKS), [turns]);
+  const columns = useMemo(() => heatmapWeeks(turns, weeks), [turns, weeks]);
   const streak = useMemo(() => streakOf(turns), [turns]);
-  const totalTurns = useMemo(() => [...turns.values()].reduce((sum, n) => sum + n, 0), [turns]);
+  const shownTurns = useMemo(
+    () => columns.flat().reduce((sum, cell) => sum + (cell?.turns ?? 0), 0),
+    [columns],
+  );
   const activeThreads = useMemo(() => {
     const from = Date.parse(`${since}T00:00:00Z`);
     return sessions.filter((session) => (session.updatedAt ?? 0) >= from).length;
@@ -185,39 +246,42 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
     >
       {rows === undefined ? (
-        <Skeleton className="h-[73px] w-full flex-1" />
-      ) : totalTurns === 0 ? (
-        <div className="flex flex-1 items-center">
-          <Nothing>No turns recorded yet.</Nothing>
-        </div>
+        <Skeleton className="h-full w-full flex-1" />
+      ) : turns.size === 0 ? (
+        <Nothing>No turns recorded yet.</Nothing>
       ) : (
-        <div
-          role="img"
-          aria-label={`Turns per day over the last ${HEATMAP_WEEKS} weeks: ${count(totalTurns, "turn")}.`}
-          className="flex flex-1 items-end gap-1"
-        >
-          {columns.map((week, index) => (
-            <div key={week.find(Boolean)?.day ?? index} className="flex min-w-0 flex-1 flex-col gap-1">
-              {week.map((cell, day) =>
-                cell ? (
+        <div className="flex min-h-0 flex-1 items-end gap-4">
+          <div className="flex shrink-0 flex-col">
+            <span className="font-semibold text-title3 text-fg tabular">{shownTurns.toLocaleString()}</span>
+            <span className="text-caption text-fg-muted">turns in {weeks} weeks</span>
+            <span className="text-caption text-fg-muted">{count(activeThreads, "thread")} active</span>
+          </div>
+          <div
+            ref={box}
+            role="img"
+            aria-label={`Turns per day over the last ${weeks} weeks: ${count(shownTurns, "turn")}.`}
+            className="flex min-w-0 flex-1 justify-end overflow-hidden"
+            style={{ gap: HEAT_GAP }}
+          >
+            {columns.map((week, index) => (
+              <div
+                key={week.find(Boolean)?.day ?? index}
+                className="flex shrink-0 flex-col"
+                style={{ gap: HEAT_GAP }}
+              >
+                {week.map((cell, day) => (
                   <span
-                    key={cell.day}
-                    title={`${cell.day} · ${count(cell.turns, "turn")}`}
-                    className={cx("rc-heat-cell h-[7px] w-full", SHADE[cell.level])}
+                    key={cell?.day ?? `future-${index}-${day}`}
+                    title={cell ? `${cell.day} · ${count(cell.turns, "turn")}` : undefined}
+                    className={cx("rc-heat-cell rounded-xs", cell && SHADE[cell.level])}
+                    style={{ width: HEAT_CELL, height: HEAT_CELL }}
                   />
-                ) : (
-                  <span key={`future-${index}-${day}`} className="h-[7px] w-full" />
-                ),
-              )}
-            </div>
-          ))}
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       )}
-      <p className="shrink-0 truncate text-caption text-fg-muted" title={`Last ${HEATMAP_WEEKS} weeks`}>
-        {rows === undefined
-          ? "Reading what this computer recorded…"
-          : `${count(totalTurns, "turn")} · ${count(activeThreads, "thread")}`}
-      </p>
     </Card>
   );
 }
@@ -225,12 +289,22 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
 function RecentThreadsCard({ project }: { project: string }) {
   const sessions = useApp((s) => s.sessions);
   const threads = useMemo(() => projectThreads(sessions, project), [sessions, project]);
-  const shown = threads.slice(0, SHOWN_THREADS);
+  const shown = threads.slice(0, SHOWN_ROWS);
   const more = threads.length - shown.length;
   return (
-    <Card label="Recent threads" icon={History}>
+    <Card
+      label="Recent threads"
+      icon={History}
+      aside={
+        more > 0 ? (
+          <LabelNote title={`${count(more, "more thread", "more threads")} in the sidebar`}>
+            +{more}
+          </LabelNote>
+        ) : undefined
+      }
+    >
       {shown.length ? (
-        <div className="flex flex-1 flex-col gap-0.5">
+        <CardList>
           {shown.map((thread) => (
             <CardRow
               key={thread.id}
@@ -243,53 +317,99 @@ function RecentThreadsCard({ project }: { project: string }) {
               </span>
             </CardRow>
           ))}
-        </div>
+        </CardList>
       ) : (
         <Nothing>No threads in this project yet.</Nothing>
       )}
-      <span className="mt-auto shrink-0 text-caption text-fg-muted">
-        {more > 0 ? `${count(more, "more thread", "more threads")} in the sidebar` : "Open in the sidebar"}
-      </span>
     </Card>
   );
 }
 
-function UsageCard({ rows, models, since }: { rows?: UsageRow[]; models?: UsageRow[]; since: string }) {
-  const totals = useMemo(
-    () => sumRows((rows ?? []).filter((row) => (row.day ?? "") >= since)),
-    [rows, since],
+/** This month's spend against the month before, and thirty days of tokens as a line. */
+function SpendCard({
+  rows,
+  month,
+  twoMonths,
+  usageSince,
+}: {
+  rows?: UsageRow[];
+  /** By model since the month began, and since the month before began. */
+  month?: UsageRow[];
+  twoMonths?: UsageRow[];
+  usageSince: string;
+}) {
+  const spend = useMemo(
+    () =>
+      month && twoMonths
+        ? { now: costOfRows(month), before: costOfRows(previousRows(twoMonths, month)) }
+        : undefined,
+    [month, twoMonths],
   );
-  // The spend is read by model, so a harness that reports no cost (Codex) is priced at list price.
-  const cost = useMemo(() => (models ? costOfRows(models) : undefined), [models]);
-  const tokens = (totals.input ?? 0) + (totals.output ?? 0);
+  const { tokens, turns, series } = useMemo(() => {
+    const recent = (rows ?? []).filter((row) => (row.day ?? "") >= usageSince);
+    const perDay = new Map<string, number>();
+    for (const row of recent) {
+      if (!row.day) continue;
+      perDay.set(row.day, (perDay.get(row.day) ?? 0) + (row.input ?? 0) + (row.output ?? 0));
+    }
+    const now = new Date();
+    const totals = sumRows(recent);
+    return {
+      tokens: (totals.input ?? 0) + (totals.output ?? 0),
+      turns: totals.turns,
+      series: Array.from({ length: USAGE_DAYS }, (_, i) => perDay.get(daysAgo(now, USAGE_DAYS - 1 - i))),
+    };
+  }, [rows, usageSince]);
+  const change =
+    spend?.now.usd === undefined || spend.before.usd === undefined
+      ? undefined
+      : trend(spend.now.usd, spend.before.usd);
+  const path = sparklinePath(sparklineSeries(series), 100, 20);
   return (
-    <Card label="Usage" icon={Gauge}>
-      {rows === undefined ? (
-        <div className="flex flex-1 flex-col justify-end gap-1.5">
-          <Skeleton className="h-4 w-[60%]" />
-          <Skeleton className="h-3 w-[40%]" />
+    <Card
+      label="Spend"
+      icon={Gauge}
+      aside={change ? <TrendPill trend={change} compare="against the month before" /> : undefined}
+    >
+      {rows === undefined || !spend ? (
+        <div className="flex flex-1 flex-col justify-end gap-2">
+          <Skeleton className="h-5 w-[50%]" />
+          <Skeleton className="h-3 w-[70%]" />
         </div>
-      ) : totals.turns === 0 ? (
-        <div className="flex flex-1 items-center">
-          <Nothing>No usage recorded in {USAGE_DAYS} days.</Nothing>
-        </div>
+      ) : turns === 0 && spend.now.usd === undefined ? (
+        <Nothing>No usage recorded in {USAGE_DAYS} days.</Nothing>
       ) : (
-        <div className="flex flex-1 flex-col justify-end gap-0.5">
+        <div className="flex min-h-0 flex-1 flex-col justify-end">
+          <span className="flex items-baseline gap-1 truncate" title={costLine(spend.now)}>
+            <span className="font-semibold text-title3 text-fg tabular">{formatBestCost(spend.now)}</span>
+            <span className="text-caption text-fg-muted">this month</span>
+          </span>
           <span
-            className="truncate font-semibold text-title3 text-fg tabular"
-            title={`${tokens.toLocaleString()} input and output tokens`}
+            className="truncate text-caption text-fg-muted tabular"
+            title={`${tokens.toLocaleString()} input and output tokens in ${USAGE_DAYS} days`}
           >
-            {formatTokens(tokens)}
-            <span className="pl-1 font-normal text-caption text-fg-muted">tokens</span>
+            {formatTokens(tokens)} tokens · {count(turns, "turn")} in {USAGE_DAYS} days
           </span>
-          <span className="truncate text-callout text-fg-muted tabular" title={cost && costLine(cost)}>
-            {cost?.usd === undefined ? "spend unknown" : formatBestCost(cost)}
-          </span>
+          <svg
+            viewBox="0 0 100 20"
+            preserveAspectRatio="none"
+            aria-hidden
+            className="mt-1 h-5 w-full text-accent/60"
+          >
+            {path && (
+              <path
+                d={path}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </svg>
         </div>
       )}
-      <span className="shrink-0 text-caption text-fg-muted">
-        {rows === undefined ? "Last 30 days" : `${count(totals.turns, "turn")} in ${USAGE_DAYS} days`}
-      </span>
     </Card>
   );
 }
@@ -300,21 +420,23 @@ function NeedsYouCard() {
     const seen = new Set<string>();
     return items.filter((item) => !seen.has(item.threadId) && seen.add(item.threadId));
   }, [items]);
-  const shown = threads.slice(0, SHOWN_NEEDS);
+  const shown = threads.slice(0, SHOWN_ROWS);
   return (
     <Card
       label="Needs you"
       icon={Hand}
       aside={
-        threads.length ? (
-          <span className="rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular">
-            {threads.length}
-          </span>
-        ) : undefined
+        <LabelNote title="Open the inbox" onClick={() => setView({ kind: "inbox" })}>
+          {threads.length ? (
+            <span className="rounded-full bg-warning/14 px-2 font-medium text-warning">{threads.length}</span>
+          ) : (
+            "Inbox"
+          )}
+        </LabelNote>
       }
     >
       {shown.length ? (
-        <div className="flex flex-1 flex-col gap-0.5">
+        <CardList>
           {shown.map((item) => (
             <CardRow
               key={item.key}
@@ -323,24 +445,63 @@ function NeedsYouCard() {
             >
               <span className="size-1.5 shrink-0 rounded-full bg-warning" />
               <span className="min-w-0 flex-1 truncate text-fg">{item.title}</span>
-              <span className="max-w-[45%] shrink truncate text-caption text-fg-muted">{item.detail}</span>
             </CardRow>
           ))}
-        </div>
+        </CardList>
       ) : (
-        <div className="flex flex-1 items-center">
-          <Nothing>Nothing is waiting on you.</Nothing>
-        </div>
+        <Nothing>Nothing is waiting on you.</Nothing>
       )}
-      <button
-        type="button"
-        onClick={() => setView({ kind: "inbox" })}
-        className="mt-auto shrink-0 self-start text-caption text-fg-muted hover:text-fg"
-      >
-        {threads.length > shown.length
-          ? `${threads.length - shown.length} more in the inbox`
-          : "Open the inbox"}
-      </button>
+    </Card>
+  );
+}
+
+function RunningCard() {
+  const running = useApp((s) =>
+    Object.values(s.threads)
+      .filter(isRunning)
+      .map((thread) => `${thread.id}\t${thread.turn.startedAt}\t${thread.title ?? ""}`)
+      .join("\n"),
+  );
+  const sessions = useApp((s) => s.sessions);
+  const threads = useMemo(
+    () =>
+      running
+        ? running
+            .split("\n")
+            .map((line) => {
+              const [id = "", at = "0", title = ""] = line.split("\t");
+              const name = title || sessions.find((session) => session.id === id)?.title || "Untitled thread";
+              return { id, at: Number(at), title: name };
+            })
+            .sort((one, other) => other.at - one.at)
+        : [],
+    [running, sessions],
+  );
+  const shown = threads.slice(0, SHOWN_ROWS);
+  const more = threads.length - shown.length;
+  return (
+    <Card
+      label="Running now"
+      icon={Play}
+      aside={
+        more > 0 ? (
+          <LabelNote title={`${count(more, "more thread", "more threads")} running`}>+{more}</LabelNote>
+        ) : undefined
+      }
+    >
+      {shown.length ? (
+        <CardList>
+          {shown.map((thread) => (
+            <CardRow key={thread.id} onClick={() => selectThread(thread.id)} title={thread.title}>
+              <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+              <span className="min-w-0 flex-1 truncate text-fg">{thread.title}</span>
+              <span className="shrink-0 text-caption text-fg-muted tabular">{relativeAge(thread.at)}</span>
+            </CardRow>
+          ))}
+        </CardList>
+      ) : (
+        <Nothing>Nothing is running.</Nothing>
+      )}
     </Card>
   );
 }
@@ -378,44 +539,49 @@ function PullMark({ pull }: { pull: PullRequest }) {
 
 function PullsCard({ project }: { project: string }) {
   const available = useApp((s) => !!s.agent?.pullRequests);
-  // The cache's version: a project's read landing re-renders the rows that read it.
   useSyncExternalStore(subscribePulls, pullsVersion);
   useEffect(() => {
     if (!available || !project) return;
-    // `gh` is slow and a home screen is not worth waiting for: read once, a moment after it settles.
     const t = setTimeout(() => loadPulls(project), 400);
     return () => clearTimeout(t);
   }, [available, project]);
   const pulls = available ? cachedPulls(project) : undefined;
   const recent = useMemo(
-    () =>
-      [...(pulls ?? [])]
-        .sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0))
-        .slice(0, SHOWN_PULLS),
+    () => [...(pulls ?? [])].sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0)),
     [pulls],
   );
+  const shown = recent.slice(0, SHOWN_ROWS);
+  const more = recent.length - shown.length;
   return (
-    <Card label="Pull requests" icon={GitPullRequest}>
+    <Card
+      label="Pull requests"
+      icon={GitPullRequest}
+      aside={
+        more > 0 ? (
+          <LabelNote title="Open the pull requests panel" onClick={() => setPanel("pulls")}>
+            +{more}
+          </LabelNote>
+        ) : undefined
+      }
+    >
       {!project ? (
-        <div className="flex flex-1 items-center">
-          <Nothing>Choose a folder to see its pull requests.</Nothing>
-        </div>
+        <Nothing>Choose a folder to see its pull requests.</Nothing>
       ) : !available ? (
-        <div className="flex flex-1 flex-col gap-2">
-          <Nothing>Connect GitHub to see this project's pull requests.</Nothing>
+        <div className="flex flex-1 flex-col justify-center gap-2">
+          <p className="text-caption text-fg-muted">Connect GitHub to see this project's pull requests.</p>
           <Pill quiet size="sm" className="self-start" onClick={() => openSettings("connections")}>
             Connect GitHub
           </Pill>
         </div>
       ) : pulls === undefined ? (
-        <div className="flex flex-1 flex-col gap-2">
+        <div className="flex flex-1 flex-col justify-center gap-2">
           {[0, 1, 2].map((row) => (
             <Skeleton key={row} className="h-3 w-[75%]" />
           ))}
         </div>
-      ) : recent.length ? (
-        <div className="flex flex-1 flex-col gap-0.5">
-          {recent.map((pull) => (
+      ) : shown.length ? (
+        <CardList>
+          {shown.map((pull) => (
             <CardRow
               key={pull.number}
               title={pull.url ? `Open #${pull.number} on GitHub` : `#${pull.number} ${pull.title}`}
@@ -426,116 +592,18 @@ function PullsCard({ project }: { project: string }) {
               <span className="shrink-0 text-caption text-fg-muted tabular">#{pull.number}</span>
             </CardRow>
           ))}
-        </div>
+        </CardList>
       ) : (
         <Nothing>No pull requests in this project.</Nothing>
       )}
-      <span className="mt-auto shrink-0 text-caption text-fg-muted">
-        {recent.length
-          ? "Opens on GitHub"
-          : !project
-            ? "No folder chosen"
-            : available
-              ? "Read from this project's branches"
-              : "Settings › Connections"}
-      </span>
-    </Card>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  title,
-  change,
-}: {
-  label: string;
-  value: string;
-  title?: string;
-  change?: ReturnType<typeof trend>;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="shrink-0 text-callout text-fg-muted">{label}</span>
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate font-semibold text-body text-fg tabular" title={title}>
-          {value}
-        </span>
-        {change && <TrendPill trend={change} compare="against the month before" />}
-      </span>
-    </div>
-  );
-}
-
-function ThisMonthCard({
-  rows,
-  month,
-  twoMonths,
-  since,
-  previousSince,
-}: {
-  rows?: UsageRow[];
-  /** By model since the month began, and since the month before began. */
-  month?: UsageRow[];
-  twoMonths?: UsageRow[];
-  since: string;
-  previousSince: string;
-}) {
-  const spend = useMemo(
-    () =>
-      month && twoMonths
-        ? { now: costOfRows(month), before: costOfRows(previousRows(twoMonths, month)) }
-        : undefined,
-    [month, twoMonths],
-  );
-  const { thisMonth, lastMonth } = useMemo(() => {
-    const of = (rows ?? []).filter((row): row is UsageRow & { day: string } => !!row.day);
-    return {
-      thisMonth: sumRows(of.filter((row) => row.day >= since)),
-      lastMonth: sumRows(of.filter((row) => row.day >= previousSince && row.day < since)),
-    };
-  }, [rows, since, previousSince]);
-  const empty = thisMonth.turns === 0 && lastMonth.turns === 0;
-  return (
-    <Card label="This month" icon={CalendarDays}>
-      {rows === undefined ? (
-        <div className="flex flex-1 flex-col justify-center gap-2">
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-[70%]" />
-        </div>
-      ) : empty ? (
-        <div className="flex flex-1 items-center">
-          <Nothing>Nothing recorded this month.</Nothing>
-        </div>
-      ) : (
-        <div className="flex flex-1 flex-col justify-center gap-1.5">
-          <Metric
-            label="Turns"
-            value={String(thisMonth.turns)}
-            change={trend(thisMonth.turns, lastMonth.turns)}
-          />
-          <Metric
-            label="Spend"
-            value={spend ? formatBestCost(spend.now) : "…"}
-            title={spend && costLine(spend.now)}
-            change={
-              spend?.now.usd === undefined || spend.before.usd === undefined
-                ? undefined
-                : trend(spend.now.usd, spend.before.usd)
-            }
-          />
-        </div>
-      )}
-      <span className="shrink-0 text-caption text-fg-muted">Compared with last month</span>
     </Card>
   );
 }
 
 /**
- * The cards under a new thread's composer. One day-by-day usage read covers the
- * activity heatmap and the turn and token counts; three reads by model price the spend, a
- * harness's reported cost or the list-price estimate (`state/pricing.ts`); the thread and pull
- * lists come from what the sidebar already read.
+ * The cards under a new thread's composer. One day-by-day usage read covers the heatmap and the
+ * token line; two reads by model price the month's spend and the one before it, a harness's
+ * reported cost or the list-price estimate (`state/pricing.ts`).
  */
 export function NewThreadWidgets({ project }: { project: string }) {
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
@@ -543,8 +611,6 @@ export function NewThreadWidgets({ project }: { project: string }) {
   const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
   const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day", since });
   const rows = days.data?.rows;
-  // Spend is read by model as well, where a list price can stand in for a cost no harness reported.
-  const recent = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model", since: usageSince });
   const month = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model", since: monthSince });
   const twoMonths = useEngineData(Method.dataUsage, parseUsageReport, {
     groupBy: "model",
@@ -556,22 +622,21 @@ export function NewThreadWidgets({ project }: { project: string }) {
         return <ActivityCard rows={rows} since={since} />;
       case "threads":
         return <RecentThreadsCard project={project} />;
-      case "needs":
-        return <NeedsYouCard />;
-      case "usage":
-        return <UsageCard rows={rows} models={recent.data?.rows} since={usageSince} />;
-      case "pulls":
-        return <PullsCard project={project} />;
-      case "month":
+      case "spend":
         return (
-          <ThisMonthCard
+          <SpendCard
             rows={rows}
             month={month.data?.rows}
             twoMonths={twoMonths.data?.rows}
-            since={monthSince}
-            previousSince={previousSince}
+            usageSince={usageSince}
           />
         );
+      case "needs":
+        return <NeedsYouCard />;
+      case "pulls":
+        return <PullsCard project={project} />;
+      case "running":
+        return <RunningCard />;
     }
   };
   return <WidgetGrid render={render} />;

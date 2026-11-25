@@ -926,7 +926,7 @@ export function ChatView() {
                   // here would take the blur with it. The classes pick the motion their contents
                   // play (index.css, `rc-overview`).
                   className={cx(
-                    "min-h-0 w-full overflow-y-auto pb-3",
+                    "min-h-0 w-full snap-y snap-mandatory overflow-y-auto pb-3",
                     overviewLeaving ? "rc-overview-out" : "rc-overview-in",
                   )}
                   onAnimationEnd={(event) => {

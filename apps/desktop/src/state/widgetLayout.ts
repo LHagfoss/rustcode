@@ -7,7 +7,7 @@
 import { useSyncExternalStore } from "react";
 import { readStorage, writeStorage } from "../lib/storage";
 
-export const WIDGET_IDS = ["activity", "threads", "needs", "usage", "pulls", "month"] as const;
+export const WIDGET_IDS = ["activity", "threads", "spend", "needs", "pulls", "running"] as const;
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
 /** Columns of the overview's six-column grid a card may take. */
@@ -22,38 +22,41 @@ export interface WidgetSlot {
 export const WIDGET_NAMES: Record<WidgetId, string> = {
   activity: "Activity",
   threads: "Recent threads",
+  spend: "Spend",
   needs: "Needs you",
-  usage: "Usage",
   pulls: "Pull requests",
-  month: "This month",
+  running: "Running now",
 };
 
 export const WIDGET_BLURBS: Record<WidgetId, string> = {
   activity: "Turns per day and your streak",
   threads: "This project's latest threads",
+  spend: "This month's spend and 30 days of tokens",
   needs: "Approvals and questions waiting on you",
-  usage: "Tokens and spend over 30 days",
   pulls: "This project's pull requests",
-  month: "Turns and spend against last month",
+  running: "Threads with a turn running",
 };
 
 /** The span a card takes when it is added back. */
 const DEFAULT_SPAN: Record<WidgetId, WidgetSpan> = {
   activity: 3,
   threads: 3,
-  needs: 3,
-  usage: 2,
+  spend: 2,
+  needs: 2,
   pulls: 2,
-  month: 2,
+  running: 2,
 };
 
 export const DEFAULT_LAYOUT: readonly WidgetSlot[] = [
   { id: "activity", span: 3 },
   { id: "threads", span: 3 },
-  { id: "usage", span: 2 },
+  { id: "spend", span: 2 },
+  { id: "needs", span: 2 },
   { id: "pulls", span: 2 },
-  { id: "month", span: 2 },
 ];
+
+/** Cards an earlier version had, and the card that took their place. */
+const RENAMED: Record<string, WidgetId> = { usage: "spend", month: "spend" };
 
 const isWidgetId = (value: unknown): value is WidgetId => WIDGET_IDS.includes(value as WidgetId);
 const isSpan = (value: unknown): value is WidgetSpan => WIDGET_SPANS.includes(value as WidgetSpan);
@@ -67,11 +70,12 @@ export function parseLayout(raw: string | null): WidgetSlot[] {
     const seen = new Set<WidgetId>();
     const slots: WidgetSlot[] = [];
     for (const item of parsed) {
-      const id = (item as { id?: unknown })?.id;
+      const stored = (item as { id?: unknown })?.id;
+      const id = typeof stored === "string" ? (RENAMED[stored] ?? stored) : stored;
       if (!isWidgetId(id) || seen.has(id)) continue;
       seen.add(id);
       const span = (item as { span?: unknown }).span;
-      slots.push({ id, span: isSpan(span) ? span : DEFAULT_SPAN[id] });
+      slots.push({ id, span: isSpan(span) && id === stored ? span : DEFAULT_SPAN[id] });
     }
     return slots;
   } catch {

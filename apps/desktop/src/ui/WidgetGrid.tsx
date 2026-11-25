@@ -201,8 +201,9 @@ export function WidgetGrid({ render }: { render: (id: WidgetId) => ReactNode }) 
     const start = { x: event.clientX, y: event.clientY };
     let pointer = start;
     let moved = false;
+    const scroller = grid.current?.parentElement;
+    scroller?.style.setProperty("scroll-snap-type", "none");
     let frame = requestAnimationFrame(function edgeScroll() {
-      const scroller = grid.current?.parentElement;
       const box = scroller?.getBoundingClientRect();
       if (scroller && box && moved) {
         const above = box.top - pointer.y;
@@ -223,6 +224,7 @@ export function WidgetGrid({ render }: { render: (id: WidgetId) => ReactNode }) 
     };
     const end = () => {
       cancelAnimationFrame(frame);
+      scroller?.style.removeProperty("scroll-snap-type");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
@@ -302,7 +304,7 @@ function AddTray({ hidden, layout }: { hidden: WidgetId[]; layout: WidgetSlot[] 
   return (
     <section
       aria-label="Add cards"
-      className="flex w-[240px] shrink-0 flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3 lg:col-span-6 lg:w-auto"
+      className="flex w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3 lg:col-span-6 lg:w-auto"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-caption font-medium text-fg-muted">
