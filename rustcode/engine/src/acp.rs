@@ -801,6 +801,7 @@ impl AcpServer {
 
     /// The engine stops: every share, harness, turn and background task ends.
     async fn shutdown(&self) {
+        crate::sessions::flush_history();
         {
             let _updates = self
                 .client_capability_updates
