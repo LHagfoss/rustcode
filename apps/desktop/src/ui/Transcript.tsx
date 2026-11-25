@@ -20,7 +20,6 @@ import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
 import { checkpointsByMessage } from "../state/attempts";
 import { type Branch, branchesOf } from "../state/branches";
-import { statusReply } from "../state/delegateStatus";
 import {
   collapseNotices,
   collapseRepeats,
@@ -106,7 +105,9 @@ import { useStuckFold } from "./StuckFold";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
+import { paintMatches, searchable, selecting } from "./transcriptFind";
 import { estimatedRowHeight, rowGap } from "./transcriptHeight";
+import { useNow, useTurnSettle } from "./transcriptTiming";
 import { UpdatesRow } from "./UpdatesRow";
 
 export { estimatedRowHeight, rowGap } from "./transcriptHeight";
@@ -194,42 +195,6 @@ function rememberSize(key: string, size: number) {
 // A finished turn's summary never changes: computed once per footer row, not per streamed chunk.
 const completionCache = new WeakMap<TranscriptItem, TurnCompletion | null>();
 
-function useNow(active: boolean) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
-}
-
-/** How long the finished turn's live header holds its check before the fold replaces it. */
-const TURN_SETTLE_MS = 400;
-
-/**
- * The turn that just completed: its footer's id, for a moment after `running` falls and a new
- * footer appears, so its live header can settle on a check instead of vanishing. A thread switch,
- * the next turn, or a stop that added no footer clears it.
- */
-function useTurnSettle(threadId: string, running: boolean, endId: string | undefined): string | undefined {
-  const [settling, setSettling] = useState<string | undefined>(undefined);
-  const before = useRef({ threadId, running, endId });
-  useLayoutEffect(() => {
-    const previous = before.current;
-    before.current = { threadId, running, endId };
-    if (previous.threadId !== threadId || running) {
-      setSettling(undefined);
-      return;
-    }
-    if (!previous.running || !endId || endId === previous.endId) return;
-    setSettling(endId);
-    const timer = setTimeout(() => setSettling(undefined), TURN_SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [threadId, running, endId]);
-  return settling;
-}
-
 /**
  * The height a row starts at, before it is measured. `hidden` rows (a turn footer that renders
  * nothing) take no room: nothing mounts to measure them, so an estimate above zero would push every
@@ -275,57 +240,6 @@ export function queueRows(thread: ThreadState, links: readonly Link[]): Row[] {
   // Rows a steer just took keep the stack's place while they glide up toward the transcript.
   for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
   return out;
-}
-
-/** Whether the reader has text marked: following the stream would scroll it away. */
-function selecting(): boolean {
-  const s = window.getSelection();
-  return !!s && s.rangeCount > 0 && !s.isCollapsed;
-}
-
-function searchable(item: TranscriptItem): string {
-  switch (item.kind) {
-    case "user":
-    case "assistant":
-    case "thought":
-    case "notice":
-      return item.text;
-    case "status":
-      return statusReply(item.rows);
-    case "question":
-      return `${item.header ?? ""} ${item.text} ${item.answer}`;
-    case "tool":
-      return `${item.title} ${item.summary ?? ""} ${item.detail ?? ""} ${item.output ?? ""}`;
-    default:
-      return "";
-  }
-}
-
-/** Marks every visible occurrence of `query` with the CSS highlight `rc-find` (current one: `rc-find-current`). */
-function paintMatches(root: HTMLElement | null, query: string, current: HTMLElement | null) {
-  const highlights = (globalThis.CSS as unknown as { highlights?: Map<string, unknown> })?.highlights;
-  const HighlightCtor = (globalThis as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
-  if (!highlights || !HighlightCtor) return;
-  highlights.delete("rc-find");
-  highlights.delete("rc-find-current");
-  if (!root || !query) return;
-  const all: Range[] = [];
-  const mine: Range[] = [];
-  const needle = query.toLowerCase();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.nodeValue?.toLowerCase() ?? "";
-    let at = text.indexOf(needle);
-    while (at >= 0) {
-      const range = document.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + needle.length);
-      (current?.contains(node) ? mine : all).push(range);
-      at = text.indexOf(needle, at + needle.length);
-    }
-  }
-  highlights.set("rc-find", new HighlightCtor(...all));
-  highlights.set("rc-find-current", new HighlightCtor(...mine));
 }
 
 /**
