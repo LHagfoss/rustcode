@@ -19,7 +19,7 @@ import {
   setLoopPaused,
 } from "../state/loops";
 import { selfName, useLocalIdentity, useMachines } from "../state/machines";
-import { openSettings } from "../state/store";
+import { openSettings, setHarnessEnabled } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import {
   ArrowUpRight,
@@ -138,6 +138,7 @@ export function JobCard({
   loop,
   now,
   agent,
+  offHarness,
   machineLabel,
   onOpen,
   onEdit,
@@ -148,6 +149,8 @@ export function JobCard({
   loop: Loop;
   now: number;
   agent: string;
+  /** The job's harness when it is turned off on this computer: the card offers to turn it on. */
+  offHarness?: { id: string; name: string };
   /** Shown in the footer when the network has more than one machine, or for hub-dispatched jobs. */
   machineLabel?: string;
   onOpen: () => void;
@@ -161,7 +164,8 @@ export function JobCard({
   const localName = local.displayName ?? selfName();
   const state = loopState(loop);
   const running = state === "running";
-  const reason = pauseReason(loop);
+  const paused = pauseReason(loop);
+  const reason = paused ?? (offHarness && `${offHarness.name} is turned off, so this job cannot run`);
   const result = lastResult(loop, now);
   const latest = loop.runs[0];
   const lastThread = running ? undefined : runThreadKey(loop, latest, machines, localName);
@@ -172,6 +176,11 @@ export function JobCard({
   const promptPreview = loop.prompt.trim();
   const togglePause = () =>
     act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused, loop.host));
+  const turnOn = (harness: { id: string; name: string }) =>
+    act(`Turned on ${harness.name}`, async () => {
+      if (!(await setHarnessEnabled(harness.id, true))) throw new Error(`Could not turn on ${harness.name}`);
+      if (paused) await setLoopPaused(loop.id, false, loop.host);
+    });
 
   return (
     <li
@@ -274,7 +283,11 @@ export function JobCard({
           <p title={reason} className="line-clamp-2 min-w-0 flex-1 text-callout text-danger">
             {reason}
           </p>
-          {latest?.signedOut ? (
+          {offHarness ? (
+            <Pill size="sm" onClick={() => turnOn(offHarness)}>
+              Turn on
+            </Pill>
+          ) : latest?.signedOut ? (
             <Pill size="sm" onClick={() => openSettings("agents")}>
               Sign in
             </Pill>
