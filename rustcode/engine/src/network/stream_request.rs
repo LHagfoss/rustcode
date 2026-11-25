@@ -2703,6 +2703,7 @@ async fn stream_request_with_timeouts(
                     recorder.headers(code);
                 }
                 stream_trace.response_headers(code);
+                let server_wait = retry::server_wait(resp.headers(), chrono::Utc::now());
                 let err_body = match retry::race_cancellable(resp.text(), &cancel_token).await {
                     None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
                     Some(body) => body.unwrap_or_default(),
@@ -2741,16 +2742,19 @@ async fn stream_request_with_timeouts(
                     drop(attempt_recorder.take());
                     continue;
                 }
-                if !chatgpt_plan && retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES
+                if !chatgpt_plan
+                    && retry::is_retryable_status(code)
+                    && attempt < retry::MAX_RETRIES
+                    && let Ok(delay) = retry::delay_with_server_wait(attempt, code, server_wait)
                 {
-                    let delay = retry::delay_for_attempt(attempt, code);
                     crate::dbg_log_for_session!(
                         request_session_id,
-                        "stream_request: retryable status {} (attempt {}/{}), backing off {}ms",
+                        "stream_request: retryable status {} (attempt {}/{}), backing off {}ms (provider asked {:?})",
                         status,
                         attempt + 1,
                         retry::MAX_RETRIES,
-                        delay.as_millis()
+                        delay.as_millis(),
+                        server_wait
                     );
                     drop(attempt_recorder.take());
                     if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
@@ -2773,6 +2777,8 @@ async fn stream_request_with_timeouts(
                     status: Some(code),
                     detail: Some(if copilot {
                         match code { 401 => "Copilot rejected the GitHub credential; reconnect with /login github-copilot new (refresh gh auth login first for CLI credentials).".into(), 403 => "Copilot access or this model is disabled; check your plan and organization policy, then /refresh github-copilot.".into(), 404 => "Copilot no longer offers this model endpoint; /refresh github-copilot and select an available model.".into(), _ => err_body }
+                    } else if let Some(note) = retry::server_wait_note(server_wait) {
+                        format!("{err_body}\n\n{note}")
                     } else {
                         err_body
                     }),
