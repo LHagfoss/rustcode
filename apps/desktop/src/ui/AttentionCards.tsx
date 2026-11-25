@@ -160,10 +160,13 @@ function ApprovalActions({
   request,
   pending = 1,
   answers,
+  keys = true,
 }: {
   request: PermissionRequest;
   pending?: number;
   answers: ReturnType<typeof useApproval>;
+  /** Whether these buttons answer the keys: a later approval's buttons are answered by click only. */
+  keys?: boolean;
 }) {
   const { options, pick, decline, allow, hour, always, other, plan } = answers;
   const grants = [hour, always].filter((o): o is PermissionOption => !!o);
@@ -184,14 +187,14 @@ function ApprovalActions({
               <DropdownMenu.Item onSelect={() => pick(options.indexOf(hour))} className={menuItem}>
                 <Clock size={13} className="shrink-0 text-fg-muted" />
                 <span className="min-w-0 flex-1">1 hour</span>
-                <MenuShortcut>{digit(hour)}</MenuShortcut>
+                {keys && <MenuShortcut>{digit(hour)}</MenuShortcut>}
               </DropdownMenu.Item>
             )}
             {always && (
               <DropdownMenu.Item onSelect={() => pick(options.indexOf(always))} className={menuItem}>
                 <CheckCheck size={13} className="shrink-0 text-fg-muted" />
                 <span className="min-w-0 flex-1">Always allow</span>
-                <MenuShortcut>{digit(always)}</MenuShortcut>
+                {keys && <MenuShortcut>{digit(always)}</MenuShortcut>}
               </DropdownMenu.Item>
             )}
             {grants.length > 0 && (other.length > 0 || pending > 1) && (
@@ -200,7 +203,7 @@ function ApprovalActions({
             {other.map((o) => (
               <DropdownMenu.Item key={o.id} onSelect={() => pick(options.indexOf(o))} className={menuItem}>
                 <span className="min-w-0 flex-1 break-words">{o.name}</span>
-                <MenuShortcut>{digit(o)}</MenuShortcut>
+                {keys && <MenuShortcut>{digit(o)}</MenuShortcut>}
               </DropdownMenu.Item>
             ))}
             {pending > 1 && (
@@ -212,16 +215,16 @@ function ApprovalActions({
         </DropdownMenu.Root>
       )}
       {decline && (
-        <Tooltip label={`${decline.name} (${digit(decline)})`}>
+        <Tooltip label={keys ? `${decline.name} (${digit(decline)})` : decline.name}>
           <Pill size="sm" onClick={() => pick(options.indexOf(decline))}>
-            {plan ? "Keep planning" : "Decline"} <Kbd>esc</Kbd>
+            {plan ? "Keep planning" : "Decline"} {keys && <Kbd>esc</Kbd>}
           </Pill>
         </Tooltip>
       )}
       {allow && (
-        <Tooltip label={`${allow.name} (${digit(allow)})`}>
+        <Tooltip label={keys ? `${allow.name} (${digit(allow)})` : allow.name}>
           <Pill size="sm" prominent onClick={() => pick(options.indexOf(allow))}>
-            {plan ? "Build" : "Approve"} <Kbd>⏎</Kbd>
+            {plan ? "Build" : "Approve"} {keys && <Kbd>⏎</Kbd>}
           </Pill>
         </Tooltip>
       )}
@@ -346,7 +349,7 @@ export function ApprovalRow({
         </div>
         {!inBar && (
           <div className="ml-[26px] flex items-center gap-1.5">
-            <ApprovalActions request={request} pending={pending} answers={answers} />
+            <ApprovalActions request={request} pending={pending} answers={answers} keys={false} />
           </div>
         )}
       </div>
@@ -363,9 +366,11 @@ export function ApprovalRow({
         </span>
         <span className="shrink-0 font-medium text-body text-warning">Waiting for approval</span>
         <RiskBadge risk={risk} />
-        <span className="min-w-0 truncate font-mono text-callout text-fg-muted" title={request.title}>
-          {approvalSubject(request)}
-        </span>
+        {!showBody && (
+          <span className="min-w-0 truncate font-mono text-callout text-fg-muted" title={request.title}>
+            {approvalSubject(request)}
+          </span>
+        )}
         {pending > 1 && (
           <span className="shrink-0 text-caption text-fg-muted tabular">
             {number} of {pending}
@@ -394,7 +399,7 @@ export function ApprovalRow({
       )}
       {!inBar && (
         <div className="ml-[26px] flex items-center gap-1.5">
-          <ApprovalActions request={request} pending={pending} answers={answers} />
+          <ApprovalActions request={request} pending={pending} answers={answers} keys={false} />
         </div>
       )}
     </div>
