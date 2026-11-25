@@ -176,6 +176,21 @@ calls matched to their answers anyway.
 `timed_out`, `cancelled`), 20 unless `workflow-kept-runs` says otherwise; when
 a run starts, older settled runs' folders are removed. A run still `running` is never removed, since it may be resumed.
 
+**Who drives a run.** One engine process drives a run at a time, and stamps
+the run's `driver.json` every 10 seconds with its owner id (the one delegate
+links carry). A stamp younger than 45 seconds from another process means that
+process drives it, so the app's engine and the background server, which share
+one config folder, never drive the same run; a resume while it does is refused.
+`<config>/workflows/running/<run id>` names the thread of every run still
+`running`, so an engine finds them without reading every thread (#4387).
+
+**When the engine starts** it looks at those runs, then again every minute, and
+takes up each one no live process drives whose starting thread is at Full
+access, through its own orchestration answers, with no app and without the
+thread being opened. A run of a thread below Full access waits for its thread
+as before. After a sleep or a clock jump nothing is taken up until the next
+look.
+
 **When a run resumes.** The engine resumes the runs a thread left `running`
 when that thread registers with the engine's orchestrator hub (the thread is
 opened or started on a harness with the orchestration tools). Until then
