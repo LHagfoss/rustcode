@@ -987,7 +987,7 @@ fn record_in(dir: &Path, config_dir: Option<&Path>, usage: &ClaudeUsage) {
     history.logins.insert(key, record);
     if let Ok(text) = serde_json::to_string(&history) {
         let _ = std::fs::create_dir_all(dir);
-        let _ = crate::worktrees::write_atomic(&history_path(dir), text.as_bytes());
+        let _ = crate::atomic_file::write_atomic(&history_path(dir), text.as_bytes());
     }
 }
 

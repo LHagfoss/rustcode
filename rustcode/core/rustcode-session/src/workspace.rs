@@ -1224,19 +1224,10 @@ fn stable_hash(value: &str) -> u64 {
 }
 
 fn write_descriptor(descriptor: &WorkspaceDescriptor) -> Result<(), WorkspaceError> {
-    if let Some(parent) = descriptor.descriptor_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_string_pretty(descriptor)
         .map_err(|error| WorkspaceError::Json(error.to_string()))?;
-    let temporary = descriptor
-        .descriptor_path
-        .with_extension(format!("json.tmp-{}", std::process::id()));
-    fs::write(&temporary, json)?;
-    fs::rename(&temporary, &descriptor.descriptor_path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        WorkspaceError::Io(error.to_string())
-    })
+    crate::write_atomic(&descriptor.descriptor_path, json.as_bytes())
+        .map_err(|error| WorkspaceError::Io(error.to_string()))
 }
 
 fn git_error(output: &Output) -> String {

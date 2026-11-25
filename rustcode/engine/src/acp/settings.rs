@@ -229,17 +229,9 @@ fn value_matches(kind: SettingType, value: &Value) -> bool {
 }
 
 fn write_file(path: &Path, file: &SettingsFile) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
-    }
     let text = serde_json::to_string_pretty(file)
         .map_err(|error| format!("could not serialize settings: {error}"))?;
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, text.as_bytes())
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    crate::atomic_file::replace_file(&temporary, path)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    crate::atomic_file::write_described(path, text.as_bytes())
 }
 
 /// Answer `_rustcode/settings/get`: the requested keys, with each registry

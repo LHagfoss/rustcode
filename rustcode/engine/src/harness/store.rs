@@ -89,16 +89,10 @@ pub(crate) fn save(session_id: &str, record: &HarnessRecord) {
     let Some(path) = record_path(session_id) else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let Ok(text) = serde_json::to_string_pretty(record) else {
         return;
     };
-    let temporary = path.with_extension("json.tmp");
-    if std::fs::write(&temporary, text).is_ok() && std::fs::rename(&temporary, &path).is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
+    let _ = crate::atomic_file::write_atomic(&path, text.as_bytes());
 }
 
 pub(crate) fn remove(session_id: &str) {

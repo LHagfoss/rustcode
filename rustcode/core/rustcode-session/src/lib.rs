@@ -68,8 +68,13 @@ pub fn is_scratch_session_id(session_id: &str) -> bool {
     })
 }
 
+pub mod atomic_file;
+#[cfg(test)]
+mod history_write_tests;
 mod search;
 mod workspace;
+
+pub use atomic_file::{replace_file, write_atomic};
 pub use search::SessionSearchHit;
 pub use workspace::*;
 
@@ -541,19 +546,50 @@ pub fn write_history_file(path: &Path, history: &[ChatMessage]) {
 }
 
 fn write_history_file_unguarded(path: &Path, history: &[ChatMessage]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let Ok(json_str) = serde_json::to_string(history) else {
-        return;
-    };
-    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
-    if std::fs::write(&tmp, json_str).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return;
-    }
-    if std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let written = serde_json::to_vec(history)
+        .map_err(std::io::Error::other)
+        .and_then(|json| write_atomic(path, &json));
+    report_history_write(path, written);
+}
+
+/// Called once when a history file stops being written, with the path and
+/// why, and not again for that path until a write of it succeeds.
+pub type HistoryWriteFailureHook = fn(&Path, &std::io::Error);
+
+static HISTORY_WRITE_FAILURE_HOOK: OnceLock<HistoryWriteFailureHook> = OnceLock::new();
+
+/// Report history files that cannot be written (a full disk, a read-only
+/// folder) through `hook` as well as on standard error. The first call wins.
+pub fn on_history_write_failure(hook: HistoryWriteFailureHook) {
+    let _ = HISTORY_WRITE_FAILURE_HOOK.set(hook);
+}
+
+fn failing_histories() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static FAILING: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    FAILING.get_or_init(Default::default)
+}
+
+/// Whether the last write of `path` failed.
+pub fn history_write_failing(path: &Path) -> bool {
+    lock(failing_histories()).contains(path)
+}
+
+fn report_history_write(path: &Path, written: std::io::Result<()>) {
+    let mut failing = lock(failing_histories());
+    match written {
+        Ok(()) => {
+            failing.remove(path);
+        }
+        Err(error) => {
+            if !failing.insert(path.to_path_buf()) {
+                return;
+            }
+            drop(failing);
+            eprintln!("{}: history not saved: {error}", path.display());
+            if let Some(hook) = HISTORY_WRITE_FAILURE_HOOK.get() {
+                hook(path, &error);
+            }
+        }
     }
 }
 
@@ -1013,7 +1049,7 @@ impl SessionStore {
         let Ok(json) = serde_json::to_string_pretty(&metadata) else {
             return;
         };
-        let _ = std::fs::write(path, json);
+        let _ = write_atomic(&path, json.as_bytes());
     }
 
     fn history_path_for_id(&self, session_id: &str) -> PathBuf {
@@ -1224,7 +1260,7 @@ impl SessionStore {
 
     pub fn save_session_title(&self, session_id: &str, title: &str) {
         let session_dir = self.ensure_session(session_id);
-        let _ = std::fs::write(session_dir.join("title.txt"), title);
+        let _ = write_atomic(&session_dir.join("title.txt"), title.as_bytes());
     }
 
     /// Persist the deterministic title derived from the first user prompt only
@@ -1262,7 +1298,7 @@ impl SessionStore {
         }
         let session_dir = self.ensure_session(session_id);
         if let Ok(json) = serde_json::to_string_pretty(cache) {
-            let _ = std::fs::write(session_dir.join(IMAGE_CACHE_FILE), json);
+            let _ = write_atomic(&session_dir.join(IMAGE_CACHE_FILE), json.as_bytes());
         }
     }
 
@@ -1276,7 +1312,7 @@ impl SessionStore {
     pub fn save_segment_checkpoint<T: Serialize>(&self, session_id: &str, checkpoint: &T) {
         let session_dir = self.ensure_session(session_id);
         if let Ok(json) = serde_json::to_string_pretty(checkpoint) {
-            let _ = std::fs::write(session_dir.join(SEGMENT_CHECKPOINT_FILE), json);
+            let _ = write_atomic(&session_dir.join(SEGMENT_CHECKPOINT_FILE), json.as_bytes());
         }
     }
 
@@ -1384,7 +1420,7 @@ impl SessionStore {
         let session_dir = self.ensure_session(&next_session_id());
         let path = session_dir.join(HISTORY_FILE);
         let json = serde_json::to_string_pretty(history).ok()?;
-        std::fs::write(&path, json).ok()?;
+        write_atomic(&path, json.as_bytes()).ok()?;
         Some(path)
     }
 
@@ -1521,11 +1557,8 @@ impl SessionStore {
             ));
         }
         let directory = self.ensure_session(session_id);
-        let path = directory.join(SESSION_WORKSPACE_FILE);
-        let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
         let contents = serde_json::to_vec(workspace).map_err(std::io::Error::other)?;
-        std::fs::write(&temporary, contents)?;
-        std::fs::rename(temporary, path)
+        write_atomic(&directory.join(SESSION_WORKSPACE_FILE), &contents)
     }
 
     pub fn load_session_workspace(&self, session_id: &str) -> Option<SessionWorkspace> {
@@ -1710,11 +1743,8 @@ impl SessionStore {
         if !update(&mut metadata) {
             return Ok(());
         }
-        let path = directory.join(SESSION_METADATA_FILE);
-        let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
         let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
-        std::fs::write(&temporary, contents)?;
-        std::fs::rename(temporary, path)
+        write_atomic(&directory.join(SESSION_METADATA_FILE), &contents)
     }
 
     /// The session's recorded YOLO setting, if it was ever set.
