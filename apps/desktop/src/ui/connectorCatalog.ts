@@ -1,7 +1,8 @@
 /**
- * Settings › Connections › Apps: hosted MCP servers that sign in with OAuth (each advertises
- * dynamic client registration, so the engine's browser login works with no client id), and a few
- * that need no sign-in. Connecting one adds it as an `http` MCP server in the user config.
+ * Settings › Connections › Apps: hosted MCP servers that sign in with OAuth (the engine registers
+ * a client, or identifies as RustCode's client metadata document where a server such as Vercel
+ * accepts only that, so no client id is needed), and a few that need no sign-in. Connecting one
+ * adds it as an `http` MCP server in the user config.
  */
 
 export type ConnectorCategory = "work" | "dev" | "design" | "commerce" | "docs";

@@ -19,7 +19,8 @@ import { Search } from "./icons";
 import { cx, noTextHelpers, Segments, Spinner } from "./primitives";
 import { Action, Chip, fieldClass, SectionTitle } from "./settingsKit";
 
-type Busy = { id: string; step: "adding" | "signing-in" } | null;
+type Step = "adding" | "signing-in" | "removing";
+type Busy = { id: string; step: Step } | null;
 
 /**
  * Settings › Connections › Apps: a gallery of hosted MCP servers. Connect adds one to this
@@ -97,6 +98,18 @@ export function ConnectorGallery() {
     }
   };
 
+  const remove = async (connector: Connector, server: McpServer) => {
+    setBusy({ id: connector.id, step: "removing" });
+    try {
+      await request(Method.mcpRemove, { name: server.name }, 15_000);
+      toast(`${connector.name} was removed.`, "info");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const reconnect = async (connector: Connector, server: McpServer) => {
     try {
       await signIn(connector, server.name);
@@ -107,9 +120,14 @@ export function ConnectorGallery() {
     }
   };
 
-  const shown = CONNECTORS.filter(
-    (c) => (category === "all" || c.category === category) && matchesConnector(c, query),
+  const servers = data?.mcpServers ?? [];
+  const shown = sortConnected(
+    CONNECTORS.filter((c) => (category === "all" || c.category === category) && matchesConnector(c, query)),
+    servers,
   );
+  const connectedCount = CONNECTORS.filter(
+    (c) => configuredAs(c, servers)?.connection === "connected",
+  ).length;
   return (
     <section className="mb-6" data-setting="Apps">
       <SectionTitle
@@ -123,6 +141,7 @@ export function ConnectorGallery() {
       <p className="mb-3 max-w-[70ch] px-4 text-callout text-fg-muted">
         Connect an app to give every thread its tools. Sign-ins open in your browser and stay on this
         computer.
+        {connectedCount > 0 ? ` ${connectedCount} connected.` : ""}
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2 px-1">
         <label
@@ -157,6 +176,7 @@ export function ConnectorGallery() {
               disabled={busy !== null && busy.id !== connector.id}
               onConnect={() => void connect(connector)}
               onSignIn={(server) => void reconnect(connector, server)}
+              onRemove={(server) => void remove(connector, server)}
             />
           ))}
         </ul>
@@ -173,42 +193,65 @@ function ConnectorCard({
   disabled,
   onConnect,
   onSignIn,
+  onRemove,
 }: {
   connector: Connector;
   server: McpServer | undefined;
   loading: boolean;
-  busy: "adding" | "signing-in" | null;
+  busy: Step | null;
   disabled: boolean;
   onConnect: () => void;
   onSignIn: (server: McpServer) => void;
+  onRemove: (server: McpServer) => void;
 }) {
-  const connected = server?.connection === "connected";
-  const needsSignIn = server && !connected && server.enabled && server.auth === "signed_out";
+  const state = cardState(server);
+  const status = busy ? BUSY_TEXT[busy] : cardStatus(connector, server, state);
+  const problem = !busy && state !== "connected" && Boolean(server?.error);
   return (
-    <li className="flex min-h-[68px] items-center gap-3 rounded-xl bg-surface px-3 py-2">
+    <li
+      className={cx(
+        "flex min-h-[68px] items-center gap-3 rounded-xl px-3 py-2",
+        state === "connected" ? "bg-success/6" : state === "failed" ? "bg-danger/6" : "bg-surface",
+      )}
+      data-connector={connector.id}
+      data-state={busy ?? state}
+    >
       <ConnectorLogo connector={connector} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium text-body">{connector.name}</span>
-        <span className="block truncate text-caption text-fg-muted">
-          {busy === "signing-in"
-            ? "Waiting for the browser sign-in…"
-            : busy === "adding"
-              ? "Adding…"
-              : connected && server
-                ? `${server.toolCount} tool${server.toolCount === 1 ? "" : "s"}${server.auth === "signed_in" ? " · Signed in" : ""}`
-                : connector.description}
+        <span className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-body">{connector.name}</span>
+          {state === "connected" && !busy ? (
+            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-success" />
+          ) : null}
+        </span>
+        <span
+          title={problem ? server?.error : undefined}
+          className={cx("block truncate text-caption", problem ? "text-danger" : "text-fg-muted")}
+        >
+          {status}
         </span>
       </span>
       {busy ? (
         <Spinner size={14} />
-      ) : connected ? (
+      ) : state === "connected" ? (
         <Chip tone="ok">Connected</Chip>
-      ) : needsSignIn ? (
+      ) : state === "signed-out" && server ? (
         <Action size="sm" disabled={disabled} onClick={() => onSignIn(server)}>
           Sign in
         </Action>
-      ) : server ? (
-        <Chip tone={server.enabled ? "warn" : "idle"}>{server.enabled ? "Not connected" : "Off"}</Chip>
+      ) : state === "failed" && server ? (
+        <span className="flex shrink-0 items-center gap-1">
+          <Action size="sm" quiet disabled={disabled} onClick={() => onRemove(server)}>
+            Remove
+          </Action>
+          <Action size="sm" disabled={disabled} onClick={() => onSignIn(server)}>
+            Retry
+          </Action>
+        </span>
+      ) : state === "off" ? (
+        <Chip tone="idle">Off</Chip>
+      ) : state === "starting" ? (
+        <Chip tone="warn">Starting</Chip>
       ) : (
         <Action size="sm" disabled={loading || disabled} onClick={onConnect}>
           {connector.signIn ? "Connect" : "Add"}
@@ -216,6 +259,67 @@ function ConnectorCard({
       )}
     </li>
   );
+}
+
+type CardState = "available" | "connected" | "signed-out" | "failed" | "off" | "starting";
+
+const BUSY_TEXT: Record<Step, string> = {
+  adding: "Adding…",
+  "signing-in": "Waiting for the browser sign-in…",
+  removing: "Removing…",
+};
+
+/** Where a catalog app stands on this computer, from its configured server (if any). */
+export function cardState(server: McpServer | undefined): CardState {
+  if (!server) return "available";
+  if (server.connection === "connected") return "connected";
+  if (!server.enabled) return "off";
+  if (server.auth === "signed_out") return "signed-out";
+  if (server.error || server.connection === "failed") return "failed";
+  return "starting";
+}
+
+function cardStatus(connector: Connector, server: McpServer | undefined, state: CardState): string {
+  if (!server) return connector.description;
+  switch (state) {
+    case "connected":
+      return `${server.toolCount} tool${server.toolCount === 1 ? "" : "s"}${server.auth === "signed_in" ? " · Signed in" : ""}`;
+    case "failed":
+      return server.error ? firstLine(server.error) : "Could not connect";
+    case "signed-out":
+      return server.error ? firstLine(server.error) : "Sign in to finish connecting";
+    case "off":
+      return "Turned off in Manage servers";
+    default:
+      return "Connecting…";
+  }
+}
+
+/** The reason, without the engine's `MCP OAuth for '<name>':` prefix the card already shows. */
+export const firstLine = (text: string) => {
+  const line = text.split("\n")[0]?.trim() || text;
+  return line.replace(/^MCP (?:OAuth )?for '[^']*':\s*/, "");
+};
+
+const RANK: Record<CardState, number> = {
+  connected: 0,
+  "signed-out": 1,
+  failed: 1,
+  starting: 1,
+  off: 2,
+  available: 3,
+};
+
+/** Apps already set up on this computer first, then the rest in catalog order. */
+function sortConnected(connectors: Connector[], servers: readonly McpServer[]): Connector[] {
+  return connectors
+    .map((connector, index) => ({
+      connector,
+      index,
+      rank: RANK[cardState(configuredAs(connector, servers))],
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.connector);
 }
 
 function ConnectorLogo({ connector }: { connector: Connector }) {
