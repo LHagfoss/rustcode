@@ -1636,7 +1636,11 @@ composer's keys stay outside the table.
   (`_rustcode/pulls/review`) Drafts belong to the source they were written on and
   are kept in app storage per thread and source (`state/reviewDrafts.ts`), so
   leaving the screen or reloading keeps them; a source with drafts shows
-  their count on its segment, and *Discard* offers Undo.
+  their count on its segment, and *Discard* offers Undo. A file's *Viewed* box
+  (or V) marks it read, folds it and moves to the next unread file; the file
+  list says "2 of 5 viewed", J and K step between files, and a mark keeps the
+  hash of the patch it was read on, so a file the agent changes again drops
+  its mark and shows a dot (`state/reviewViewed.ts`).
 - **Visualizations.** `rustcode-viz` blocks are drawn natively
   (`src/ui/Viz.tsx`): bar chart, table (sortable), tree, line chart (hover),
   stat list and checklist, with the limits and source fallback of
