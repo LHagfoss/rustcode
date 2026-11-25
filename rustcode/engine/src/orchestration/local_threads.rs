@@ -206,6 +206,12 @@ impl Access {
     }
 }
 
+/// Whether `session_id` may start delegate threads with no app to approve
+/// them: only at Full access (`delegation`).
+pub(crate) fn starts_threads_without_app(session_id: &str) -> bool {
+    access_of(session_id) == Access::Full
+}
+
 /// The access a thread runs at, from the records the engine keeps: the access
 /// of its last prompt (`sessions::save_session_access`), else its own `/yolo`,
 /// else Settings › General › Default access, which the app seeds into
