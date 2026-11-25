@@ -173,7 +173,7 @@ export function baseActions(): PaletteAction[] {
     {
       id: "board",
       label: s.view.kind === "board" ? "Show the chat" : "Show the board",
-      detail: "Running, Needs input, Review, Settled",
+      detail: "Running, Needs you, Review, Settled",
       icon: Columns3,
       words: "kanban status view list",
       run: () => setView(s.view.kind === "board" ? { kind: "chat" } : { kind: "board" }),
