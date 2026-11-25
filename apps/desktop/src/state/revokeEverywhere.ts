@@ -1,7 +1,3 @@
-// Revoke everywhere: when a computer is lost, end its pairings on this computer and on every
-// machine this one is connected to, then forget it here (docs/remote-security.md › Credential
-// storage and revocation). A machine that is offline is asked the next time the fleet syncs.
-
 import { create } from "zustand";
 import type { AcpConnection, Json } from "../acp/jsonrpc";
 import { obj } from "../acp/jsonrpc";
