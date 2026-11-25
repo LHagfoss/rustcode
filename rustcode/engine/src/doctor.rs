@@ -199,9 +199,9 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     // Config load.
     let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let (api_base, model_name, _) = crate::config::load_config_for_workspace(&workspace);
-    checks.push(DoctorCheck::pass(
-        "config-load",
-        format!("model={model_name} base={api_base}"),
+    checks.extend(config_load_checks(
+        &crate::config::config_load_issues(Some(&workspace)),
+        &format!("model={model_name} base={api_base}"),
     ));
 
     // Provider API keys: report *where* each key resolved from so
@@ -293,6 +293,35 @@ pub fn format_report(checks: &[DoctorCheck]) -> String {
     out
 }
 
+/// The config rows: `config-load` fails when the user config could not be
+/// read (the engine then runs on built-in defaults), and each project file
+/// that could not be read gets a `project-config` row of its own.
+fn config_load_checks(issues: &[crate::config::ConfigLoadIssue], loaded: &str) -> Vec<DoctorCheck> {
+    let hint = |issue: &crate::config::ConfigLoadIssue| {
+        Some(format!(
+            "fix that line in {}, or move the file aside to start from defaults",
+            issue.path.display()
+        ))
+    };
+    let mut checks = Vec::new();
+    match issues.iter().find(|issue| issue.scope == "user") {
+        Some(issue) => checks.push(DoctorCheck::fail(
+            "config-load",
+            format!("{}; using built-in defaults", issue.message),
+            hint(issue),
+        )),
+        None => checks.push(DoctorCheck::pass("config-load", loaded.to_owned())),
+    }
+    for issue in issues.iter().filter(|issue| issue.scope == "project") {
+        checks.push(DoctorCheck::fail(
+            "project-config",
+            format!("{}; this file is skipped", issue.message),
+            hint(issue),
+        ));
+    }
+    checks
+}
+
 /// Entry point for `rustcode doctor [--fix]`. Returns a process exit code.
 pub fn run_doctor(fix: bool) -> i32 {
     let checks = run_checks(fix);
@@ -332,6 +361,24 @@ mod tests {
         );
         assert!(!check.ok);
         assert_eq!(check.fix_hint.as_deref(), Some("install it somehow"));
+    }
+
+    #[test]
+    fn an_unreadable_config_fails_its_rows() {
+        let issue = |scope| crate::config::ConfigLoadIssue {
+            path: PathBuf::from("/x/config.toml"),
+            scope,
+            message: "Failed to parse /x/config.toml: line 2".to_owned(),
+        };
+        let checks = config_load_checks(&[issue("user"), issue("project")], "model=m");
+        assert_eq!(checks.len(), 2);
+        assert!(checks.iter().all(|check| !check.ok));
+        assert_eq!(checks[0].name, "config-load");
+        assert!(checks[0].detail.contains("line 2"));
+        assert_eq!(checks[1].name, "project-config");
+        let clean = config_load_checks(&[], "model=m");
+        assert!(clean[0].ok);
+        assert_eq!(clean[0].detail, "model=m");
     }
 
     #[test]

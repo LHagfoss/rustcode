@@ -2294,30 +2294,10 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
 
     let toml_path = dir.join(CONFIG_TOML_FILE);
     if toml_path.exists() {
-        match fs::read_to_string(&toml_path)
-            .ok()
-            .and_then(|content| toml::from_str::<TomlConfig>(&content).ok())
-        {
-            Some(file) => {
-                if let Some(version) = file.version
-                    && version > CONFIG_FORMAT_VERSION
-                {
-                    eprintln!(
-                        "[rustcode] WARNING: {} uses unsupported config format version {} (this version supports up to {}). Using built-in defaults.",
-                        toml_path.display(),
-                        version,
-                        CONFIG_FORMAT_VERSION
-                    );
-                    is_valid = false;
-                } else {
-                    apply_toml_config(&mut config, file);
-                }
-            }
-            None => {
-                eprintln!(
-                    "[rustcode] WARNING: Failed to parse {}. Using built-in defaults.",
-                    toml_path.display()
-                );
+        match read_toml_config(&toml_path) {
+            Ok(file) => apply_toml_config(&mut config, file),
+            Err(error) => {
+                eprintln!("[rustcode] WARNING: {error}. Using built-in defaults.");
                 is_valid = false;
             }
         }
@@ -2426,7 +2406,9 @@ fn save_entire_config_for_workspace_result(
     workspace: Option<&Path>,
 ) -> Result<(), String> {
     if !config.is_valid {
-        return Err("configuration is invalid".to_owned());
+        return Err(load_issues::invalid_config_error(
+            get_config_dir().as_deref(),
+        ));
     }
     let dir =
         get_config_dir().ok_or_else(|| "could not determine the config directory".to_owned())?;
@@ -2466,7 +2448,9 @@ pub fn save_theme(theme: &str) -> Result<(), String> {
         get_config_dir().ok_or_else(|| "could not determine the config directory".to_owned())?;
     let (_, _, mut config) = load_config_from(&dir);
     if !config.is_valid {
-        return Err("configuration is invalid".to_owned());
+        return Err(load_issues::invalid_config_error(
+            get_config_dir().as_deref(),
+        ));
     }
     config.theme = theme.to_owned();
     save_config_to_result(&dir, &config)
@@ -2479,7 +2463,9 @@ pub fn save_discord_rpc_enabled(
     workspace: Option<&Path>,
 ) -> Result<(), String> {
     if !config.is_valid {
-        return Err("configuration is invalid".to_owned());
+        return Err(load_issues::invalid_config_error(
+            get_config_dir().as_deref(),
+        ));
     }
     if let Some(workspace) = workspace {
         for path in project_config_paths(workspace).into_iter().rev() {
@@ -2509,7 +2495,7 @@ pub fn save_discord_rpc_enabled(
 
 fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
     if !config.is_valid {
-        return Err("configuration is invalid".to_owned());
+        return Err(load_issues::invalid_config_error(Some(dir)));
     }
     fs::create_dir_all(dir).map_err(|error| {
         format!(
@@ -3025,7 +3011,9 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 mod credentials;
+mod load_issues;
 pub use credentials::{AuthMethod, CredentialRef};
+pub use load_issues::{ConfigLoadIssue, config_load_issues};
 
 mod mcp_servers;
 pub use mcp_servers::{

@@ -286,6 +286,10 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
     }
     let stored_keys: Vec<String> = stored.keys().cloned().collect();
     let mut answer = json!({ "values": values, "stored": stored_keys, "sources": sources });
+    if request.keys.is_none() {
+        let workspace = request.project.as_deref().map(Path::new);
+        answer["configIssues"] = config_issues_json(&crate::config::config_load_issues(workspace));
+    }
     if let Some(project) = project {
         answer["project"] = json!({
             "path": project,
@@ -294,6 +298,22 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         });
     }
     Ok(answer)
+}
+
+/// The config files the engine could not read, for the Settings notice.
+fn config_issues_json(issues: &[crate::config::ConfigLoadIssue]) -> Value {
+    Value::Array(
+        issues
+            .iter()
+            .map(|issue| {
+                json!({
+                    "path": issue.path.display().to_string(),
+                    "scope": issue.scope,
+                    "message": issue.message,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// One setting's current value, for engine code that has to apply a
@@ -603,6 +623,38 @@ mod tests {
         assert_eq!(values["default-permission-mode"], json!("ask"));
         assert_eq!(values["resume-after-restart"], json!(true));
         assert_eq!(values["auto-compact-threshold"], json!(150_000));
+    }
+
+    #[test]
+    fn a_full_read_lists_unreadable_config_files_and_a_keyed_read_skips_them() {
+        let workspace = tempfile::tempdir().unwrap();
+        let project = workspace.path().join(".rustcode");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("config.toml"), "sandbox_mode = [\n").unwrap();
+        let answer = read(GetSettingsRequest {
+            project: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        let issues = answer["configIssues"].as_array().unwrap();
+        let issue = issues
+            .iter()
+            .find(|issue| issue["scope"] == "project")
+            .expect("the broken project file");
+        assert!(issue["path"].as_str().unwrap().ends_with("config.toml"));
+        assert!(
+            issue["message"]
+                .as_str()
+                .unwrap()
+                .contains("Failed to parse")
+        );
+
+        let keyed = read(GetSettingsRequest {
+            keys: Some(vec!["orchestration".to_owned()]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(keyed.get("configIssues").is_none());
     }
 
     #[test]
