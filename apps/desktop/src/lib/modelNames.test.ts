@@ -35,9 +35,14 @@ describe("modelTitle", () => {
     expect(catalogModelTitle(undefined, harness)).toBeUndefined();
   });
 
+  test("names DeepSeek ids with the family's casing", () => {
+    expect(modelTitle("deepseek-v4.1-flash")).toBe("DeepSeek V4.1 Flash");
+    expect(modelTitle("deepseek-flash")).toBe("DeepSeek Flash");
+    expect(modelTitle("deepseek-chat")).toBe("DeepSeek Chat");
+  });
+
   test("keeps other names and meaningful hyphens", () => {
     expect(modelTitle("gpt-oss-120b")).toBe("gpt-oss-120b");
-    expect(modelTitle("deepseek-v4.1-flash")).toBe("deepseek-v4.1-flash");
     expect(modelTitle("default")).toBe("default");
   });
 });

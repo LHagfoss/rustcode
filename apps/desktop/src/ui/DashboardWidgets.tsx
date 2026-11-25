@@ -60,6 +60,7 @@ import {
   CardList,
   CardRow,
   LabelNote,
+  LivePill,
   Nothing,
   ROW_HEIGHT,
   TWO_LINE_ROW_HEIGHT,
@@ -566,8 +567,11 @@ function RunningCard() {
       label="Running now"
       icon={Play}
       aside={
-        more > 0 ? (
-          <LabelNote title={`${count(more, "more thread", "more threads")} running`}>+{more}</LabelNote>
+        threads.length > 0 ? (
+          <LivePill
+            count={threads.length}
+            title={more > 0 ? `${count(more, "more thread", "more threads")} running` : "Turns running now"}
+          />
         ) : undefined
       }
     >

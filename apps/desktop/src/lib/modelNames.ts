@@ -20,7 +20,7 @@ const FAMILIES = new Set(["opus", "sonnet", "haiku", "fable"]);
 /**
  * A model as people read it: a Claude id or alias as `Opus 5.5` (`claude-opus-5-5`, `opus`,
  * `claude-sonnet-5.5`, `claude-opus-4-8-20260101`), with a `[1m]` context suffix kept as
- * ` 1M`. Known GPT and Gemini ids use their family casing and a readable version.
+ * ` 1M`. Known GPT, Gemini and DeepSeek ids use their family casing and a readable version.
  * Unknown ids and catalog names keep their spelling.
  */
 export function modelTitle(model: string): string {
@@ -38,6 +38,13 @@ export function modelTitle(model: string): string {
       .join(" ")
       .replace(/\bFlash Lite\b/g, "Flash-Lite");
     return `Gemini ${gemini[1]} ${variant}`;
+  }
+
+  const deepseek = /^deepseek[- ](?:v(\d+(?:\.\d+)?)(?:[- ]|$))?([a-z]+(?:[- ][a-z]+)*)?$/i.exec(model);
+  if (deepseek && (deepseek[1] || deepseek[2])) {
+    const version = deepseek[1] ? ` V${deepseek[1]}` : "";
+    const variant = deepseek[2] ? ` ${deepseek[2].split(/[- ]+/).map(titleWord).join(" ")}` : "";
+    return `DeepSeek${version}${variant}`;
   }
 
   const context = /\[(\d+)m\]$/i.exec(model);

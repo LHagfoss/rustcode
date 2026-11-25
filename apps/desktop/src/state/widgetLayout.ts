@@ -29,6 +29,16 @@ export interface WidgetSlot {
   id: WidgetId;
   w: WidgetExtent;
   h: WidgetExtent;
+  /** The other cards stacked in this place, which take turns with `id` (a stack, as on iOS). */
+  stack?: WidgetId[];
+}
+
+/** How long a stack shows one card before it turns to the next, in milliseconds. */
+export const STACK_INTERVAL_MS = 8000;
+
+/** The cards a place holds, its own first. */
+export function stackMembers(slot: WidgetSlot): WidgetId[] {
+  return [slot.id, ...(slot.stack ?? [])];
 }
 
 export const WIDGET_NAMES: Record<WidgetId, string> = {
@@ -101,8 +111,15 @@ export function parseLayout(raw: string | null): WidgetSlot[] {
       const id = typeof stored === "string" ? (RENAMED[stored] ?? stored) : stored;
       if (!isWidgetId(id) || seen.has(id)) continue;
       seen.add(id);
-      const { w, h } = item as { w?: unknown; h?: unknown };
-      slots.push(isExtent(w) && isExtent(h) && id === stored ? { id, w, h } : slotOf(id));
+      const { w, h, stack } = item as { w?: unknown; h?: unknown; stack?: unknown };
+      const slot = isExtent(w) && isExtent(h) && id === stored ? { id, w, h } : slotOf(id);
+      const members: WidgetId[] = [];
+      for (const member of Array.isArray(stack) ? stack : []) {
+        if (!isWidgetId(member) || seen.has(member)) continue;
+        seen.add(member);
+        members.push(member);
+      }
+      slots.push(members.length ? { ...slot, stack: members } : slot);
     }
     return slots;
   } catch {
@@ -120,12 +137,27 @@ export function moveWidget(layout: readonly WidgetSlot[], id: WidgetId, index: n
   return rest;
 }
 
+/** The layout without `id`: a stacked card leaves its stack, and a stack's own card hands the place to the next. */
 export function removeWidget(layout: readonly WidgetSlot[], id: WidgetId): WidgetSlot[] {
-  return layout.filter((slot) => slot.id !== id);
+  return layout.flatMap((slot) => {
+    const members = stackMembers(slot);
+    if (!members.includes(id)) return [slot];
+    const [first, ...rest] = members.filter((member) => member !== id);
+    if (!first) return [];
+    return [rest.length ? { ...slot, id: first, stack: rest } : { id: first, w: slot.w, h: slot.h }];
+  });
+}
+
+/** The layout with `id` stacked into the place `target` holds, taken from wherever it was. */
+export function stackWidget(layout: readonly WidgetSlot[], target: WidgetId, id: WidgetId): WidgetSlot[] {
+  if (target === id) return [...layout];
+  const without = removeWidget(layout, id);
+  if (!without.some((slot) => slot.id === target)) return [...layout];
+  return without.map((slot) => (slot.id === target ? { ...slot, stack: [...(slot.stack ?? []), id] } : slot));
 }
 
 export function addWidget(layout: readonly WidgetSlot[], id: WidgetId): WidgetSlot[] {
-  if (layout.some((slot) => slot.id === id)) return [...layout];
+  if (layout.some((slot) => stackMembers(slot).includes(id))) return [...layout];
   return [...layout, slotOf(id)];
 }
 
@@ -148,13 +180,19 @@ export function resizeWidget(layout: readonly WidgetSlot[], id: WidgetId): Widge
 
 /** The cards the layout leaves out, in the catalogue's order, for the add tray. */
 export function hiddenWidgets(layout: readonly WidgetSlot[]): WidgetId[] {
-  return WIDGET_IDS.filter((id) => !layout.some((slot) => slot.id === id));
+  return WIDGET_IDS.filter((id) => !layout.some((slot) => stackMembers(slot).includes(id)));
 }
 
 export function sameLayout(one: readonly WidgetSlot[], other: readonly WidgetSlot[]): boolean {
   return (
     one.length === other.length &&
-    one.every((slot, i) => slot.id === other[i]?.id && slot.w === other[i]?.w && slot.h === other[i]?.h)
+    one.every(
+      (slot, i) =>
+        slot.id === other[i]?.id &&
+        slot.w === other[i]?.w &&
+        slot.h === other[i]?.h &&
+        (slot.stack ?? []).join() === (other[i]?.stack ?? []).join(),
+    )
   );
 }
 

@@ -15,6 +15,7 @@ import {
   removeWidget,
   resizeWidget,
   sameLayout,
+  stackWidget,
 } from "./widgetLayout";
 
 const ids = (layout: { id: string }[]) => layout.map((slot) => slot.id);
@@ -98,6 +99,39 @@ describe("arranging", () => {
     }
     expect(sizes.map((slot) => `${slot.w}x${slot.h}`)).toEqual(["2x1", "1x2", "2x2", "1x1"]);
     expect(resizeWidget(DEFAULT_LAYOUT, "needs")[2]).toEqual({ id: "needs", w: 2, h: 1 });
+  });
+});
+
+describe("stacks", () => {
+  test("stack a card into another's place, taking it from where it was", () => {
+    const stacked = stackWidget(DEFAULT_LAYOUT, "needs", "running");
+    expect(ids(stacked)).not.toContain("running");
+    expect(stacked.find((slot) => slot.id === "needs")?.stack).toEqual(["running"]);
+    expect(hiddenWidgets(stacked)).toEqual(["spend"]);
+    expect(addWidget(stacked, "running")).toHaveLength(stacked.length);
+    expect(sameLayout(stacked, DEFAULT_LAYOUT)).toBe(false);
+  });
+
+  test("a stack's own card hands its place to the next, and the last one leaves a plain card", () => {
+    const stacked = stackWidget(stackWidget(DEFAULT_LAYOUT, "needs", "running"), "needs", "spend");
+    const handed = removeWidget(stacked, "needs");
+    expect(handed.find((slot) => slot.id === "running")).toEqual({
+      id: "running",
+      w: 1,
+      h: 1,
+      stack: ["spend"],
+    });
+    expect(removeWidget(handed, "spend").find((slot) => slot.id === "running")).toEqual({
+      id: "running",
+      w: 1,
+      h: 1,
+    });
+  });
+
+  test("keeps a stored stack and drops its unknown or repeated cards", () => {
+    const layout = stored([{ id: "needs", w: 1, h: 1, stack: ["running", "nope", "needs", "running"] }]);
+    expect(layout).toEqual([{ id: "needs", w: 1, h: 1, stack: ["running"] }]);
+    expect(parseLayout(JSON.stringify(layout))).toEqual(layout);
   });
 });
 

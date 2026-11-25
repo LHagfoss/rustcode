@@ -201,7 +201,8 @@ export interface Share {
  */
 /** The name a row's model is counted under: ids and aliases of one model share it (`opus`, `claude-opus-5-5`). */
 export function modelGroup(row: UsageRow): string {
-  return modelName(row.model) || "Default model";
+  const name = modelName(row.model);
+  return name && name.toLowerCase() !== "default" ? name : "Default model";
 }
 
 export function sharesBy(rows: readonly UsageRow[], key: "harness" | "model", since = ""): Share[] {
