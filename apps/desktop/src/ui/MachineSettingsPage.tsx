@@ -65,6 +65,7 @@ import {
 } from "../state/settingsScope";
 import { errorText, openSettings, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
+import { AutoSyncStatusGroup } from "./AutoSyncStatus";
 import { FollowFiles } from "./FollowFiles";
 import { ArrowLeft, Trash2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -652,6 +653,7 @@ function WhatSyncs({ machine, online }: { machine: Machine; online: boolean }) {
   return (
     <>
       <FollowSettings machine={machine} online={online} />
+      <AutoSyncStatusGroup id={machine.id} />
       <SectionTitle title="What syncs" />
       <div className="mb-6 overflow-hidden rounded-xl bg-surface">
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 border-border border-b px-4 py-2 font-medium text-caption text-fg-muted">

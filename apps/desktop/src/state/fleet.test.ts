@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   capacityRow,
+  exchangeWithPeers,
   type FleetEntry,
+  type FleetView,
   fleetNameUpdates,
   fleetSignature,
   knownOnly,
@@ -238,5 +240,68 @@ describe("ownHostId", () => {
       }),
     ).toBe("gw-known");
     useFleet.setState({ host: null });
+  });
+});
+
+describe("syncing with the peers", () => {
+  const fleet = (hostId: string, entries: FleetEntry[] = []): FleetView => ({
+    host: entry({ hostId, name: hostId }),
+    osName: null,
+    entries,
+  });
+
+  test("a stalled peer does not hold up the merge of the others", async () => {
+    let release: (view: FleetView | null) => void = () => undefined;
+    const stalled = new Promise<FleetView | null>((resolve) => {
+      release = resolve;
+    });
+    const asked: string[] = [];
+    const merged: string[] = [];
+    const askPeer = (connection: string) => {
+      asked.push(connection);
+      return connection === "slow"
+        ? stalled
+        : Promise.resolve(fleet(connection === "fast" ? "gw-fast" : "gw-c"));
+    };
+    const merge = async (remote: FleetView) => {
+      merged.push(remote.host.hostId);
+      return fleet("gw-a", [remote.host]);
+    };
+    const done = exchangeWithPeers(
+      [
+        { id: "gw-slow", connection: "slow" },
+        { id: "gw-fast", connection: "fast" },
+        { id: "gw-c", connection: "c" },
+      ],
+      fleet("gw-a"),
+      askPeer,
+      merge,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(asked).toEqual(["slow", "fast", "c"]);
+    expect(merged).toEqual(["gw-fast", "gw-c"]);
+    release(fleet("gw-slow"));
+    const view = await done;
+    expect(merged).toEqual(["gw-fast", "gw-c", "gw-slow"]);
+    expect(view.entries.map((e) => e.hostId)).toEqual(["gw-slow"]);
+  });
+
+  test("a peer that fails, or answers as another computer, is not merged", async () => {
+    const merged: string[] = [];
+    const view = await exchangeWithPeers(
+      [
+        { id: "gw-down", connection: "down" },
+        { id: "gw-b", connection: "impostor" },
+      ],
+      fleet("gw-a"),
+      (connection) =>
+        connection === "down" ? Promise.reject(new Error("timed out")) : Promise.resolve(fleet("gw-x")),
+      async (remote) => {
+        merged.push(remote.host.hostId);
+        return null;
+      },
+    );
+    expect(merged).toEqual([]);
+    expect(view.host.hostId).toBe("gw-a");
   });
 });
