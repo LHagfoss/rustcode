@@ -1,4 +1,5 @@
 import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { MockConfigFiles } from "./mockConfigFiles";
 import { mockSettingsAnswer, mockSettingsSet, withoutSkillContent } from "./mockFixtures";
 import { EFFORTS, initialHarnesses, RUSTCODE_MODELS, withLast } from "./mockHarnesses";
 import { MockLoops } from "./mockLoops";
@@ -40,6 +41,10 @@ export class MockMachine {
   private showsThreads = false;
   /** Its skills, with the SKILL.md so a copy can be seen. */
   private skills: JsonObject[];
+  private configFiles = new MockConfigFiles({
+    "skills/release-notes": "notes",
+    "commands/review.md": "review",
+  });
   /** Its MCP servers, with key names but no secret values. */
   private mcpServers: JsonObject[];
   /** The name it was given from another computer, and when. */
@@ -562,6 +567,16 @@ export class MockMachine {
       const name = str(obj(frame.params)?.name);
       this.mcpServers = this.mcpServers.filter((server) => str(server.name) !== name);
       return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    const method = str(frame.method) ?? "";
+    if (method.startsWith("_rustcode/config/files/")) {
+      try {
+        const result = this.configFiles.answer(method, obj(frame.params) ?? {});
+        return [JSON.stringify({ jsonrpc: "2.0", id, result })];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return [JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32602, message } })];
+      }
     }
     if (frame.method === "_rustcode/skills/get") {
       const params = obj(frame.params);

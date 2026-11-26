@@ -1535,6 +1535,11 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/harnesses`, `_rustcode/harnesses/default`, `_rustcode/harnesses/set`
 - `_rustcode/settings/get`, `_rustcode/settings/set`
 - `_rustcode/skills/add`, `_rustcode/skills/get`
+- `_rustcode/config/files/list`, `_rustcode/config/files/get` (Threads access),
+  `_rustcode/config/files/put`, `_rustcode/config/files/prune` (Full access):
+  the config directory's skills, themes and prompt commands, one entry per
+  request, for settings follow and **Fetch from ‹machine›**
+  (`docs/desktop.md` › Settings on one machine or all)
 - `_rustcode/environment/sync`: names, versions and last-seen times of the fleet
   ([Machine names and the fleet](#machine-names-and-the-fleet))
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,

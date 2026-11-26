@@ -5,17 +5,20 @@
 // here is written there too. A value changed on that machine itself is put back
 // to this computer's on the next connection: this computer is the main one.
 //
-// Only the shared rows move (`SERVER_SETTING_KEYS`). Credentials, accounts,
-// local paths and app preferences stay where they are, as under All machines.
+// The shared rows move (`SERVER_SETTING_KEYS`) with skills, themes and commands
+// (state/configFilesFollow.ts); credentials, accounts and local paths stay put.
 
 import { create } from "zustand";
 import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
+import { copyFiles, followedKinds } from "./configFilesFollow";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STORAGE = "rustcode.settingsFollow";
 const REQUEST_MS = 10_000;
+/** How often this computer's skills, themes and commands are listed to notice an edit made on disk. */
+const FILES_CHECK_MS = 30_000;
 
 function readIds(): string[] {
   try {
@@ -108,7 +111,19 @@ async function copyOnce(host: string): Promise<number> {
     await scope.machineRequest(host, "_rustcode/settings/set", { values }, REQUEST_MS);
     await scope.loadServerSettings(host, true).catch(() => undefined);
   }
+  await copyFilesTo(host, scope.machineRequest);
   return count;
+}
+
+/** The follower also takes this computer's skills, themes and commands, recorded as this computer's. */
+async function copyFilesTo(
+  host: string,
+  request: (host: string, method: string, params: JsonObject, timeoutMs: number) => Promise<unknown>,
+): Promise<void> {
+  const { useFleet } = await import("./fleet");
+  const self = useFleet.getState().host?.hostId;
+  if (!self || !followsThisComputer(host)) return;
+  await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host)).catch(() => null);
 }
 
 /**
@@ -124,6 +139,19 @@ export function followLocalChange(): void {
 }
 
 let started = false;
+let lastListing: string | null = null;
+
+/** List this computer's skills, themes and commands; a change since the last look reaches every follower. */
+async function checkLocalFiles(): Promise<void> {
+  if (!useSettingsFollow.getState().ids.length) return;
+  const scope = await import("./settingsScope");
+  const listing = JSON.stringify(
+    await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).catch(() => null),
+  );
+  const changed = lastListing !== null && listing !== lastListing;
+  lastListing = listing;
+  if (changed) followLocalChange();
+}
 
 /** Copy to a follower each time its connection opens. */
 export function startSettingsFollow(): void {
@@ -134,4 +162,5 @@ export function startSettingsFollow(): void {
       if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
     });
   });
+  setInterval(() => void checkLocalFiles().catch(() => undefined), FILES_CHECK_MS);
 }

@@ -1510,6 +1510,8 @@ pub enum SyncCommands {
     Push,
     /// Initialize remote Git repository for config sync
     Init { remote_url: String },
+    /// Copy a paired machine's skills, themes and prompt commands here once
+    From(crate::sync_from::SyncFromArgs),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1518,6 +1520,7 @@ pub(crate) enum SyncAction {
     Push,
     PullThenPush,
     Init(String),
+    From(crate::sync_from::SyncFromArgs),
 }
 
 pub(crate) fn resolve_sync_action(
@@ -1544,6 +1547,7 @@ pub(crate) fn resolve_sync_action(
         Some(SyncCommands::Pull) => SyncAction::Pull,
         Some(SyncCommands::Push) => SyncAction::Push,
         Some(SyncCommands::Init { remote_url }) => SyncAction::Init(remote_url),
+        Some(SyncCommands::From(args)) => SyncAction::From(args),
         None => SyncAction::PullThenPush,
     })
 }

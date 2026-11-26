@@ -24,6 +24,7 @@ import { mockPortsCall } from "./mockPorts";
 
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { MockConfigFiles } from "./mockConfigFiles";
 import { MockConnections } from "./mockConnections";
 import { mockBrowse, mockCreate } from "./mockFolders";
 import { ACP_CAPS, HARNESS_MODELS, initialHarnesses, MOCK_CUSTOM_MODELS, withLast } from "./mockHarnesses";
@@ -90,6 +91,7 @@ export class MockEngine {
   /** Review conversations resolved or unresolved through `_rustcode/pulls/thread`. */
   private pullResolved = new Map<string, boolean>();
   private fleet = new Map<string, JsonObject>();
+  private configFiles = new MockConfigFiles({ "skills/github-voice": "v1", "themes/rain.toml": "rain" });
   /** This computer's own chosen name and when it was chosen (`machine.json`). */
   private ownName: { name: string; at: string } | null = null;
   private threads: MockThread[];
@@ -2387,6 +2389,11 @@ export class MockEngine {
       case "_rustcode/onboarding/complete":
         this.harnesses.onboarded = true;
         return this.snapshot();
+      case "_rustcode/config/files/list":
+      case "_rustcode/config/files/get":
+      case "_rustcode/config/files/put":
+      case "_rustcode/config/files/prune":
+        return this.configFiles.answer(method, params);
       case "_rustcode/capabilities":
         return {
           configPath: "~/.config/rustcode/config.toml",

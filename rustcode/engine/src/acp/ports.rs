@@ -76,6 +76,6 @@ pub(super) fn dispatch(
                 Ok(())
             })
         }
-        _ => super::memory::dispatch(method, params, responder, connection, unhandled),
+        _ => super::config_files::dispatch(method, params, responder, connection, unhandled),
     }
 }

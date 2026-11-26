@@ -65,6 +65,7 @@ import {
 } from "../state/settingsScope";
 import { errorText, openSettings, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
+import { FollowFiles } from "./FollowFiles";
 import { ArrowLeft, Trash2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
@@ -624,6 +625,7 @@ function FollowSettings({ machine, online }: { machine: Machine; online: boolean
       >
         <Switch label={`Use ${here}'s settings on ${name}`} checked={follows} onChange={toggle} />
       </Row>
+      <FollowFiles machine={machine} online={online} follows={follows} />
     </Group>
   );
 }

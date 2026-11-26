@@ -195,8 +195,17 @@ unless you ask for it (#3202): each paired machine's Settings page has **Use
 Turned on, this computer's shared server settings are copied to that machine
 at once, again each time its connection opens, and whenever they change here
 (from the app, the CLI or an agent). A value changed on that machine itself is
-put back on its next connection. Only the Shared rows move; credentials,
-accounts, local paths and app preferences stay put. A server-setting page — General's server rows,
+put back on its next connection. The config directory's skills, themes and
+prompt commands go with it, each under its own switch (on by default), whole
+skill folders included (`src/state/configFilesFollow.ts`): copied when the
+connection opens, when a setting changes, and within 30 seconds of an edit
+here. A copy replaces the follower's entry of the same name; deleting one here
+removes only the follower's copy of it, and the follower's own entries under
+other names stay. **Fetch from ‹machine›** on the same page copies that
+machine's skills, themes and commands here once without following, like
+`rc config sync from <machine>` (docs/configuration.md). Beyond those, only
+the Shared rows move; credentials, accounts, local paths and app preferences
+stay put. A server-setting page — General's server rows,
 Harnesses and Capabilities — starts with **Applying to**: This machine (the
 default), one paired machine, or All machines, and the choice persists across
 pages (`src/state/settingsScope.ts`). A row whose connected machines disagree
@@ -268,7 +277,8 @@ userinfo, a query or a fragment) is added to this machine only and refused on
 the others, naming the part. A command whose target has a masked secret is not
 offered for copying. A skill copies its `SKILL.md`, read with
 `_rustcode/skills/get` only when a copy is chosen; other files in its folder
-stay on the source machine. The default harness/model/effort reads through
+stay on the source machine (settings follow and **Fetch from ‹machine›** copy
+whole folders). The default harness/model/effort reads through
 `_rustcode/harnesses`, and harness switches write through
 `_rustcode/harnesses/set` on each chosen machine. The other server settings
 live in each machine's `~/.config/rustcode/settings.json` through

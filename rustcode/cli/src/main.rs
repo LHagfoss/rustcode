@@ -7,6 +7,7 @@ mod manage_command;
 mod price_estimate;
 mod run;
 mod server_command;
+mod sync_from;
 mod up;
 
 #[cfg(test)]

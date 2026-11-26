@@ -85,6 +85,8 @@ pub(super) const THREADS: &[&str] = &[
     "_rustcode/project/clone",
     "_rustcode/settings/get",
     "_rustcode/skills/get",
+    "_rustcode/config/files/list",
+    "_rustcode/config/files/get",
 ];
 const THREADS_PREFIXES: &[&str] = &["session/", "_rustcode/pulls"];
 

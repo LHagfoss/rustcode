@@ -145,6 +145,10 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/settings/set",
     "_rustcode/skills/add",
     "_rustcode/skills/get",
+    "_rustcode/config/files/list",
+    "_rustcode/config/files/get",
+    "_rustcode/config/files/put",
+    "_rustcode/config/files/prune",
     // What an agent on a paired computer reads and does here (orchestration
     // version 16): search, one thread's recorded activity, a project's git
     // facts and a clone, and the worktrees' git state.
@@ -509,6 +513,10 @@ mod tests {
                 "_rustcode/settings/set",
                 "_rustcode/skills/add",
                 "_rustcode/skills/get",
+                "_rustcode/config/files/list",
+                "_rustcode/config/files/get",
+                "_rustcode/config/files/put",
+                "_rustcode/config/files/prune",
                 "_rustcode/threads/search",
                 "_rustcode/data/activity",
                 "_rustcode/project/read",
@@ -566,6 +574,10 @@ mod tests {
             "_rustcode/settings/set",
             "_rustcode/skills/add",
             "_rustcode/skills/get",
+            "_rustcode/config/files/list",
+            "_rustcode/config/files/get",
+            "_rustcode/config/files/put",
+            "_rustcode/config/files/prune",
             "_rustcode/capabilities",
             "_rustcode/capabilities/set",
             "_rustcode/capabilities/mcp/add",
