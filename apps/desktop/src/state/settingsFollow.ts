@@ -120,9 +120,10 @@ async function copyFilesTo(
   host: string,
   request: (host: string, method: string, params: JsonObject, timeoutMs: number) => Promise<unknown>,
 ): Promise<void> {
-  const { useFleet } = await import("./fleet");
-  const self = useFleet.getState().host?.hostId;
-  if (!self || !followsThisComputer(host)) return;
+  if (!followsThisComputer(host)) return;
+  const { ownHostId } = await import("./fleet");
+  const self = await ownHostId();
+  if (!self) return;
   await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host)).catch(() => null);
 }
 
@@ -141,16 +142,26 @@ export function followLocalChange(): void {
 let started = false;
 let lastListing: string | null = null;
 
+/** A fresh listing against the last one: one that could not be read keeps the last as the baseline. */
+export function compareListing(
+  previous: string | null,
+  listing: string | null,
+): { baseline: string | null; changed: boolean } {
+  if (listing === null) return { baseline: previous, changed: false };
+  return { baseline: listing, changed: previous !== null && listing !== previous };
+}
+
 /** List this computer's skills, themes and commands; a change since the last look reaches every follower. */
-async function checkLocalFiles(): Promise<void> {
-  if (!useSettingsFollow.getState().ids.length) return;
+async function checkLocalFiles(seed = false): Promise<void> {
+  if (!seed && !useSettingsFollow.getState().ids.length) return;
   const scope = await import("./settingsScope");
-  const listing = JSON.stringify(
-    await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).catch(() => null),
+  const listing = await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).then(
+    (answer) => JSON.stringify(answer),
+    () => null,
   );
-  const changed = lastListing !== null && listing !== lastListing;
-  lastListing = listing;
-  if (changed) followLocalChange();
+  const next = compareListing(lastListing, listing);
+  lastListing = next.baseline;
+  if (next.changed) followLocalChange();
 }
 
 /** Copy to a follower each time its connection opens. */
@@ -162,5 +173,6 @@ export function startSettingsFollow(): void {
       if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
     });
   });
+  void checkLocalFiles(true).catch(() => undefined);
   setInterval(() => void checkLocalFiles().catch(() => undefined), FILES_CHECK_MS);
 }
