@@ -31,9 +31,10 @@ pub(crate) struct StateRequest {
 }
 
 /// Run one git action in a folder. `action` is `commit`, `push`, `commit_push`,
-/// `pull` or `create_pr`. A commit names its `message` and `files`; on the
-/// default branch it needs `newBranch` or `allowDefaultBranch`. A pull request
-/// takes `title`, `body`, `base` and `draft`.
+/// `pull`, `create_pr`, `stage` or `unstage`. A commit names its `message` and
+/// `files` (or `stagedOnly` to commit the index as staged); on the default
+/// branch it needs `newBranch` or `allowDefaultBranch`. A pull request takes
+/// `title`, `body`, `base` and `draft`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/git/run", response = serde_json::Value)]
@@ -44,6 +45,8 @@ pub(crate) struct RunRequest {
     pub message: Option<String>,
     #[serde(default)]
     pub files: Vec<String>,
+    #[serde(default)]
+    pub staged_only: bool,
     #[serde(default)]
     pub new_branch: Option<String>,
     #[serde(default)]
@@ -79,12 +82,16 @@ impl GitError {
     }
 }
 
-/// One changed file: its path and a one-letter status (`M`, `A`, `D`, `R`,
-/// `?` untracked, `U` conflicted).
+/// One changed file: its path, a one-letter status (`M`, `A`, `D`, `R`,
+/// `?` untracked, `U` conflicted), and whether it has staged or unstaged edits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ChangedFile {
     pub path: String,
     pub status: char,
+    pub staged: bool,
+    pub unstaged: bool,
+    #[serde(skip)]
+    pub old_path: Option<String>,
 }
 
 /// What `git status --porcelain=v2 --branch -z` says.
@@ -134,23 +141,31 @@ pub(crate) fn parse_status(text: &str) -> Status {
             continue;
         }
         let (kind, rest) = entry.split_at(entry.len().min(1));
-        let (letter, path) = match kind {
+        let (letter, path, staged, unstaged, old_path) = match kind {
             "1" => {
                 let parts: Vec<&str> = rest.trim_start().splitn(8, ' ').collect();
-                (xy_letter(parts.first().copied()), parts.get(7).copied())
+                let (staged, unstaged) = xy_flags(parts.first().copied());
+                (
+                    xy_letter(parts.first().copied()),
+                    parts.get(7).copied(),
+                    staged,
+                    unstaged,
+                    None,
+                )
             }
             "2" => {
                 let parts: Vec<&str> = rest.trim_start().splitn(9, ' ').collect();
+                let (staged, unstaged) = xy_flags(parts.first().copied());
                 // The renamed-from path follows as its own field.
-                fields.next();
-                (Some('R'), parts.get(8).copied())
+                let orig = fields.next().filter(|p| !p.is_empty()).map(str::to_owned);
+                (Some('R'), parts.get(8).copied(), staged, unstaged, orig)
             }
             "u" => {
                 let parts: Vec<&str> = rest.trim_start().splitn(10, ' ').collect();
-                (Some('U'), parts.get(9).copied())
+                (Some('U'), parts.get(9).copied(), false, true, None)
             }
-            "?" => (Some('?'), Some(rest.trim_start())),
-            _ => (None, None),
+            "?" => (Some('?'), Some(rest.trim_start()), false, true, None),
+            _ => (None, None, false, false, None),
         };
         if let (Some(status_letter), Some(path)) = (letter, path)
             && !path.is_empty()
@@ -158,6 +173,9 @@ pub(crate) fn parse_status(text: &str) -> Status {
             status.files.push(ChangedFile {
                 path: path.to_owned(),
                 status: status_letter,
+                staged,
+                unstaged,
+                old_path,
             });
         }
     }
@@ -169,6 +187,18 @@ fn xy_letter(xy: Option<&str>) -> Option<char> {
     let mut chars = xy?.chars();
     let (x, y) = (chars.next()?, chars.next()?);
     Some(if x != '.' { x } else { y })
+}
+
+/// Whether a `1` or `2` entry has staged (`X`) and unstaged (`Y`) changes.
+fn xy_flags(xy: Option<&str>) -> (bool, bool) {
+    let Some(xy) = xy else {
+        return (false, true);
+    };
+    let mut chars = xy.chars();
+    let (Some(x), Some(y)) = (chars.next(), chars.next()) else {
+        return (false, true);
+    };
+    (x != '.', y != '.')
 }
 
 fn status(path: &Path) -> Result<Status, GitError> {
@@ -259,25 +289,76 @@ fn non_empty(text: Option<&str>) -> Option<&str> {
     text.map(str::trim).filter(|text| !text.is_empty())
 }
 
-fn commit(path: &Path, request: &RunRequest) -> Result<String, GitError> {
-    let message = non_empty(request.message.as_deref())
-        .ok_or_else(|| GitError::new("invalid", "A commit needs a message"))?;
-    let files: Vec<&str> = request
-        .files
+fn clean_files(files: &[String]) -> Result<Vec<&str>, GitError> {
+    let cleaned: Vec<&str> = files
         .iter()
         .map(|file| file.trim())
         .filter(|file| !file.is_empty())
         .collect();
+    if cleaned.iter().any(|file| file.starts_with('-')) {
+        return Err(GitError::new("invalid", "A file name cannot start with -"));
+    }
+    Ok(cleaned)
+}
+
+fn stage(path: &Path, request: &RunRequest) -> Result<String, GitError> {
+    let files = clean_files(&request.files)?;
     if files.is_empty() {
+        return git(path, &["add", "-A"]).map_err(|error| GitError::new("failed", error));
+    }
+    let mut args = vec!["add", "-A", "--"];
+    args.extend(files);
+    git(path, &args).map_err(|error| GitError::new("failed", error))
+}
+
+fn unstage(path: &Path, request: &RunRequest) -> Result<String, GitError> {
+    let files = clean_files(&request.files)?;
+    let has_head = git(path, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+    if files.is_empty() {
+        let args: &[&str] = if has_head {
+            &["reset", "HEAD", "--"]
+        } else {
+            &["read-tree", "--empty"]
+        };
+        return git(path, args).map_err(|error| GitError::new("failed", error));
+    }
+    let current = status(path)?;
+    let mut targets: Vec<String> = Vec::with_capacity(files.len());
+    for file in files {
+        targets.push(file.to_owned());
+        if let Some(orig) = current
+            .files
+            .iter()
+            .find(|entry| entry.path == file)
+            .and_then(|entry| entry.old_path.as_deref())
+        {
+            targets.push(orig.to_owned());
+        }
+    }
+    let mut args: Vec<&str> = if has_head {
+        vec!["reset", "HEAD", "--"]
+    } else {
+        vec!["rm", "--cached", "--ignore-unmatch", "--"]
+    };
+    args.extend(targets.iter().map(String::as_str));
+    git(path, &args).map_err(|error| GitError::new("failed", error))
+}
+
+fn commit(path: &Path, request: &RunRequest) -> Result<String, GitError> {
+    let message = non_empty(request.message.as_deref())
+        .ok_or_else(|| GitError::new("invalid", "A commit needs a message"))?;
+    let files = clean_files(&request.files)?;
+    let current = status(path)?;
+    if request.staged_only {
+        if !current.files.iter().any(|file| file.staged) {
+            return Err(GitError::new("invalid", "No staged files to commit"));
+        }
+    } else if files.is_empty() {
         return Err(GitError::new(
             "invalid",
             "Choose at least one file to commit",
         ));
     }
-    if files.iter().any(|file| file.starts_with('-')) {
-        return Err(GitError::new("invalid", "A file name cannot start with -"));
-    }
-    let current = status(path)?;
     let mut output = String::new();
     if let Some(branch) = non_empty(request.new_branch.as_deref()) {
         if branch.starts_with('-') || git(path, &["check-ref-format", "--branch", branch]).is_err()
@@ -301,13 +382,18 @@ fn commit(path: &Path, request: &RunRequest) -> Result<String, GitError> {
             ),
         ));
     }
-    let mut add = vec!["add", "-A", "--"];
-    add.extend(files.iter().copied());
-    git(path, &add).map_err(|error| GitError::new("failed", error))?;
-    let mut commit = vec!["commit", "-m", message, "--"];
-    commit.extend(files.iter().copied());
-    let out = git_timed(path, &commit, COMMIT_TIMEOUT)
-        .map_err(|error| GitError::new("hook_failed", error))?;
+    let out = if request.staged_only {
+        git_timed(path, &["commit", "-m", message], COMMIT_TIMEOUT)
+            .map_err(|error| GitError::new("hook_failed", error))?
+    } else {
+        let mut add = vec!["add", "-A", "--"];
+        add.extend(files.iter().copied());
+        git(path, &add).map_err(|error| GitError::new("failed", error))?;
+        let mut commit = vec!["commit", "-m", message, "--"];
+        commit.extend(files.iter().copied());
+        git_timed(path, &commit, COMMIT_TIMEOUT)
+            .map_err(|error| GitError::new("hook_failed", error))?
+    };
     output.push_str(&out);
     Ok(output)
 }
@@ -392,7 +478,7 @@ pub(crate) async fn run(request: RunRequest) -> Result<Value, GitError> {
     let action = request.action.trim().to_owned();
     let mut url = None;
     let output = match action.as_str() {
-        "commit" | "push" | "commit_push" | "pull" => {
+        "commit" | "push" | "commit_push" | "pull" | "stage" | "unstage" => {
             let request = request.clone();
             let action = action.clone();
             tokio::task::spawn_blocking(move || -> Result<String, GitError> {
@@ -401,6 +487,8 @@ pub(crate) async fn run(request: RunRequest) -> Result<Value, GitError> {
                     "commit" => commit(path, &request),
                     "push" => push(path),
                     "pull" => pull(path),
+                    "stage" => stage(path, &request),
+                    "unstage" => unstage(path, &request),
                     _ => {
                         let mut out = commit(path, &request)?;
                         out.push('\n');
@@ -451,6 +539,7 @@ mod tests {
             "# branch.upstream origin/feat/x",
             "# branch.ab +2 -1",
             "1 .M N... 100644 100644 100644 aaa bbb src/a file.ts",
+            "1 MM N... 100644 100644 100644 aaa bbb src/partial.ts",
             "1 A. N... 000000 100644 100644 000 ccc new.ts",
             "2 R. N... 100644 100644 100644 aaa bbb R100 to.ts",
             "from.ts",
@@ -463,21 +552,23 @@ mod tests {
         assert_eq!(status.branch.as_deref(), Some("feat/x"));
         assert_eq!(status.upstream.as_deref(), Some("origin/feat/x"));
         assert_eq!((status.ahead, status.behind), (2, 1));
-        let files: Vec<(&str, char)> = status
+        let files: Vec<(&str, char, bool, bool)> = status
             .files
             .iter()
-            .map(|file| (file.path.as_str(), file.status))
+            .map(|file| (file.path.as_str(), file.status, file.staged, file.unstaged))
             .collect();
         assert_eq!(
             files,
             vec![
-                ("src/a file.ts", 'M'),
-                ("new.ts", 'A'),
-                ("to.ts", 'R'),
-                ("conflict.ts", 'U'),
-                ("untracked.txt", '?'),
+                ("src/a file.ts", 'M', false, true),
+                ("src/partial.ts", 'M', true, true),
+                ("new.ts", 'A', true, false),
+                ("to.ts", 'R', true, false),
+                ("conflict.ts", 'U', false, true),
+                ("untracked.txt", '?', false, true),
             ]
         );
+        assert_eq!(status.files[3].old_path.as_deref(), Some("from.ts"));
     }
 
     #[test]
@@ -552,7 +643,136 @@ mod tests {
         assert_eq!(answer["state"]["branch"], "feat/b");
         assert_eq!(
             answer["state"]["files"],
-            json!([{ "path": "c.txt", "status": "?" }])
+            json!([{ "path": "c.txt", "status": "?", "staged": false, "unstaged": true }])
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_and_unstage_individual_and_all_files() {
+        let dir = repo();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        std::fs::write(dir.path().join("c.txt"), "c").unwrap();
+
+        let staged_one = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "stage".into(),
+            files: vec!["b.txt".into()],
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            staged_one["state"]["files"],
+            json!([
+                { "path": "b.txt", "status": "A", "staged": true, "unstaged": false },
+                { "path": "c.txt", "status": "?", "staged": false, "unstaged": true },
+            ])
+        );
+
+        let staged_all = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "stage".into(),
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            staged_all["state"]["files"],
+            json!([
+                { "path": "b.txt", "status": "A", "staged": true, "unstaged": false },
+                { "path": "c.txt", "status": "A", "staged": true, "unstaged": false },
+            ])
+        );
+
+        let unstaged_one = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "unstage".into(),
+            files: vec!["c.txt".into()],
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            unstaged_one["state"]["files"],
+            json!([
+                { "path": "b.txt", "status": "A", "staged": true, "unstaged": false },
+                { "path": "c.txt", "status": "?", "staged": false, "unstaged": true },
+            ])
+        );
+
+        let unstaged_all = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "unstage".into(),
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            unstaged_all["state"]["files"],
+            json!([
+                { "path": "b.txt", "status": "?", "staged": false, "unstaged": true },
+                { "path": "c.txt", "status": "?", "staged": false, "unstaged": true },
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_staged_only_commits_index_and_leaves_unstaged_files() {
+        let dir = repo();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        std::fs::write(dir.path().join("c.txt"), "c").unwrap();
+        run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "stage".into(),
+            files: vec!["b.txt".into()],
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+
+        let answer = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "commit".into(),
+            message: Some("add b only".into()),
+            staged_only: true,
+            new_branch: Some("feat/staged".into()),
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(answer["state"]["branch"], "feat/staged");
+        assert_eq!(
+            answer["state"]["files"],
+            json!([{ "path": "c.txt", "status": "?", "staged": false, "unstaged": true }])
+        );
+    }
+
+    #[tokio::test]
+    async fn unstage_works_on_unborn_branch_without_head() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "main"]).unwrap();
+        std::fs::write(dir.path().join("first.txt"), "hello").unwrap();
+
+        run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "stage".into(),
+            files: vec!["first.txt".into()],
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+
+        let unstaged = run(RunRequest {
+            path: dir.path().to_path_buf(),
+            action: "unstage".into(),
+            files: vec!["first.txt".into()],
+            ..RunRequest::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            unstaged["state"]["files"],
+            json!([{ "path": "first.txt", "status": "?", "staged": false, "unstaged": true }])
         );
     }
 

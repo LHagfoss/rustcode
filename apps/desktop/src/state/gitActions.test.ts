@@ -2,16 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { RpcError } from "../acp/jsonrpc";
 import {
   acceptsGeneratedDraft,
+  commitSummaryLabel,
+  commitsStagedIndex,
   draftCommitMessage,
   draftPull,
+  type GitFile,
   type GitState,
+  gitActionDisplayLabel,
   gitErrorOf,
   gitReadFor,
   gitReads,
+  initialCommitSelection,
   parseGitState,
+  partitionByStaging,
   planGitActions,
   pullFromUrl,
   pullPresence,
+  stageKindOf,
 } from "./gitActions";
 
 const base: GitState = {
@@ -24,7 +31,13 @@ const base: GitState = {
   hasRemote: true,
   files: [],
 };
-const dirty = [{ path: "a.ts", status: "M" }];
+const file = (path: string, status = "M", staged = false, unstaged = !staged): GitFile => ({
+  path,
+  status,
+  staged,
+  unstaged,
+});
+const dirty = [file("a.ts")];
 
 describe("planGitActions", () => {
   test("changed files commit first, with commit and push beside it", () => {
@@ -69,7 +82,7 @@ describe("planGitActions", () => {
   });
 
   test("conflicts and a detached HEAD offer nothing", () => {
-    expect(planGitActions({ ...base, files: [{ path: "a", status: "U" }] }, "none").primary).toBeUndefined();
+    expect(planGitActions({ ...base, files: [file("a", "U")] }, "none").primary).toBeUndefined();
     expect(planGitActions({ ...base, branch: undefined }, "none").note).toBe("HEAD is not on a branch");
   });
 
@@ -90,7 +103,7 @@ describe("drafts", () => {
 
   test("an untitled thread names the files", () => {
     expect(draftCommitMessage("New thread", dirty)).toBe("Update a.ts");
-    const files = ["src/a.ts", "src/b.ts", "c.ts", "d.ts"].map((path) => ({ path, status: "M" }));
+    const files = ["src/a.ts", "src/b.ts", "c.ts", "d.ts"].map((path) => file(path));
     expect(draftCommitMessage(undefined, files)).toBe("Update a.ts, b.ts, c.ts and 1 more");
   });
 
@@ -114,7 +127,12 @@ test("parseGitState reads the engine's answer", () => {
       ahead: 1,
       behind: 0,
       hasRemote: true,
-      files: [{ path: "a.ts", status: "?" }, { status: "M" }],
+      files: [
+        { path: "a.ts", status: "?", staged: false, unstaged: true },
+        { path: "b.ts", status: "M", staged: true, unstaged: true },
+        { path: "c.ts", status: "A", staged: true },
+        { status: "M" },
+      ],
     }),
   ).toEqual({
     branch: "feat/x",
@@ -124,7 +142,68 @@ test("parseGitState reads the engine's answer", () => {
     ahead: 1,
     behind: 0,
     hasRemote: true,
-    files: [{ path: "a.ts", status: "?" }],
+    files: [
+      { path: "a.ts", status: "?", staged: false, unstaged: true },
+      { path: "b.ts", status: "M", staged: true, unstaged: true },
+      { path: "c.ts", status: "A", staged: true, unstaged: false },
+    ],
+  });
+});
+
+describe("staging state and commit selection", () => {
+  const staged = file("staged.ts", "M", true, false);
+  const partial = file("partial.ts", "M", true, true);
+  const unstaged = file("unstaged.ts", "?", false, true);
+
+  test("stageKindOf distinguishes staged, partial, and unstaged files", () => {
+    expect(stageKindOf(staged)).toBe("staged");
+    expect(stageKindOf(partial)).toBe("partial");
+    expect(stageKindOf(unstaged)).toBe("unstaged");
+    expect(stageKindOf(undefined)).toBe("unstaged");
+  });
+
+  test("partitionByStaging groups staged and partial files separately from unstaged", () => {
+    const rows = [
+      { path: "unstaged.ts", added: 3 },
+      { path: "staged.ts", added: 1 },
+      { path: "partial.ts", added: 2 },
+    ];
+    expect(partitionByStaging(rows, [staged, partial, unstaged])).toEqual({
+      staged: [
+        { path: "staged.ts", added: 1 },
+        { path: "partial.ts", added: 2 },
+      ],
+      unstaged: [{ path: "unstaged.ts", added: 3 }],
+      hasPartial: true,
+    });
+    expect(partitionByStaging(rows, undefined)).toEqual({
+      staged: [],
+      unstaged: rows,
+      hasPartial: false,
+    });
+  });
+
+  test("initialCommitSelection picks staged files when any are staged, else all files", () => {
+    expect([...initialCommitSelection([staged, partial, unstaged])]).toEqual(["staged.ts", "partial.ts"]);
+    expect([...initialCommitSelection([unstaged, file("other.ts")])]).toEqual(["unstaged.ts", "other.ts"]);
+  });
+
+  test("commitsStagedIndex is true only when selection matches the staged set exactly", () => {
+    const files = [staged, partial, unstaged];
+    expect(commitsStagedIndex(new Set(["staged.ts", "partial.ts"]), files)).toBe(true);
+    expect(commitsStagedIndex(new Set(["staged.ts"]), files)).toBe(false);
+    expect(commitsStagedIndex(new Set(["staged.ts", "partial.ts", "unstaged.ts"]), files)).toBe(false);
+    expect(commitsStagedIndex(new Set(["unstaged.ts"]), [unstaged])).toBe(false);
+  });
+
+  test("commitSummaryLabel and gitActionDisplayLabel reflect staged counts", () => {
+    expect(commitSummaryLabel(1, 3, 1, true)).toBe("1 staged file (of 3)");
+    expect(commitSummaryLabel(2, 2, 2, true)).toBe("2 staged files");
+    expect(commitSummaryLabel(2, 3, 1, false)).toBe("2 of 3 files");
+    expect(gitActionDisplayLabel("commit", 0)).toBe("Commit");
+    expect(gitActionDisplayLabel("commit", 2)).toBe("Commit (2 staged)");
+    expect(gitActionDisplayLabel("commit_push", 1)).toBe("Commit & Push (1 staged)");
+    expect(gitActionDisplayLabel("push", 2)).toBe("Push");
   });
 });
 

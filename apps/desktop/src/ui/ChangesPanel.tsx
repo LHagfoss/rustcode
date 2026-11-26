@@ -5,17 +5,26 @@
 // Reloads when a turn ends.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Json } from "../acp/jsonrpc";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { latest } from "../lib/latest";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { parsePatch } from "../state/diff";
-import { useApp } from "../state/store";
+import {
+  GitMethod,
+  gitErrorOf,
+  parseGitState,
+  partitionByStaging,
+  type StageKind,
+  stageKindOf,
+} from "../state/gitActions";
+import { request, toast, useApp } from "../state/store";
 import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { Patch } from "./DiffView";
-import { GitActionsButton } from "./GitActions";
-import { ChevronRight, CircleCheck, RefreshCw } from "./icons";
-import { ClusterButton, cx, Segments, Spinner } from "./primitives";
+import { GitActionsButton, useGitState } from "./GitActions";
+import { ChevronRight, CircleCheck, Minus, Plus, RefreshCw } from "./icons";
+import { ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 const STATUS_TINT: Record<string, string> = {
@@ -82,40 +91,83 @@ function FileSection({
   file,
   chunk,
   mode,
+  stageKind,
+  stagingBusy,
+  onStage,
+  onUnstage,
 }: {
   file: GitChanges["files"][number];
   chunk: string[] | undefined;
   mode: "unified" | "split";
+  stageKind?: StageKind;
+  stagingBusy?: boolean;
+  onStage?: (path: string) => void;
+  onUnstage?: (path: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const lines = useMemo(() => parsePatch(chunk ?? []), [chunk]);
+  const canStage = !!onStage && (stageKind === "unstaged" || stageKind === "partial");
+  const canUnstage = !!onUnstage && (stageKind === "staged" || stageKind === "partial");
   return (
     <section className="mb-1">
-      <button
-        type="button"
-        aria-expanded={!collapsed}
-        onClick={() => setCollapsed(!collapsed)}
-        // Full-bleed while it holds its place: nothing of the file above shows beside it.
-        className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 bg-bg px-4 py-1.5 text-left hover:bg-fill-subtle"
-      >
-        <ChevronRight
-          size={12}
-          strokeWidth={2.5}
-          className={cx(
-            "shrink-0 text-fg-faint transition-transform duration-150",
-            !collapsed && "rotate-90",
+      <div className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-1.5 bg-bg px-4 py-1.5 hover:bg-fill-subtle">
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed(!collapsed)}
+          // Full-bleed while it holds its place: nothing of the file above shows beside it.
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <ChevronRight
+            size={12}
+            strokeWidth={2.5}
+            className={cx(
+              "shrink-0 text-fg-faint transition-transform duration-150",
+              !collapsed && "rotate-90",
+            )}
+          />
+          <StatusMark status={file.status} />
+          <span className="min-w-0 flex-1 truncate font-mono text-callout" dir="rtl">
+            <bdi>{file.path}</bdi>
+          </span>
+          {stageKind === "partial" && (
+            <span className="shrink-0 rounded-sm bg-warning/15 px-1.5 py-0.5 text-caption text-warning">
+              partial
+            </span>
           )}
-        />
-        <StatusMark status={file.status} />
-        <span className="min-w-0 flex-1 truncate font-mono text-callout" dir="rtl">
-          <bdi>{file.path}</bdi>
-        </span>
-        {file.binary ? (
-          <span className="text-caption text-fg-faint">binary</span>
-        ) : (
-          <DiffCount added={file.added} removed={file.removed} />
+          {file.binary ? (
+            <span className="text-caption text-fg-faint">binary</span>
+          ) : (
+            <DiffCount added={file.added} removed={file.removed} />
+          )}
+        </button>
+        {canStage && (
+          <Tooltip label={stageKind === "partial" ? "Stage remaining changes" : "Stage file"}>
+            <button
+              type="button"
+              aria-label={`Stage ${file.path}`}
+              disabled={stagingBusy}
+              onClick={() => onStage(file.path)}
+              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-muted hover:bg-fill-strong hover:text-fg disabled:opacity-40"
+            >
+              <Plus size={12} />
+            </button>
+          </Tooltip>
         )}
-      </button>
+        {canUnstage && (
+          <Tooltip label="Unstage file">
+            <button
+              type="button"
+              aria-label={`Unstage ${file.path}`}
+              disabled={stagingBusy}
+              onClick={() => onUnstage(file.path)}
+              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-muted hover:bg-fill-strong hover:text-fg disabled:opacity-40"
+            >
+              <Minus size={12} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
       {!collapsed &&
         (lines.length ? (
           <div className="mb-2">
@@ -136,6 +188,8 @@ export function ChangesPanel() {
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   // Git runs in this computer's folder: a thread on a paired machine gets no git button.
   const local = useApp((s) => !!s.selectedId && !splitThreadKey(s.selectedId).host);
+  const [gitRead, refreshGit, applyGitState] = useGitState(local ? cwd : undefined, running);
+  const [stagingBusy, setStagingBusy] = useState(false);
   // What was read, and for which folder: an answer for another thread's folder
   // is not drawn with this thread's name, even for the frame before it is
   // dropped.
@@ -177,6 +231,26 @@ export function ChangesPanel() {
     }
   }, [cwd]);
 
+  const runStage = useCallback(
+    async (action: "stage" | "unstage", files: string[]) => {
+      if (!cwd) return;
+      setStagingBusy(true);
+      try {
+        const answer = (await request(GitMethod.run, { path: cwd, action, files }, 60_000)) as {
+          state?: Json;
+        };
+        const nextState = parseGitState(answer?.state);
+        if (nextState) applyGitState(nextState);
+        else await refreshGit();
+      } catch (e) {
+        toast(gitErrorOf(e).message, "error");
+      } finally {
+        setStagingBusy(false);
+      }
+    },
+    [applyGitState, cwd, refreshGit],
+  );
+
   // Another thread's folder drops what is in flight for the last one, and its
   // spinner with it; what it showed stays keyed to its own folder above.
   useEffect(() => {
@@ -201,10 +275,21 @@ export function ChangesPanel() {
       }),
     [data],
   );
+  const gitState = gitRead.state;
+  const gitFilesByPath = useMemo(() => new Map((gitState?.files ?? []).map((f) => [f.path, f])), [gitState]);
+  const canStage = local && !!gitState && !gitRead.error;
+  const groups = useMemo(
+    () => partitionByStaging(data?.files ?? [], canStage ? gitState?.files : undefined),
+    [canStage, data, gitState],
+  );
+  const stagedCount = groups.staged.length;
 
   const readAt = loadedAt
     ? new Date(loadedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : undefined;
+
+  const handleStage = useCallback((path: string) => void runStage("stage", [path]), [runStage]);
+  const handleUnstage = useCallback((path: string) => void runStage("unstage", [path]), [runStage]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -217,6 +302,11 @@ export function ChangesPanel() {
             <span className="font-semibold">
               {data.files.length} file{data.files.length === 1 ? "" : "s"}
             </span>
+            {stagedCount > 0 && (
+              <span className="rounded-sm bg-success/15 px-1.5 py-0.5 text-caption text-success">
+                {stagedCount} staged
+              </span>
+            )}
             <span className="text-success">+{totals.added}</span>
             <span className="text-danger">−{totals.removed}</span>
           </>
@@ -233,11 +323,21 @@ export function ChangesPanel() {
             ]}
           />
         )}
-        {local && thread && <GitActionsButton thread={thread} />}
+        {local && thread && (
+          <GitActionsButton
+            thread={thread}
+            gitRead={gitRead}
+            onRefresh={refreshGit}
+            onMutated={() => void load()}
+          />
+        )}
         <ClusterButton
           label="Reload"
           tooltip={readAt ? `Reload (read at ${readAt})` : "Reload"}
-          onClick={() => void load()}
+          onClick={() => {
+            void load();
+            if (local) void refreshGit();
+          }}
         >
           {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
         </ClusterButton>
@@ -252,9 +352,79 @@ export function ChangesPanel() {
                 No uncommitted changes
               </div>
             )}
-            {data.files.map((file) => (
-              <FileSection key={file.path} file={file} chunk={chunks[file.path]} mode={mode} />
-            ))}
+            {canStage && groups.staged.length > 0 && (
+              <>
+                <div className="mt-1 mb-1 flex items-center justify-between px-1 py-1 text-caption text-fg-muted">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <span className="size-1.5 rounded-full bg-success" aria-hidden />
+                    Staged ({groups.staged.length})
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {groups.unstaged.length === 0 && groups.hasPartial && (
+                      <button
+                        type="button"
+                        disabled={stagingBusy}
+                        onClick={() => void runStage("stage", [])}
+                        className="rounded-sm px-1.5 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:opacity-40"
+                      >
+                        Stage all
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={stagingBusy}
+                      onClick={() => void runStage("unstage", [])}
+                      className="rounded-sm px-1.5 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:opacity-40"
+                    >
+                      Unstage all
+                    </button>
+                  </div>
+                </div>
+                {groups.staged.map((file) => (
+                  <FileSection
+                    key={`staged:${file.path}`}
+                    file={file}
+                    chunk={chunks[file.path]}
+                    mode={mode}
+                    stageKind={stageKindOf(gitFilesByPath.get(file.path))}
+                    stagingBusy={stagingBusy}
+                    onStage={handleStage}
+                    onUnstage={handleUnstage}
+                  />
+                ))}
+              </>
+            )}
+            {groups.unstaged.length > 0 && (
+              <>
+                {canStage && (
+                  <div className="mt-1 mb-1 flex items-center justify-between px-1 py-1 text-caption text-fg-muted">
+                    <span className="font-medium">
+                      {groups.staged.length > 0 ? "Unstaged" : "Changes"} ({groups.unstaged.length})
+                    </span>
+                    <button
+                      type="button"
+                      disabled={stagingBusy}
+                      onClick={() => void runStage("stage", [])}
+                      className="rounded-sm px-1.5 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:opacity-40"
+                    >
+                      Stage all
+                    </button>
+                  </div>
+                )}
+                {groups.unstaged.map((file) => (
+                  <FileSection
+                    key={`unstaged:${file.path}`}
+                    file={file}
+                    chunk={chunks[file.path]}
+                    mode={mode}
+                    stageKind={canStage ? "unstaged" : undefined}
+                    stagingBusy={stagingBusy}
+                    onStage={canStage ? handleStage : undefined}
+                    onUnstage={canStage ? handleUnstage : undefined}
+                  />
+                ))}
+              </>
+            )}
           </>
         )}
         {!error && !data && body === "loading" && (
