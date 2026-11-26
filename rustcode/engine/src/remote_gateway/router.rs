@@ -104,6 +104,9 @@ pub type FrameQueue = mpsc::Receiver<String>;
 pub(super) struct ConnectionControl {
     pub(super) cancel: CancellationToken,
     reason: Mutex<Option<ErrorCode>>,
+    /// The device's ACP ceiling, read on every frame so a lowered grant
+    /// applies to an open connection.
+    access: Mutex<super::access::Access>,
 }
 
 impl ConnectionControl {
@@ -111,7 +114,22 @@ impl ConnectionControl {
         Self {
             cancel,
             reason: Mutex::new(None),
+            access: Mutex::new(super::access::Access::Full),
         }
+    }
+
+    pub(super) fn set_access(&self, level: super::access::Access) {
+        *self
+            .access
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = level;
+    }
+
+    pub(super) fn access(&self) -> super::access::Access {
+        *self
+            .access
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Ask the connection to close now. The first reason wins.

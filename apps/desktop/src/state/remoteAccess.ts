@@ -3,7 +3,7 @@
 // state it writes (`remote`, the challenge, the requests) still lives in the app store.
 
 import type { JsonObject } from "../acp/jsonrpc";
-import { parseRemoteStatus, RemoteMethod, type RemoteStatus } from "../acp/remote";
+import { type AccessLevel, parseRemoteStatus, RemoteMethod, type RemoteStatus } from "../acp/remote";
 import { transitionPairing } from "./remotePairing";
 import { errorText, request, toast, useApp } from "./store";
 
@@ -208,6 +208,16 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
   } catch (error) {
     toast(errorText(error), "error");
   }
+}
+
+/** Set how much a paired computer may drive here, then read the machine's status again. */
+export async function setDeviceAccess(id: string, access: AccessLevel): Promise<void> {
+  try {
+    await request(RemoteMethod.access, { deviceId: id, access }, 15_000);
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+  await refreshRemote();
 }
 
 /** Advance the visible challenge deadline without invalidating newer reads. */

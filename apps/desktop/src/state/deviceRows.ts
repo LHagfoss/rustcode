@@ -5,7 +5,7 @@
 // (docs/desktop.md › Several machines). An old RustCode on the other end is a
 // sentence, not a silent connection failure.
 
-import type { RemoteDevice } from "../acp/remote";
+import type { AccessLevel, RemoteDevice } from "../acp/remote";
 import type { SessionSummary } from "../acp/types";
 import {
   DEV_APP_VERSION,
@@ -219,7 +219,29 @@ export function machineAccess(
       ? `This computer can see and run threads on ${name}. Remove machine ends this access.`
       : `This computer's pairing with ${name} ended, so it cannot reach it. Pair it again.`,
     inboundText: inbound
-      ? `${name} can see and run all threads on this computer. Revoke it under Remote access › Paired devices.`
+      ? `${name} ${accessSentence(inbound.access ?? "full")} Revoke it under Remote access › Paired devices.`
       : `${name} cannot reach this computer. Allow pairs it back over the connection this computer already has.`,
   };
 }
+
+/** What a paired computer at `level` may do here, as a sentence after its name. */
+export function accessSentence(level: AccessLevel): string {
+  switch (level) {
+    case "none":
+      return "is paired but may not reach threads on this computer.";
+    case "read":
+      return "can read threads on this computer, not start or change them.";
+    case "threads":
+      return "can start and run threads on this computer, not change its settings or run commands.";
+    case "full":
+      return "can see and run all threads on this computer and change its settings.";
+  }
+}
+
+/** The access picker's choices. */
+export const ACCESS_OPTIONS: { value: AccessLevel; label: string }[] = [
+  { value: "read", label: "Read threads" },
+  { value: "threads", label: "Run threads" },
+  { value: "full", label: "Full control" },
+  { value: "none", label: "No access" },
+];

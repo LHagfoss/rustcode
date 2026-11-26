@@ -212,6 +212,7 @@ mod tests {
                 platform: "ios".into(),
                 host_id: None,
                 signs_with_key: false,
+                access: None,
             })
             .collect();
         status

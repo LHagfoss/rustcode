@@ -674,11 +674,22 @@ impl RemoteLifecycle {
 
     /// Grant or deny full ACP access under the same writer lock as revocation.
     pub async fn set_acp(&self, selector: &str, allow: bool) -> Result<()> {
+        let level = if allow {
+            super::access::Access::Full
+        } else {
+            super::access::Access::None
+        };
+        self.set_access(selector, level).await
+    }
+
+    /// Set a device's ACP ceiling under the same writer lock as revocation.
+    pub async fn set_access(&self, selector: &str, level: super::access::Access) -> Result<()> {
+        let allow = level != super::access::Access::None;
         match self.owner_lock() {
             Ok(_lock) => {
                 let store = self.device_store();
                 let mut devices = store.load()?;
-                devices.set_acp(selector, allow)?;
+                devices.set_access(selector, level)?;
                 store.save(&devices)
             }
             Err(error) if is_lock_busy(&error) => {
@@ -691,6 +702,7 @@ impl RemoteLifecycle {
                     &ControlRequest::SetAcp {
                         device: selector.to_owned(),
                         allow,
+                        access: Some(level),
                     },
                 )
                 .await?

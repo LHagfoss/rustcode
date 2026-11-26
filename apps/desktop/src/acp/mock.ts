@@ -1,4 +1,5 @@
 // design-lint: allow-file (fake link colours in canned data)
+
 import {
   COMMANDS,
   configOptions,
@@ -62,7 +63,7 @@ import {
   MOCK_VIZ,
   mockLinkMeta,
 } from "./mockSmartUi";
-import { handleMockTransfer, isMockTransferMethod } from "./mockTransfer";
+import { handleMockTransfer, isMockTransferMethod, setMockAccess } from "./mockTransfer";
 import { mockAntigravityPlan, mockSharedPlans, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
@@ -863,6 +864,7 @@ export class MockEngine {
     if (method.startsWith("_rustcode/memory/")) return this.memory.answer(method, obj(params) ?? {});
     if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
       return this.connections.answer(method, obj(params) ?? {});
+    if (method === "_rustcode/remote/access") return setMockAccess(this.remote.devices, params);
     if (isMockTransferMethod(method)) {
       return handleMockTransfer(method, params, {
         getThread: (id) => this.thread(id),

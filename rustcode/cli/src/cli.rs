@@ -961,8 +961,14 @@ pub enum HubCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum RemoteDeviceCommands {
-    /// Allow full ACP access: can see and run all threads on this machine
-    Allow { device: String },
+    /// Allow ACP access: `read` lists and reads threads, `threads` also
+    /// starts and drives them, `full` (the default) can also change this
+    /// machine's settings, skills, accounts and jobs and run commands here
+    Allow {
+        device: String,
+        #[arg(long, default_value = "full", value_parser = ["read", "threads", "full"])]
+        access: String,
+    },
     /// Deny ACP access and disconnect the device immediately
     Deny { device: String },
 }

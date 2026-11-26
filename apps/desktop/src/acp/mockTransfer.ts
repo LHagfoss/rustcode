@@ -6,6 +6,8 @@ import { configOptions } from "./mockFixtures";
 import { type MockThread, update } from "./mockSeeds";
 import type { HarnessSnapshot } from "./types";
 
+export { setMockAccess } from "./mockRemoteAccess";
+
 type TransferMockThread = MockThread & { origins?: Record<string, JsonObject> };
 
 export function isMockTransferMethod(method: string): boolean {
