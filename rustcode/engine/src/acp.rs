@@ -1,5 +1,6 @@
 mod agents;
 mod attachments;
+mod browser_panel;
 pub(crate) mod builtin;
 mod builtin_open;
 mod capabilities;

@@ -588,6 +588,54 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for ports::KillRequest"
     );
     assert!(
+        <browser_panel::OpenRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/open"
+        ),
+        "method mismatch for browser_panel::OpenRequest"
+    );
+    assert!(
+        <browser_panel::StateRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/state"
+        ),
+        "method mismatch for browser_panel::StateRequest"
+    );
+    assert!(
+        <browser_panel::NavigateRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/navigate"
+        ),
+        "method mismatch for browser_panel::NavigateRequest"
+    );
+    assert!(
+        <browser_panel::ViewportRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/viewport"
+        ),
+        "method mismatch for browser_panel::ViewportRequest"
+    );
+    assert!(
+        <browser_panel::InputRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/input"
+        ),
+        "method mismatch for browser_panel::InputRequest"
+    );
+    assert!(
+        <browser_panel::InspectRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/inspect"
+        ),
+        "method mismatch for browser_panel::InspectRequest"
+    );
+    assert!(
+        <browser_panel::PickRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/pick"
+        ),
+        "method mismatch for browser_panel::PickRequest"
+    );
+    assert!(
+        <browser_panel::StreamRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/browser/stream"
+        ),
+        "method mismatch for browser_panel::StreamRequest"
+    );
+    assert!(
         <PullViewRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/pulls/view"
         ),

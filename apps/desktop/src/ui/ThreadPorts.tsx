@@ -1,6 +1,7 @@
 import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 import { openExternal } from "../lib/native";
+import { openBrowserPreview } from "../state/browserPreview";
 import {
   formatPortLabel,
   formatPortsSummary,
@@ -8,6 +9,7 @@ import {
   type ListeningPort,
   useListeningPorts,
 } from "../state/ports";
+import { useApp } from "../state/store";
 import { ChevronDown, ExternalLink, Globe, Square } from "./icons";
 import { MenuContent, menuItem, menuItemDanger, Pill, Spinner, Tooltip } from "./primitives";
 
@@ -16,6 +18,7 @@ import { MenuContent, menuItem, menuItemDanger, Pill, Spinner, Tooltip } from ".
  * Renders nothing when no process is listening.
  */
 export function ThreadPortsChip({ cwd }: { cwd: string | undefined }) {
+  const selectedId = useApp((s) => s.selectedId);
   const ports = useListeningPorts(cwd);
   const [killing, setKilling] = useState<string | null>(null);
 
@@ -55,6 +58,15 @@ export function ThreadPortsChip({ cwd }: { cwd: string | undefined }) {
                   {port.processName} · {port.pid}
                 </span>
               </div>
+              {selectedId && (
+                <DropdownMenu.Item
+                  className={menuItem}
+                  onSelect={() => void openBrowserPreview(selectedId, port.url)}
+                >
+                  <Globe size={12} className="shrink-0" />
+                  <span className="truncate">Preview in panel</span>
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.Item className={menuItem} onSelect={() => openExternal(port.url)}>
                 <ExternalLink size={12} className="shrink-0" />
                 <span className="truncate">Open {port.url}</span>
@@ -80,6 +92,7 @@ export function ThreadPortsChip({ cwd }: { cwd: string | undefined }) {
  * with one-click Open in browser and Kill process actions.
  */
 export function ThreadPortsSection({ cwd }: { cwd: string | undefined }) {
+  const selectedId = useApp((s) => s.selectedId);
   const ports = useListeningPorts(cwd);
   const [killing, setKilling] = useState<string | null>(null);
 
@@ -117,6 +130,13 @@ export function ThreadPortsSection({ cwd }: { cwd: string | undefined }) {
                   {port.processName} · PID {port.pid}
                 </div>
               </div>
+              {selectedId && (
+                <Tooltip label={`Preview ${port.url} in side panel`}>
+                  <Pill size="sm" quiet onClick={() => void openBrowserPreview(selectedId, port.url)}>
+                    <Globe size={12} /> Preview
+                  </Pill>
+                </Tooltip>
+              )}
               <Tooltip label={`Open ${port.url} in browser`}>
                 <Pill size="sm" quiet onClick={() => openExternal(port.url)}>
                   <ExternalLink size={12} /> Open

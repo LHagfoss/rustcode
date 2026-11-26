@@ -110,7 +110,7 @@ pub(super) fn dispatch(
             | "_rustcode/config/files/put"
             | "_rustcode/config/files/prune"
     ) {
-        return super::memory::dispatch(method, params, responder, connection, unhandled);
+        return super::browser_panel::dispatch(method, params, responder, connection, unhandled);
     }
     connection.spawn(async move {
         match tokio::task::spawn_blocking(move || answer(&method, params)).await {

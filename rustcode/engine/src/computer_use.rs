@@ -1,5 +1,6 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
 pub mod grants;
+pub mod panel;
 mod proxy;
 mod snapshot;
 use crate::orchestration::{
@@ -22,7 +23,7 @@ use std::{
 use tokio::{
     net::TcpStream,
     process::{Child, Command},
-    sync::{mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
@@ -207,6 +208,8 @@ const UNOWNED_GRACE: Duration = Duration::from_secs(60 * 60);
 struct Browser {
     sender: mpsc::Sender<Job>,
     stop: tokio_util::sync::CancellationToken,
+    frames: broadcast::Sender<panel::ScreencastFrame>,
+    latest_frame: Arc<Mutex<Option<panel::ScreencastFrame>>>,
 }
 impl Browser {
     fn stopped(&self) -> bool {
@@ -406,7 +409,7 @@ pub(crate) fn executable(settings: &Settings) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-async fn start(settings: &Settings) -> Result<Browser, String> {
+async fn start(settings: &Settings, session_id: String) -> Result<Browser, String> {
     let executable =
         executable(settings).ok_or("Chrome/Chromium not found; set computer_use.executable")?;
     let root = crate::config::get_config_dir()
@@ -426,7 +429,11 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         .map_err(|e| e.to_string())?;
     let stop = tokio_util::sync::CancellationToken::new();
     let stop_on_failure = stop.clone().drop_guard();
-    let allow: proxy::Allow = Arc::new(|host: &str| {
+    let allow_session = session_id.clone();
+    let allow: proxy::Allow = Arc::new(move |host: &str| {
+        if panel::is_loopback_host(host) || grants::has_host(&allow_session, host) {
+            return true;
+        }
         let settings = current_settings();
         settings.enabled && settings.allows_host(host)
     });
@@ -493,7 +500,11 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
     let (ws, _) = tokio_tungstenite::client_async(endpoint, stream)
         .await
         .map_err(|e| e.to_string())?;
-    let (sender, mut jobs) = mpsc::channel::<Job>(1);
+    let (sender, mut jobs) = mpsc::channel::<Job>(16);
+    let (frames, _) = broadcast::channel::<panel::ScreencastFrame>(16);
+    let latest_frame: Arc<Mutex<Option<panel::ScreencastFrame>>> = Arc::new(Mutex::new(None));
+    let frames_out = frames.clone();
+    let latest_out = Arc::clone(&latest_frame);
     let stopped = stop.clone();
     tokio::spawn(async move {
         let mut chrome = chrome;
@@ -502,6 +513,13 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
             next: 0,
             refs: Default::default(),
             loaded: false,
+            session_id,
+            viewport: panel::ViewportPreset::Desktop.spec(None, None),
+            inspect_mode: false,
+            screencast_active: false,
+            frames: frames_out,
+            latest_frame: latest_out,
+            last_frame_sent: None,
         };
         if cdp
             .command("Fetch.enable", json!({"patterns":[{"urlPattern":"*"}]}))
@@ -537,12 +555,15 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
                 },
                 job = jobs.recv() => {
                     let Some((tool, args, answer)) = job else { break };
+                    let keep_alive = tool.starts_with("panel_");
                     let result = tokio::select! {
                         _ = stopped.cancelled() => break,
                         result = tokio::time::timeout(Duration::from_secs(40), cdp.action(&tool, &args)) => result.unwrap_or_else(|_| Err("CDP timed out".into())),
                     };
                     idle.as_mut().reset(tokio::time::Instant::now() + IDLE_LIMIT);
-                    let failed = result.is_err(); let _ = answer.send(result); if failed { break }
+                    let failed = result.is_err();
+                    let _ = answer.send(result);
+                    if failed && !keep_alive { break }
                 }
             }
         }
@@ -551,13 +572,25 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = std::fs::remove_dir_all(&chrome.profile);
     });
     let _ = stop_on_failure.disarm();
-    Ok(Browser { sender, stop })
+    Ok(Browser {
+        sender,
+        stop,
+        frames,
+        latest_frame,
+    })
 }
 struct Cdp {
     ws: WebSocketStream<TcpStream>,
     next: u64,
-    refs: snapshot::Refs,
-    loaded: bool,
+    pub(super) refs: snapshot::Refs,
+    pub(super) loaded: bool,
+    session_id: String,
+    pub(super) viewport: panel::ViewportSpec,
+    pub(super) inspect_mode: bool,
+    pub(super) screencast_active: bool,
+    frames: broadcast::Sender<panel::ScreencastFrame>,
+    latest_frame: Arc<Mutex<Option<panel::ScreencastFrame>>>,
+    last_frame_sent: Option<tokio::time::Instant>,
 }
 const LOAD_LIMIT: Duration = Duration::from_secs(15);
 impl Cdp {
@@ -577,10 +610,46 @@ impl Cdp {
         if event["method"] == "Page.loadEventFired" {
             self.loaded = true;
         }
+        if event["method"] == "Page.screencastFrame" {
+            let params = &event["params"];
+            if let Some(frame_id) = params.get("sessionId").and_then(Value::as_i64) {
+                let _ = self
+                    .send("Page.screencastFrameAck", json!({ "sessionId": frame_id }))
+                    .await;
+            }
+            let due = self
+                .last_frame_sent
+                .is_none_or(|prev| prev.elapsed() >= panel::FRAME_INTERVAL);
+            if due && let Some(data) = params.get("data").and_then(Value::as_str) {
+                let meta = &params["metadata"];
+                let frame = panel::ScreencastFrame {
+                    data: data.to_owned(),
+                    width: meta
+                        .get("deviceWidth")
+                        .and_then(Value::as_f64)
+                        .and_then(|v| u32::try_from(v.round() as i64).ok())
+                        .unwrap_or(self.viewport.width),
+                    height: meta
+                        .get("deviceHeight")
+                        .and_then(Value::as_f64)
+                        .and_then(|v| u32::try_from(v.round() as i64).ok())
+                        .unwrap_or(self.viewport.height),
+                    device_scale_factor: meta
+                        .get("pageScaleFactor")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(self.viewport.device_scale_factor),
+                    timestamp_ms: panel::now_ms(),
+                };
+                *self.latest_frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame.clone());
+                let _ = self.frames.send(frame);
+                self.last_frame_sent = Some(tokio::time::Instant::now());
+            }
+        }
         if event["method"] == "Fetch.requestPaused" {
-            let allowed = current_settings();
-            let allowed = allowed.enabled
-                && allowed.allows(event["params"]["request"]["url"].as_str().unwrap_or(""));
+            let url = event["params"]["request"]["url"].as_str().unwrap_or("");
+            let settings = current_settings();
+            let allowed = panel::is_panel_url_allowed(url, &settings, &self.session_id)
+                || (settings.enabled && settings.allows(url));
             let mut params = json!({"requestId":event["params"]["requestId"]});
             if !allowed {
                 params["errorReason"] = json!("BlockedByClient");
@@ -597,7 +666,7 @@ impl Cdp {
         }
         Ok(())
     }
-    async fn command(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(super) async fn command(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.send(method, params).await?;
         while let Some(message) = self.ws.next().await {
             let message = message.map_err(|e| e.to_string())?;
@@ -614,7 +683,7 @@ impl Cdp {
         }
         Err("Chrome disconnected".into())
     }
-    async fn wait_for_load(&mut self) -> Result<bool, String> {
+    pub(super) async fn wait_for_load(&mut self) -> Result<bool, String> {
         let deadline = tokio::time::Instant::now() + LOAD_LIMIT;
         while !self.loaded {
             let message = match tokio::time::timeout_at(deadline, self.ws.next()).await {
@@ -728,6 +797,15 @@ impl Cdp {
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
         if tool == LOCATION {
             return Ok(self.main_frame().await?["url"].clone());
+        }
+        if tool.starts_with("panel_") {
+            let latest = self
+                .latest_frame
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let session_id = self.session_id.clone();
+            return panel::handle_cdp_action(self, tool, args, &session_id, latest).await;
         }
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
@@ -854,7 +932,7 @@ pub async fn run_approved(
     if browser.is_none() {
         *browser = Some(tokio::select! {
             _ = cancel.cancelled() => return Err("Cancelled".into()),
-            started = tokio::time::timeout(Duration::from_secs(20), start(&settings)) => started.map_err(|_| "Browser startup timed out")??,
+            started = tokio::time::timeout(Duration::from_secs(20), start(&settings, session_id.to_owned())) => started.map_err(|_| "Browser startup timed out")??,
         });
     }
     let (tx, rx) = oneshot::channel();
@@ -873,6 +951,86 @@ pub async fn run_approved(
         *browser = None;
     }
     result.map(|value| value.to_string())
+}
+
+/// Runs a user-driven preview panel action on `session_id`'s shared headless Chrome.
+pub(crate) async fn run_panel_action(
+    session_id: &str,
+    action: &str,
+    args: Value,
+) -> Result<Value, String> {
+    let settings = Settings::load();
+    let slot = browsers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(session_id.to_owned())
+        .or_default()
+        .clone();
+    let mut browser = slot.lock().await;
+    if browser.as_ref().is_some_and(Browser::stopped) {
+        *browser = None;
+    }
+    if browser.is_none() {
+        if action == "panel_state" {
+            let spec = panel::ViewportPreset::Desktop.spec(None, None);
+            return serde_json::to_value(panel::PanelState {
+                url: String::new(),
+                title: String::new(),
+                can_go_back: false,
+                can_go_forward: false,
+                viewport: spec.preset,
+                width: spec.width,
+                height: spec.height,
+                inspect_mode: false,
+                screencast_active: false,
+                frame: None,
+            })
+            .map_err(|e| e.to_string());
+        }
+        let started = tokio::time::timeout(
+            Duration::from_secs(20),
+            start(&settings, session_id.to_owned()),
+        )
+        .await
+        .map_err(|_| "Browser startup timed out".to_owned())??;
+        *browser = Some(started);
+    }
+    let (tx, rx) = oneshot::channel();
+    browser
+        .as_ref()
+        .unwrap()
+        .sender
+        .send((action.to_owned(), args, tx))
+        .await
+        .map_err(|_| "Browser stopped".to_owned())?;
+    drop(browser);
+    tokio::time::timeout(Duration::from_secs(45), rx)
+        .await
+        .map_err(|_| "Browser action timed out".to_owned())
+        .and_then(|r| r.map_err(|_| "Browser stopped".to_owned()))
+        .and_then(|r| r)
+}
+
+/// Subscribes to live screencast frames from `session_id`'s running browser, if any.
+pub(crate) async fn subscribe_frames(
+    session_id: &str,
+) -> Option<(
+    broadcast::Receiver<panel::ScreencastFrame>,
+    Option<panel::ScreencastFrame>,
+)> {
+    let slot = browsers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(session_id)?
+        .clone();
+    let browser = slot.lock().await;
+    let running = browser.as_ref().filter(|b| !b.stopped())?;
+    let latest = running
+        .latest_frame
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    Some((running.frames.subscribe(), latest))
 }
 
 fn owner_alive(pid: u32) -> bool {
@@ -964,9 +1122,12 @@ mod lifecycle_tests {
     #[test]
     fn a_stopped_browser_is_replaced_on_the_next_call() {
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let (frames, _) = tokio::sync::broadcast::channel(4);
         let browser = Browser {
             sender,
             stop: tokio_util::sync::CancellationToken::new(),
+            frames,
+            latest_frame: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         assert!(!browser.stopped());
         drop(receiver);

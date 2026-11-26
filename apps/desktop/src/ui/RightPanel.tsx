@@ -43,6 +43,9 @@ const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default:
 const ThreadDetails = lazy(() => import("./ThreadDetails").then((m) => ({ default: m.ThreadDetails })));
 const PullsPanel = lazy(() => import("./PullRequests").then((m) => ({ default: m.PullsPanel })));
 const IssuesPanel = lazy(() => import("./IssuesPanel").then((m) => ({ default: m.IssuesPanel })));
+const BrowserPreviewPanel = lazy(() =>
+  import("./BrowserPreviewPanel").then((m) => ({ default: m.BrowserPreviewPanel })),
+);
 
 /** The views the panel shows. */
 type Kind = NonNullable<AppState["panel"]>;
@@ -339,6 +342,7 @@ export function RightPanel() {
     changes: "Changes",
     pulls: "Pull requests",
     issues: "Issues",
+    preview: "Preview",
     peek: peekIsSideChat ? "Side chat" : "Thread",
   };
   const home = kind === "details";
@@ -383,6 +387,7 @@ export function RightPanel() {
         {kind === "changes" && <ChangesPanel />}
         {kind === "pulls" && <PullsPanel />}
         {kind === "issues" && <IssuesPanel />}
+        {kind === "preview" && <BrowserPreviewPanel />}
         {kind === "peek" && <ThreadPeek />}
       </Suspense>
     </>

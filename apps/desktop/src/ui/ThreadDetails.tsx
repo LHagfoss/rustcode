@@ -220,6 +220,11 @@ export function ThreadDetails() {
             <ChevronRight size={14} className={icon} />
           </Property>
         )}
+        <Property label="Preview" onClick={() => showPanel("preview")}>
+          <span className="truncate text-fg-muted">Browser panel</span>
+          <span className="flex-1" />
+          <ChevronRight size={14} className={icon} />
+        </Property>
       </div>
       <WorktreeScriptsSection cwd={host ? undefined : thread.cwd} />
       <ThreadPortsSection cwd={host ? undefined : thread.cwd} />
