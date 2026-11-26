@@ -950,6 +950,10 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 }
 
 #[cfg(test)]
+#[path = "replay_tests.rs"]
+mod replay_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
