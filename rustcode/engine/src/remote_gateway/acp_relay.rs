@@ -550,6 +550,8 @@ mod tests {
                 "_rustcode/capabilities",
                 "_rustcode/outside/",
                 "_rustcode/loops/",
+                "_rustcode/browser/",
+                "_rustcode/ports/",
             ]
         );
         for method in [
@@ -616,6 +618,9 @@ mod tests {
             "_rustcode/loops/cancel",
             "_rustcode/loops/delete",
             "_rustcode/loops/start_daemon",
+            "_rustcode/browser/open",
+            "_rustcode/browser/pick",
+            "_rustcode/ports/list",
         ] {
             assert!(allowed(method), "{method}");
         }

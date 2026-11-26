@@ -307,10 +307,15 @@ pub fn sanitize_element_payload(
                 continue;
             }
             let raw_str = val.as_str().unwrap_or("");
-            let cleaned = if contains_secret(raw_str) {
+            let cleaned = if matches!(name.as_str(), "href" | "src" | "action") {
+                let sanitized = sanitize_url(raw_str);
+                if !sanitized.is_empty() && contains_secret(&sanitized) {
+                    "[redacted]".to_owned()
+                } else {
+                    sanitized
+                }
+            } else if contains_secret(raw_str) {
                 "[redacted]".to_owned()
-            } else if matches!(name.as_str(), "href" | "src" | "action") {
-                sanitize_url(raw_str)
             } else if name == "class" {
                 clamp_string(Some(raw_str), MAX_CLASS_LEN)
             } else {
