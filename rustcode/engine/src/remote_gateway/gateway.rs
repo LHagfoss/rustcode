@@ -1347,20 +1347,29 @@ impl Shared {
         }
     }
 
-    pub(super) fn acp_allowed(&self, id: &str) -> bool {
+    /// The ACP ceiling of device `id`; `none` for one that is not paired.
+    pub(super) fn acp_access(&self, id: &str) -> super::access::Access {
         self.state()
             .devices
             .select(id)
-            .is_ok_and(|record| record.acp)
+            .map_or(super::access::Access::None, |record| record.access_level())
     }
 
-    fn set_acp(&self, selector: &str, allow: bool) -> Result<()> {
+    /// Set a device's ACP ceiling. Its open connections take the new level
+    /// at their next frame; `none` closes them.
+    fn set_access(&self, selector: &str, level: super::access::Access) -> Result<()> {
         let mut state = self.state();
         let mut devices = state.devices.clone();
-        let record = devices.set_acp(selector, allow)?;
+        let record = devices.set_access(selector, level)?;
         self.persist(&mut state, devices)?;
-        if !allow {
+        if level == super::access::Access::None {
             close_device(&mut state, &record.id);
+        } else {
+            for live in state.live.values() {
+                if live.device_id == record.id {
+                    live.control.set_access(level);
+                }
+            }
         }
         Ok(())
     }
@@ -2144,12 +2153,18 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStrea
             ControlRequest::CancelMachineOffer => ControlResponse::MachineOfferCancelled {
                 was_open: shared.cancel_machine_offer(),
             },
-            ControlRequest::SetAcp { device, allow } => match shared.set_acp(&device, allow) {
-                Ok(()) => ControlResponse::Ack,
-                Err(error) => ControlResponse::Error {
-                    message: format!("{error:#}"),
-                },
-            },
+            ControlRequest::SetAcp {
+                device,
+                allow,
+                access,
+            } => {
+                match shared.set_access(&device, super::control::requested_access(allow, access)) {
+                    Ok(()) => ControlResponse::Ack,
+                    Err(error) => ControlResponse::Error {
+                        message: format!("{error:#}"),
+                    },
+                }
+            }
             ControlRequest::Revoke { device } => match shared.revoke(&device) {
                 Ok((record, closed_connections)) => ControlResponse::Revoked {
                     device_id: record.id,

@@ -3,6 +3,7 @@
 // and the version sentence when the two ends differ.
 
 import { describe, expect, test } from "bun:test";
+import { parseRemoteStatus } from "../acp/remote";
 import type { SessionSummary } from "../acp/types";
 import {
   deviceGlyph,
@@ -268,4 +269,22 @@ describe("access between this computer and a machine", () => {
     expect(notice).toContain("one way");
     expect(notice).toEndWith("Arch could not reach this computer.");
   });
+});
+
+test("a paired computer's access level reads in its Access row", () => {
+  const machine = { id: "studio", name: "Studio", state: "connected" as const };
+  const device = (access?: "read" | "threads" | "full") => ({
+    id: "d1",
+    name: "Studio",
+    kind: "desktop" as const,
+    platform: "macos",
+    hostId: "studio",
+    ...(access ? { access } : {}),
+  });
+  expect(machineAccess(machine, [device("read")]).inboundText).toContain("can read threads on this computer");
+  expect(machineAccess(machine, [device("threads")]).inboundText).toContain("not change its settings");
+  expect(machineAccess(machine, [device()]).inboundText).toContain("can see and run all threads");
+  expect(parseRemoteStatus({ devices: [{ id: "d1", access: "threads" }] }).devices[0]?.access).toBe(
+    "threads",
+  );
 });

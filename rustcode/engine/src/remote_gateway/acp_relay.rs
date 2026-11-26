@@ -271,7 +271,7 @@ pub(super) async fn relay(
         return None;
     }
     let (server_read, mut server_write) = tokio::io::split(stream);
-    let (sink, mut queue) = OutboundQueue::new(control);
+    let (sink, mut queue) = OutboundQueue::new(Arc::clone(&control));
     let pending = PendingRequests::default();
     let produce = async {
         let mut server = BufReader::new(server_read);
@@ -320,15 +320,21 @@ pub(super) async fn relay(
                         let Ok(value) = serde_json::from_str::<Value>(&text) else { return Some(ErrorCode::InvalidFrame); };
                         if !value.is_object() || value["jsonrpc"] != "2.0" { return Some(ErrorCode::InvalidFrame); }
                         if let Some(method) = value.get("method") {
-                            if !method.as_str().is_some_and(allowed) {
+                            let refused = match method.as_str() {
+                                Some(method) if allowed(method) => super::access::refusal(control.access(), method),
+                                _ => Some("method is not permitted over remote ACP".to_owned()),
+                            };
+                            if let Some(message) = refused {
                                 if let Some(id) = value.get("id") {
                                     let error = json!({"jsonrpc":"2.0", "id":id, "error":{
-                                        "code":-32601,"message":"method is not permitted over remote ACP",
-                                        "data":{"code":"unauthorized_access"}}});
+                                        "code":-32601,"message":message,
+                                        "data":{"code":"unauthorized_access","access":control.access().name()}}});
                                     if !matches!(tokio::time::timeout(write_timeout, writer.send(Message::text(error.to_string()))).await, Ok(Ok(()))) { return None; }
                                 }
                                 continue;
                             }
+                        } else if control.access() < super::access::Access::Threads {
+                            continue;
                         } else if value.get("id").is_none() || (value.get("result").is_none() && value.get("error").is_none()) {
                             return Some(ErrorCode::InvalidFrame);
                         }
@@ -624,6 +630,7 @@ mod tests {
             "_rustcode/remote/pair",
             // Another machine must not mint a way into this one.
             "_rustcode/remote/connect_code",
+            "_rustcode/remote/access",
             "_rustcode/server/status",
             "_rustcode/server/stop",
             "_rustcode/mcp/set",
@@ -634,6 +641,20 @@ mod tests {
             "unknown",
         ] {
             assert!(!allowed(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn every_method_a_lower_access_level_names_is_one_the_relay_carries() {
+        for method in super::super::access::READ
+            .iter()
+            .chain(super::super::access::THREADS)
+        {
+            assert!(allowed(method), "{method}");
+        }
+        for method in EXACT_METHODS {
+            let level = super::super::access::needed(method);
+            assert!(level > super::super::access::Access::None, "{method}");
         }
     }
 }

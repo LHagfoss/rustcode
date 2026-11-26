@@ -1372,6 +1372,7 @@ fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
         "lastSeenAt": device.last_seen_at,
         "connected": connected,
         "signsInWithKey": device.signs_with_key,
+        "access": device.access.map(crate::remote_gateway::access::Access::name),
     })
 }
 
@@ -2405,6 +2406,7 @@ mod tests {
             platform: "windows".into(),
             host_id: Some("host-0123456789abcdef".into()),
             signs_with_key: false,
+            access: None,
         };
         assert_eq!(
             device_json(&summary, Some(true)),
@@ -2502,6 +2504,7 @@ mod tests {
             platform: "ios".into(),
             host_id: None,
             signs_with_key: false,
+            access: None,
         }
     }
 

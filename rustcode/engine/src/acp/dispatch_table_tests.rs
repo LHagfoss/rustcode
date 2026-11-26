@@ -361,6 +361,12 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for remote::RemoteRevokeRequest"
     );
     assert!(
+        <remote_access::RemoteAccessRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/remote/access"
+        ),
+        "method mismatch for remote_access::RemoteAccessRequest"
+    );
+    assert!(
         <revoke_machine::RevokeMachineRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/remote/revoke_machine"
         ),

@@ -960,11 +960,18 @@ pub(super) async fn dispatch_request(
         "_rustcode/remote/revoke" => {
             let server = server.clone();
             let request: remote::RemoteRevokeRequest = parse_params(params)?;
-
-            let server = server.clone();
             connection.spawn(async move {
                 responder.respond(server.remote.revoke(&request.device_id).await)?;
                 Ok(())
+            })
+        }
+        "_rustcode/remote/access" => {
+            let request: remote_access::RemoteAccessRequest = parse_params(params)?;
+            connection.spawn(async move {
+                match remote_access::set(request).await {
+                    Ok(value) => responder.respond(value),
+                    Err(error) => responder.respond_with_error(error),
+                }
             })
         }
         // Harness detection runs commands and a model listing may start

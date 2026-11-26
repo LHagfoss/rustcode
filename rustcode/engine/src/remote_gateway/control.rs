@@ -21,6 +21,17 @@ use tokio::io::BufReader;
 
 pub const CONTROL_PROTOCOL_VERSION: u32 = 1;
 
+/// The level a [`ControlRequest::SetAcp`] asks for.
+pub fn requested_access(
+    allow: bool,
+    access: Option<super::access::Access>,
+) -> super::access::Access {
+    match (allow, access) {
+        (false, _) => super::access::Access::None,
+        (true, level) => level.unwrap_or(super::access::Access::Full),
+    }
+}
+
 /// Deadline for one control exchange, on both ends.
 pub const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -28,10 +39,13 @@ pub const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlRequest {
     Status,
-    /// Host owner grants or revokes full ACP control. Never a device frame.
+    /// Host owner sets a device's ACP ceiling: `access` when given, else
+    /// full for `allow` and none without. Never a device frame.
     SetAcp {
         device: String,
         allow: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access: Option<super::access::Access>,
     },
     /// Issue a pairing challenge, replacing any outstanding one.
     Pair,
@@ -206,6 +220,10 @@ pub struct DeviceSummary {
     /// from an older gateway.
     #[serde(default)]
     pub signs_with_key: bool,
+    /// Its ACP ceiling; absent from an older gateway, which knew only all
+    /// or nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<super::access::Access>,
 }
 
 fn unknown_platform() -> String {
@@ -222,6 +240,7 @@ impl From<&DeviceRecord> for DeviceSummary {
             platform: device.platform.clone(),
             host_id: device.host_id.clone(),
             signs_with_key: device.has_key(),
+            access: Some(device.access_level()),
         }
     }
 }

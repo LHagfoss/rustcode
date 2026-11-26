@@ -1,4 +1,5 @@
 // design-lint: allow-file (fake link colours in canned data)
+
 import {
   COMMANDS,
   configOptions,
@@ -14,6 +15,7 @@ import {
   withoutSkillContent,
 } from "./mockFixtures";
 import { mockGit, mockQrRows } from "./mockGit";
+import { setMockAccess } from "./mockRemoteAccess";
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
@@ -2073,6 +2075,8 @@ export class MockEngine {
           revoked: { deviceId: str(device.id) ?? deviceId, deviceName: str(device.name) ?? deviceId },
         };
       }
+      case "_rustcode/remote/access":
+        return setMockAccess(this.remote.devices, params);
       case "_rustcode/outside/list":
       case "_rustcode/outside/create":
       case "_rustcode/outside/update":

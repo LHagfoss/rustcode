@@ -255,15 +255,18 @@ async fn run_remote_command(
         RemoteCommands::Devices { json, command } => {
             if let Some(command) = command {
                 use crate::cli::RemoteDeviceCommands;
-                let (device, allow) = match command {
-                    RemoteDeviceCommands::Allow { device } => (device, true),
-                    RemoteDeviceCommands::Deny { device } => (device, false),
+                use rustcode::remote_gateway::access::Access;
+                let (device, level) = match command {
+                    RemoteDeviceCommands::Allow { device, access } => {
+                        (device, Access::parse(access).unwrap_or(Access::Full))
+                    }
+                    RemoteDeviceCommands::Deny { device } => (device, Access::None),
                 };
-                lifecycle.set_acp(device, allow).await?;
-                println!(
-                    "ACP access {} for {device}.",
-                    if allow { "allowed" } else { "denied" }
-                );
+                lifecycle.set_access(device, level).await?;
+                match level {
+                    Access::None => println!("ACP access denied for {device}."),
+                    level => println!("ACP access allowed for {device}: {}.", level.name()),
+                }
                 return Ok(());
             }
             let devices = lifecycle.devices()?;

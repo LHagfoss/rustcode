@@ -22,7 +22,12 @@ Assets, in the order they matter:
 1. **Control of the computer.** A paired device with the `acp` grant (every
    desktop that was accepted, see [Desktop ACP channel](remote.md#desktop-acp-channel))
    can start threads and run tools on this computer. A phone can read and
-   drive every shared thread. Either is, in effect, a shell as the user.
+   drive every shared thread. Either is, in effect, a shell as the user. The
+   owner can lower a desktop's grant to `read` (list and read threads only) or
+   `threads` (also start and drive them, but not change settings, skills,
+   accounts or jobs, or run `machine/exec`); `threads` still runs tools under
+   the thread's permission mode, so it is a ceiling, not a sandbox
+   ([Desktop ACP channel](remote.md#desktop-acp-channel)).
 2. **Thread content.** Prompts, answers, tool output and diffs, which may hold
    source code and secrets.
 3. **The device token.** Whoever holds it is that device until it is revoked.

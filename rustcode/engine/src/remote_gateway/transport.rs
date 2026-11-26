@@ -635,7 +635,9 @@ async fn pump(
                         return None;
                     }
                     if serde_json::from_str::<crate::remote::protocol::AcpClientFrame>(&text).is_ok() {
-                        if !shared.acp_allowed(&connection.context.device_id) {
+                        let access = shared.acp_access(&connection.context.device_id);
+                        connection.control.set_access(access);
+                        if access == super::access::Access::None {
                             let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires approval from the host owner");
                             write(writer, Message::text(error.to_text()), limits.write_timeout).await?;
                             continue;

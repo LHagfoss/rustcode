@@ -14,6 +14,7 @@
 //! The existing `rustcode serve` transport (`crate::serve`) is unrelated and
 //! unchanged.
 
+pub mod access;
 mod acp_relay;
 pub(crate) use acp_relay::serve_browser;
 pub mod address;
