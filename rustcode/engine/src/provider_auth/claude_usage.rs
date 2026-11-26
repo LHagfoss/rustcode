@@ -1491,8 +1491,8 @@ mod tests {
             windows: vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))],
             as_of: None,
         };
-        record_in(dir.path(), work, &answered);
         let before = chrono::Utc::now().timestamp();
+        record_in(dir.path(), work, &answered);
         let recorded = recorded_in(dir.path(), work).expect("the read was kept");
         let after = chrono::Utc::now().timestamp();
         let ClaudeUsage::Windows {
