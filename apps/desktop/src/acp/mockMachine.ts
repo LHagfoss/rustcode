@@ -118,6 +118,8 @@ export class MockMachine {
       "workflow-call-budget": 40,
       "workflow-timeout-minutes": 60,
       "workflow-kept-runs": 20,
+      "workflow-token-budget": 0,
+      "workflow-cost-budget-usd": 0,
     };
     this.skills = [
       {

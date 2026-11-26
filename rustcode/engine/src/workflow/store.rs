@@ -85,6 +85,9 @@ pub(super) struct RunRecord {
     /// claims that once (`claim_wake`), so no reconnect tells it twice.
     #[serde(default)]
     pub woken: bool,
+    /// What the run may spend; a run saved before budgets has none.
+    #[serde(default)]
+    pub budget: super::budget::Budget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,6 +334,7 @@ mod tests {
             result: None,
             error: None,
             woken: false,
+            budget: Default::default(),
         }
     }
 

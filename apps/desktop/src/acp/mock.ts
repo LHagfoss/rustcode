@@ -128,6 +128,8 @@ export class MockEngine {
     "workflow-call-budget": 40,
     "workflow-timeout-minutes": 60,
     "workflow-kept-runs": 20,
+    "workflow-token-budget": 0,
+    "workflow-cost-budget-usd": 0,
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };

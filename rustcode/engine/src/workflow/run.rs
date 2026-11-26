@@ -276,6 +276,15 @@ impl Run {
                     inner.record.limits.call_budget
                 ));
             }
+            if let Some(reason) = super::budget::refusal(inner.record.budget, || {
+                inner
+                    .known
+                    .values()
+                    .filter_map(|call| call.session_id.clone())
+                    .collect()
+            }) {
+                return Err(reason);
+            }
             // Held now, so calls started together cannot all pass the check.
             inner.known.insert(
                 key.clone(),
@@ -612,6 +621,7 @@ pub(super) fn new_record(
         result: None,
         error: None,
         woken: false,
+        budget: Default::default(),
     }
 }
 
