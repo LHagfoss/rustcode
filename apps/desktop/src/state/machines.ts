@@ -814,15 +814,26 @@ async function attach(machine: Machine): Promise<void> {
 function markMachine(id: string, link: LinkState | undefined, detail: string | null): void {
   const state = linkMachineState(link);
   if (!state) return;
-  useMachines.setState((current) => ({
-    machines: current.machines.map((machine) => {
+  const now = Date.now();
+  useMachines.setState((current) => {
+    let dropped = false;
+    const machines = current.machines.map((machine) => {
       if (machine.id !== id) return machine;
       if (state === "connected")
-        return { ...machine, state, detail: null, lastConnectedAt: new Date().toISOString() };
+        return { ...machine, state, detail: null, lastConnectedAt: new Date(now).toISOString() };
       if (machine.state !== "connected") return machine;
-      return { ...machine, state: "offline", detail: detail ?? machine.detail };
-    }),
-  }));
+      dropped = true;
+      return { ...machine, state: "offline" as const, detail: detail ?? machine.detail };
+    });
+    if (state === "connected") {
+      if (!(id in current.offlineSince)) return { machines };
+      const offlineSince = { ...current.offlineSince };
+      delete offlineSince[id];
+      return { machines, offlineSince };
+    }
+    if (dropped) return { machines, offlineSince: { ...current.offlineSince, [id]: now } };
+    return { machines };
+  });
 }
 
 /**
@@ -1471,6 +1482,9 @@ export function reconnectMachine(machine: Pick<Machine, "id">): void {
         machines: state.machines.map((entry) =>
           entry.id === machine.id ? { ...entry, state: "offline", detail: errorText(error) } : entry,
         ),
+        ...(state.offlineSince[machine.id] === undefined
+          ? { offlineSince: { ...state.offlineSince, [machine.id]: Date.now() } }
+          : {}),
       }));
     });
 }
