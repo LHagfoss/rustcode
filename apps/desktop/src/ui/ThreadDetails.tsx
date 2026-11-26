@@ -231,6 +231,7 @@ export function ThreadDetails() {
       {pullsOn && (
         <PullsSection
           cwd={worktree?.repo || thread.cwd}
+          remote={!!host}
           branch={branch}
           folded={isFolded("pulls")}
           onToggle={toggle}
@@ -290,11 +291,13 @@ const PULL_ROWS = 2;
 /** The pulls opened from the thread's branch: the first few, the full list one press away. */
 function PullsSection({
   cwd,
+  remote,
   branch,
   folded,
   onToggle,
 }: {
   cwd: string | undefined;
+  remote: boolean;
   branch: string | undefined;
   folded: boolean;
   onToggle: (id: SectionId) => void;
@@ -312,7 +315,7 @@ function PullsSection({
       onToggle={onToggle}
       action={
         <div className="flex items-center gap-1">
-          <OpenButton label="Issues" onClick={() => showPanel("issues")} />
+          {!remote && <OpenButton label="Issues" onClick={() => showPanel("issues")} />}
           <OpenButton label="All pull requests" onClick={openAll} />
         </div>
       }
