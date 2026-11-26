@@ -28,6 +28,7 @@ pub(crate) mod projects;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
+mod revoke_machine;
 mod rewind;
 pub(crate) mod scheduled;
 mod server_status;
@@ -801,6 +802,7 @@ impl AcpServer {
 
     /// The engine stops: every share, harness, turn and background task ends.
     async fn shutdown(&self) {
+        crate::sessions::flush_history();
         {
             let _updates = self
                 .client_capability_updates
@@ -945,6 +947,7 @@ impl AcpEngine {
         crate::data_store::warm();
         // Links an earlier engine was running when it died are not running now.
         tokio::task::spawn_blocking(crate::data_store::interrupt_orphaned_links);
+        crate::workflow::keep_resuming();
         let server = AcpServer::new(auto_approve)?;
         // Apps connected through `rc mcp-connect` find this engine by its
         // hub, so it listens from the start when any are connected.

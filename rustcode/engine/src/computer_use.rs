@@ -1,4 +1,6 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
+mod proxy;
+mod snapshot;
 use crate::orchestration::{
     ask_user::Asker,
     tool_socket::{CallAnswer, CallRequest},
@@ -53,9 +55,11 @@ impl Settings {
         {
             return false;
         }
-        let Some(host) = url.host_str() else {
-            return false;
-        };
+        url.host_str().is_some_and(|host| self.allows_host(host))
+    }
+    /// Whether a host (any case) matches an allowlist entry.
+    fn allows_host(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
         self.allowed_domains.iter().any(|entry| {
             let entry = entry.to_ascii_lowercase();
             if let Some(base) = entry.strip_prefix("*.") {
@@ -66,6 +70,26 @@ impl Settings {
         })
     }
 }
+/// The settings, read again only when `config.toml` changes, for checks that
+/// run on every request the browser makes.
+fn current_settings() -> Settings {
+    type Cached = Option<(Option<(std::time::SystemTime, u64)>, Settings)>;
+    static CACHE: Mutex<Cached> = Mutex::new(None);
+    let stamp = crate::config::get_config_dir()
+        .and_then(|dir| std::fs::metadata(dir.join("config.toml")).ok())
+        .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, settings)) = cache.as_ref()
+        && stamp.is_some()
+        && *cached == stamp
+    {
+        return settings.clone();
+    }
+    let settings = Settings::load();
+    *cache = Some((stamp, settings.clone()));
+    settings
+}
+
 pub(crate) fn settings_value() -> Value {
     let settings = Settings::load();
     json!({"enabled": settings.enabled, "allowed_domains": settings.allowed_domains,
@@ -132,16 +156,34 @@ const NAMES: [&str; 5] = [
 pub fn is_tool(name: &str) -> bool {
     NAMES.contains(&name)
 }
+/// Tools that change a page or what it loads, refused in Plan mode.
+pub fn acts_on_pages(name: &str) -> bool {
+    matches!(name, "browser_open" | "browser_click" | "browser_type")
+}
+fn check_arguments(tool: &str, args: &Value) -> Result<(), String> {
+    let has = |key: &str| args.get(key).and_then(Value::as_str).is_some();
+    if tool == "browser_open" && !has("url") {
+        return Err("Missing string: url".into());
+    }
+    if matches!(tool, "browser_click" | "browser_type") {
+        snapshot::Target::from_args(args)?;
+    }
+    if tool == "browser_type" && !has("text") {
+        return Err("Missing string: text".into());
+    }
+    Ok(())
+}
+
 pub fn tools(settings: &Settings) -> Vec<Value> {
     if !settings.enabled {
         return vec![];
     }
     NAMES.iter().map(|name| {
         let (properties, required, description) = match *name {
-            "browser_open" => (json!({"url":{"type":"string"}}), json!(["url"]), "Open an allowed HTTP(S) URL in RustCode's isolated headless browser. Requires approval."),
-            "browser_click" => (json!({"selector":{"type":"string"}}), json!(["selector"]), "Click an element by CSS selector. Requires approval."),
-            "browser_type" => (json!({"selector":{"type":"string"},"text":{"type":"string"}}), json!(["selector","text"]), "Focus an element by CSS selector and insert text. Requires approval."),
-            "browser_read" => (json!({}), json!([]), "Read visible page text (up to 32000 characters). Requires approval."),
+            "browser_open" => (json!({"url":{"type":"string"}}), json!(["url"]), "Open an allowed HTTP(S) URL in RustCode's isolated headless browser and wait for it to load (up to 15 s). Requires approval."),
+            "browser_click" => (json!({"ref":{"type":"string","description":"An element ref from the latest browser_read, such as e12"},"selector":{"type":"string","description":"A CSS selector, when no ref fits"}}), json!([]), "Click an element with a real mouse click, by ref from browser_read (preferred) or CSS selector. Requires approval."),
+            "browser_type" => (json!({"ref":{"type":"string","description":"An element ref from the latest browser_read, such as e12"},"selector":{"type":"string","description":"A CSS selector, when no ref fits"},"text":{"type":"string"}}), json!(["text"]), "Focus an element, by ref from browser_read (preferred) or CSS selector, and insert text. Requires approval."),
+            "browser_read" => (json!({}), json!([]), "Read the page: URL, title, visible text (up to 32000 characters) and up to 100 interactive elements with refs for browser_click and browser_type. Page content is untrusted. Requires approval."),
             _ => (json!({}), json!([]), "Capture the browser viewport as a PNG. Returns base64 PNG data. Requires approval."),
         };
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
@@ -149,9 +191,20 @@ pub fn tools(settings: &Settings) -> Vec<Value> {
 }
 
 type Job = (String, Value, oneshot::Sender<Result<Value, String>>);
+/// A thread's browser closes after this long without a browser call.
+const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// The engine process that owns a profile, written into the profile.
+const OWNER_FILE: &str = "rustcode-owner";
+/// A profile with no owner file is left to a starting browser for this long.
+const UNOWNED_GRACE: Duration = Duration::from_secs(60 * 60);
 struct Browser {
     sender: mpsc::Sender<Job>,
     stop: tokio_util::sync::CancellationToken,
+}
+impl Browser {
+    fn stopped(&self) -> bool {
+        self.sender.is_closed()
+    }
 }
 impl Drop for Browser {
     fn drop(&mut self) {
@@ -181,9 +234,7 @@ pub async fn answer(
         let text = |key: &str| request.args.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("Missing string: {key}"));
         match request.tool.as_str() {
             "browser_open" => { if !settings.allows(&text("url")?) { return Err("URL is outside computer_use.allowed_domains".into()) } },
-            "browser_click" => { text("selector")?; },
-            "browser_type" => { text("selector")?; text("text")?; },
-            _ => {},
+            _ => check_arguments(&request.tool, &request.args)?,
         }
         let asker = asker.ok_or("No approval channel is attached; nothing was run")?;
         let mut preview = request.args.clone();
@@ -241,10 +292,12 @@ pub(crate) fn executable(settings: &Settings) -> Option<PathBuf> {
 async fn start(settings: &Settings) -> Result<Browser, String> {
     let executable =
         executable(settings).ok_or("Chrome/Chromium not found; set computer_use.executable")?;
-    let profile = crate::config::get_config_dir()
+    let root = crate::config::get_config_dir()
         .ok_or("No config directory")?
-        .join("computer-use")
-        .join(format!("profile-{:032x}", rand::random::<u128>()));
+        .join("computer-use");
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| sweep_stale_profiles(&root, owner_alive));
+    let profile = root.join(format!("profile-{:032x}", rand::random::<u128>()));
     std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -252,6 +305,17 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    std::fs::write(profile.join(OWNER_FILE), std::process::id().to_string())
+        .map_err(|e| e.to_string())?;
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_on_failure = stop.clone().drop_guard();
+    let allow: proxy::Allow = Arc::new(|host: &str| {
+        let settings = current_settings();
+        settings.enabled && settings.allows_host(host)
+    });
+    let proxy_port = proxy::bind(allow, stop.clone())
+        .await
+        .map_err(|e| format!("Could not start the browser's proxy: {e}"))?;
     let child = Command::new(executable)
         .args([
             "--headless=new",
@@ -261,7 +325,10 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
             "--disable-extensions",
             "--disable-background-networking",
             "--block-new-web-contents",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         ])
+        .arg(format!("--proxy-server=http://127.0.0.1:{proxy_port}"))
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank")
         .stdin(std::process::Stdio::null())
@@ -310,11 +377,15 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         .await
         .map_err(|e| e.to_string())?;
     let (sender, mut jobs) = mpsc::channel::<Job>(1);
-    let stop = tokio_util::sync::CancellationToken::new();
     let stopped = stop.clone();
     tokio::spawn(async move {
         let mut chrome = chrome;
-        let mut cdp = Cdp { ws, next: 0 };
+        let mut cdp = Cdp {
+            ws,
+            next: 0,
+            refs: Default::default(),
+            loaded: false,
+        };
         if cdp
             .command("Fetch.enable", json!({"patterns":[{"urlPattern":"*"}]}))
             .await
@@ -324,6 +395,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         }
         let _ = cdp
             .command(
+                "Network.enable",
+                json!({"maxTotalBufferSize":0,"maxResourceBufferSize":0}),
+            )
+            .await;
+        let _ = cdp
+            .command(
                 "Network.setBlockedURLs",
                 json!({"urls":["file:*","ftp:*","data:*"]}),
             )
@@ -331,9 +408,13 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = cdp
             .command("Page.setDownloadBehavior", json!({"behavior":"deny"}))
             .await;
+        let _ = cdp.command("Page.enable", json!({})).await;
+        let idle = tokio::time::sleep(IDLE_LIMIT);
+        tokio::pin!(idle);
         loop {
             tokio::select! {
                 _ = stopped.cancelled() => break,
+                _ = &mut idle => break,
                 message = cdp.ws.next() => {
                     match message { Some(Ok(Message::Text(body))) => { if let Ok(event) = serde_json::from_str::<Value>(&body) { if cdp.intercept(&event).await.is_err() { break } } }, Some(Ok(_)) => {}, _ => break }
                 },
@@ -343,6 +424,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
                         _ = stopped.cancelled() => break,
                         result = tokio::time::timeout(Duration::from_secs(40), cdp.action(&tool, &args)) => result.unwrap_or_else(|_| Err("CDP timed out".into())),
                     };
+                    idle.as_mut().reset(tokio::time::Instant::now() + IDLE_LIMIT);
                     let failed = result.is_err(); let _ = answer.send(result); if failed { break }
                 }
             }
@@ -351,12 +433,16 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = chrome.child.wait().await;
         let _ = std::fs::remove_dir_all(&chrome.profile);
     });
+    let _ = stop_on_failure.disarm();
     Ok(Browser { sender, stop })
 }
 struct Cdp {
     ws: WebSocketStream<TcpStream>,
     next: u64,
+    refs: snapshot::Refs,
+    loaded: bool,
 }
+const LOAD_LIMIT: Duration = Duration::from_secs(15);
 impl Cdp {
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next += 1;
@@ -371,8 +457,11 @@ impl Cdp {
         Ok(self.next)
     }
     async fn intercept(&mut self, event: &Value) -> Result<(), String> {
+        if event["method"] == "Page.loadEventFired" {
+            self.loaded = true;
+        }
         if event["method"] == "Fetch.requestPaused" {
-            let allowed = Settings::load();
+            let allowed = current_settings();
             let allowed = allowed.enabled
                 && allowed.allows(event["params"]["request"]["url"].as_str().unwrap_or(""));
             let mut params = json!({"requestId":event["params"]["requestId"]});
@@ -408,11 +497,40 @@ impl Cdp {
         }
         Err("Chrome disconnected".into())
     }
-    async fn evaluate(&mut self, expression: String) -> Result<Value, String> {
+    async fn wait_for_load(&mut self) -> Result<bool, String> {
+        let deadline = tokio::time::Instant::now() + LOAD_LIMIT;
+        while !self.loaded {
+            let message = match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Err(_) => return Ok(false),
+                Ok(None) => return Err("Chrome disconnected".into()),
+                Ok(Some(message)) => message.map_err(|e| e.to_string())?,
+            };
+            if let Message::Text(body) = message
+                && let Ok(event) = serde_json::from_str::<Value>(&body)
+            {
+                self.intercept(&event).await?;
+            }
+        }
+        Ok(true)
+    }
+    async fn main_frame(&mut self) -> Result<Value, String> {
+        let tree = self.command("Page.getFrameTree", json!({})).await?;
+        Ok(tree["frameTree"]["frame"].clone())
+    }
+    /// Evaluate in an isolated world: the page's own scripts can neither see
+    /// nor change what this runs or reads.
+    async fn evaluate(&mut self, expression: &str) -> Result<Value, String> {
+        let frame = self.main_frame().await?;
+        let world = self
+            .command(
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame["id"],"worldName":"rustcode"}),
+            )
+            .await?;
         let response = self
             .command(
                 "Runtime.evaluate",
-                json!({"expression":expression,"returnByValue":true}),
+                json!({"expression":expression,"contextId":world["executionContextId"],"returnByValue":true}),
             )
             .await?;
         if response.get("exceptionDetails").is_some() {
@@ -420,39 +538,120 @@ impl Cdp {
         }
         Ok(response["result"]["value"].clone())
     }
+    async fn target_node(&mut self, target: &snapshot::Target) -> Result<i64, String> {
+        match target {
+            snapshot::Target::Ref(reference) => snapshot::resolve(&self.refs, reference),
+            snapshot::Target::Selector(selector) => {
+                let document = self.command("DOM.getDocument", json!({"depth":0})).await?;
+                let found = self
+                    .command(
+                        "DOM.querySelector",
+                        json!({"nodeId":document["root"]["nodeId"],"selector":selector}),
+                    )
+                    .await?;
+                let node = found["nodeId"].as_i64().filter(|id| *id != 0);
+                let node = node.ok_or_else(|| format!("Selector not found: {selector}"))?;
+                let described = self
+                    .command("DOM.describeNode", json!({"nodeId":node}))
+                    .await?;
+                described["node"]["backendNodeId"]
+                    .as_i64()
+                    .ok_or_else(|| "Chrome did not describe the element".to_owned())
+            }
+        }
+    }
+    async fn on_node(
+        &mut self,
+        target: &snapshot::Target,
+        node: i64,
+        method: &str,
+        mut params: Value,
+    ) -> Result<Value, String> {
+        params["backendNodeId"] = json!(node);
+        self.command(method, params)
+            .await
+            .map_err(|error| match target {
+                snapshot::Target::Ref(reference) => snapshot::stale(reference),
+                snapshot::Target::Selector(_) => error,
+            })
+    }
+    async fn click(&mut self, target: &snapshot::Target) -> Result<(), String> {
+        let node = self.target_node(target).await?;
+        self.on_node(target, node, "DOM.scrollIntoViewIfNeeded", json!({}))
+            .await?;
+        let model = self
+            .on_node(target, node, "DOM.getBoxModel", json!({}))
+            .await?;
+        let (x, y) = snapshot::center(&model["model"]["content"])
+            .ok_or("The element has no box to click; it may be hidden")?;
+        for (kind, clicks) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)] {
+            let mut event = json!({"type":kind,"x":x,"y":y});
+            if clicks > 0 {
+                event["button"] = json!("left");
+                event["clickCount"] = json!(clicks);
+            }
+            self.command("Input.dispatchMouseEvent", event).await?;
+        }
+        Ok(())
+    }
+    async fn read(&mut self) -> Result<Value, String> {
+        let page = self
+            .evaluate(&format!(
+                "(()=>{{const t=document.body?document.body.innerText:'';return {{url:location.href,title:document.title,text:t.slice(0,{max}),truncated:t.length>{max}}}}})()",
+                max = snapshot::MAX_TEXT
+            ))
+            .await?;
+        let tree = self
+            .command("Accessibility.getFullAXTree", json!({}))
+            .await?;
+        let (elements, refs, omitted) = snapshot::elements(&tree, snapshot::MAX_ELEMENTS);
+        self.refs = refs;
+        Ok(snapshot::read_result(&page, elements, omitted))
+    }
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
-            if !Settings::load().allows(url) {
+            if !current_settings().allows(url) {
                 return Err("URL refused".into());
             }
+            self.loaded = false;
+            self.refs.clear();
             let response = self.command("Page.navigate", json!({"url":url})).await?;
             if response.get("errorText").is_some() {
                 return Err(response.to_string());
             }
-            return Ok(response);
+            let loaded = response.get("loaderId").is_none() || self.wait_for_load().await?;
+            let mut result = json!({"url":url,"loaded":loaded});
+            if !loaded {
+                result["note"] = json!(
+                    "The page had not finished loading after 15 s; browser_read shows what is there so far."
+                );
+            }
+            return Ok(result);
         }
-        let location = self.evaluate("location.href".into()).await?;
-        if !Settings::load().allows(location.as_str().unwrap_or("")) {
+        let location = self.main_frame().await?;
+        if !current_settings().allows(location["url"].as_str().unwrap_or("")) {
             return Err("Current page is outside the allowlist; open an allowed URL".into());
         }
         match tool {
-            "browser_read" => {
-                self.evaluate("document.body?.innerText.slice(0,32000) || ''".into())
-                    .await
-            }
+            "browser_read" => self.read().await,
             "browser_screenshot" => {
                 self.command("Page.captureScreenshot", json!({"format":"png"}))
                     .await
             }
-            "browser_click" | "browser_type" => {
-                let selector =
-                    serde_json::to_string(&args["selector"]).map_err(|e| e.to_string())?;
-                self.evaluate(format!("(()=>{{const e=document.querySelector({selector});if(!e)throw Error('Selector not found');e.scrollIntoView({{block:'center'}});e.focus();{};return true}})()", if tool == "browser_click" { "e.click()" } else { "" })).await?;
-                if tool == "browser_type" {
-                    self.command("Input.insertText", json!({"text":args["text"]}))
-                        .await?;
-                }
+            "browser_click" => {
+                let target = snapshot::Target::from_args(args)?;
+                self.click(&target).await?;
+                Ok(json!({"ok":true}))
+            }
+            "browser_type" => {
+                let target = snapshot::Target::from_args(args)?;
+                let node = self.target_node(&target).await?;
+                self.on_node(&target, node, "DOM.scrollIntoViewIfNeeded", json!({}))
+                    .await?;
+                self.on_node(&target, node, "DOM.focus", json!({})).await?;
+                self.command("Input.insertText", json!({"text":args["text"]}))
+                    .await?;
                 Ok(json!({"ok":true}))
             }
             _ => Err("Unknown browser tool".into()),
@@ -518,16 +717,7 @@ pub async fn run_approved(
     if !is_tool(tool) {
         return Err("Unknown browser tool".into());
     }
-    for key in match tool {
-        "browser_open" => vec!["url"],
-        "browser_click" => vec!["selector"],
-        "browser_type" => vec!["selector", "text"],
-        _ => vec![],
-    } {
-        if args.get(key).and_then(Value::as_str).is_none() {
-            return Err(format!("Missing string: {key}"));
-        }
-    }
+    check_arguments(tool, args)?;
     if tool == "browser_open" && !settings.allows(args["url"].as_str().unwrap_or("")) {
         return Err("URL refused".into());
     }
@@ -538,6 +728,9 @@ pub async fn run_approved(
         .or_default()
         .clone();
     let mut browser = slot.lock().await;
+    if browser.as_ref().is_some_and(Browser::stopped) {
+        *browser = None;
+    }
     if browser.is_none() {
         *browser = Some(tokio::select! {
             _ = cancel.cancelled() => return Err("Cancelled".into()),
@@ -560,6 +753,105 @@ pub async fn run_approved(
         *browser = None;
     }
     result.map(|value| value.to_string())
+}
+
+fn owner_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        i32::try_from(pid).is_ok_and(crate::orchestration::tool_socket::process_alive)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Remove browser profiles left by an engine that is no longer running, such
+/// as after a crash or a forced quit, when `Chrome`'s cleanup never ran.
+fn sweep_stale_profiles(root: &std::path::Path, alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with("profile-") || !path.is_dir() {
+            continue;
+        }
+        let owner = std::fs::read_to_string(path.join(OWNER_FILE))
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        let stale = match owner {
+            Some(pid) => pid != std::process::id() && !alive(pid),
+            None => entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > UNOWNED_GRACE),
+        };
+        if stale {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{Browser, OWNER_FILE, sweep_stale_profiles};
+
+    #[test]
+    fn sweep_removes_only_profiles_of_engines_that_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = |name: &str, owner: Option<String>| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            if let Some(owner) = owner {
+                std::fs::write(path.join(OWNER_FILE), owner).unwrap();
+            }
+            path
+        };
+        let dead = profile("profile-dead", Some("7".into()));
+        let live = profile("profile-live", Some("42".into()));
+        let own = profile("profile-own", Some(std::process::id().to_string()));
+        let starting = profile("profile-starting", None);
+        let other = profile("notes", Some("7".into()));
+        sweep_stale_profiles(root.path(), |pid| pid == 42);
+        assert!(!dead.exists());
+        assert!(live.exists());
+        assert!(own.exists());
+        assert!(
+            starting.exists(),
+            "a fresh profile without an owner may be starting"
+        );
+        assert!(other.exists(), "only profile directories are touched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_removes_old_profiles_without_an_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("profile-old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+        sweep_stale_profiles(root.path(), |_| true);
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn a_stopped_browser_is_replaced_on_the_next_call() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let browser = Browser {
+            sender,
+            stop: tokio_util::sync::CancellationToken::new(),
+        };
+        assert!(!browser.stopped());
+        drop(receiver);
+        assert!(browser.stopped());
+    }
 }
 
 /// Turn a native `browser_screenshot` result into a short text result and

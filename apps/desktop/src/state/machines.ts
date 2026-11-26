@@ -1341,22 +1341,28 @@ export function removeMachine(machine: Machine, onRemoved?: () => void): void {
     title: `Remove ${name}?`,
     message:
       `${name} is forgotten on this computer: its pairing token and routes are deleted, and its threads are no longer listed here. ` +
-      "It keeps listing this computer until you revoke it there.",
+      "This computer's access there ends too when it can be reached; otherwise revoke it there.",
     action: "Remove",
     destructive: true,
     run: () => {
-      void shellCall("machines_remove", { id: machine.id }).then(
-        async () => {
-          detach(machine.id);
-          void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
-          toast(`Removed ${name}.`, "success");
-          await refreshMachines();
+      void forgetMachine(machine).then(
+        (message) => {
+          toast(message, "success");
           onRemoved?.();
         },
         (error) => toast(errorText(error), "error"),
       );
     },
   });
+}
+
+/** Forget a machine without asking (the caller did): answers what to tell the owner. */
+export async function forgetMachine(machine: Machine): Promise<string> {
+  const message = await shellCall<string | null>("machines_remove", { id: machine.id });
+  detach(machine.id);
+  void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
+  await refreshMachines();
+  return message || `Removed ${machineName(machine)}.`;
 }
 
 /** A probe in words: `Reachable · 4 ms`, `Refused · 2 ms`, `Timed out`, `Not tested`. */

@@ -69,7 +69,7 @@ pub(crate) fn save_in(dir: &Path, id: &str, entry: CachedHarness) {
     file.harnesses.insert(id.to_owned(), entry);
     if let Ok(text) = serde_json::to_string(&file) {
         let _ = std::fs::create_dir_all(dir);
-        let _ = crate::worktrees::write_atomic(&path_in(dir), text.as_bytes());
+        let _ = crate::atomic_file::write_atomic(&path_in(dir), text.as_bytes());
     }
 }
 

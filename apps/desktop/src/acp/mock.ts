@@ -1391,6 +1391,10 @@ export class MockEngine {
         return {
           run: { run_id: str(obj(params)?.runId) ?? "", status: "running", driven: true },
         };
+      case "_rustcode/workflows/retry":
+        return {
+          run: { run_id: str(obj(params)?.runId) ?? "", status: "running", driven: true },
+        };
       case "_rustcode/workflows/stop":
         // The mock has no runs of its own: a staged run (state/workflows.ts) is simply stopped.
         return {

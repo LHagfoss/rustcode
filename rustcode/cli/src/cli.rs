@@ -816,8 +816,17 @@ pub enum MachineCommands {
         #[arg(long, default_value_t = 4, value_name = "SECONDS")]
         discover_secs: u64,
     },
-    /// Forget a machine and its token
+    /// Forget a machine and its token, and end this computer's access there
     Remove {
+        /// Name, host id or a prefix of one
+        machine: String,
+        /// Only forget it here; the machine keeps listing this computer
+        #[arg(long)]
+        local: bool,
+    },
+    /// For a lost or stolen computer: end its pairings on this computer and on
+    /// every saved machine that answers, then forget it here
+    RevokeEverywhere {
         /// Name, host id or a prefix of one
         machine: String,
     },
@@ -2118,7 +2127,15 @@ mod tests {
         assert!(machines(&["add", "10.0.0.2", "--discover"]).is_err());
         assert!(matches!(
             machines(&["remove", "Studio"]).unwrap(),
-            MachineCommands::Remove { ref machine } if machine == "Studio"
+            MachineCommands::Remove { ref machine, local: false } if machine == "Studio"
+        ));
+        assert!(matches!(
+            machines(&["remove", "Studio", "--local"]).unwrap(),
+            MachineCommands::Remove { local: true, .. }
+        ));
+        assert!(matches!(
+            machines(&["revoke-everywhere", "Laptop"]).unwrap(),
+            MachineCommands::RevokeEverywhere { ref machine } if machine == "Laptop"
         ));
         assert!(machines(&["discover", "--json", "--secs", "2"]).is_ok());
         assert!(machines(&["remove"]).is_err());

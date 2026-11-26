@@ -103,7 +103,7 @@ fn store(session_id: &str, status: Status) -> Result<(), String> {
     }
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let text = json!({ "status": status.as_str(), "at": chrono::Utc::now().to_rfc3339() });
-    crate::worktrees::write_atomic(&path, text.to_string().as_bytes()).map_err(|e| e.to_string())
+    crate::atomic_file::write_atomic(&path, text.to_string().as_bytes()).map_err(|e| e.to_string())
 }
 
 fn watched() -> &'static Mutex<std::collections::HashSet<String>> {
@@ -394,7 +394,7 @@ pub(crate) fn set_snoozed(id: &str, until: Option<u64>) -> Result<(), String> {
     let dir = crate::sessions::get_active_session_dir(id)
         .filter(|dir| dir.is_dir())
         .ok_or_else(|| "thread storage is unavailable".to_owned())?;
-    crate::worktrees::write_atomic(
+    crate::atomic_file::write_atomic(
         &dir.join("snooze.json"),
         json!(until).to_string().as_bytes(),
     )
@@ -505,7 +505,7 @@ pub(crate) fn set_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
     if pinned {
         std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let text = json!({ "pinned": true, "at": chrono::Utc::now().to_rfc3339() });
-        crate::worktrees::write_atomic(&path, text.to_string().as_bytes())
+        crate::atomic_file::write_atomic(&path, text.to_string().as_bytes())
             .map_err(|error| error.to_string())?;
     } else {
         let _ = std::fs::remove_file(path);

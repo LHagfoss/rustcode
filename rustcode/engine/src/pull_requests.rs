@@ -480,59 +480,12 @@ pub async fn diff(cwd: &Path, number: u64) -> Result<PullDiff, PullError> {
     Ok(PullDiff { diff, truncated })
 }
 
-/// One line comment of a review: `line` in the file on `side` (`RIGHT`
-/// for the pull request's version, `LEFT` for the base).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
-pub struct ReviewComment {
-    pub path: String,
-    pub line: u64,
-    pub side: String,
-    pub body: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PostedReview {
     pub url: Option<String>,
 }
 
-/// The provider's review request: one review at `commit_id`, with its
-/// comments, so a review is posted whole or not at all.
-pub fn review_payload(
-    commit_id: &str,
-    event: &str,
-    body: &str,
-    comments: &[ReviewComment],
-) -> Result<Value, PullError> {
-    let event = match event {
-        "APPROVE" | "REQUEST_CHANGES" | "COMMENT" => event,
-        other => {
-            return Err(PullError {
-                code: "failed",
-                message: format!("unknown review event {other}"),
-            });
-        }
-    };
-    if commit_id.is_empty() {
-        return Err(PullError {
-            code: "failed",
-            message: "the review names no commit".to_owned(),
-        });
-    }
-    for comment in comments {
-        if !matches!(comment.side.as_str(), "LEFT" | "RIGHT") || comment.line == 0 {
-            return Err(PullError {
-                code: "failed",
-                message: format!("{} has no line to comment on", comment.path),
-            });
-        }
-    }
-    Ok(serde_json::json!({
-        "commit_id": commit_id,
-        "event": event,
-        "body": body,
-        "comments": comments,
-    }))
-}
+pub use crate::pull_review::{ReviewComment, review_payload};
 
 /// Post one review. A review the provider refuses comes back as `failed`
 /// with its message; one whose answer never arrived as `uncertain`, which
@@ -2107,26 +2060,6 @@ mod tests {
         );
         let other = classify("HTTP 502\n");
         assert_eq!((other.code, other.message.as_str()), ("failed", "HTTP 502"));
-    }
-
-    #[test]
-    fn a_review_payload_is_one_review_at_one_commit() {
-        let comments = vec![ReviewComment {
-            path: "a.rs".into(),
-            line: 12,
-            side: "RIGHT".into(),
-            body: "Why?".into(),
-        }];
-        let payload = review_payload("da4593b", "COMMENT", "Looks fine.", &comments).unwrap();
-        assert_eq!(payload["commit_id"], "da4593b");
-        assert_eq!(payload["event"], "COMMENT");
-        assert_eq!(payload["comments"][0]["line"], 12);
-        assert_eq!(payload["comments"][0]["side"], "RIGHT");
-        assert!(review_payload("da4593b", "MERGE", "", &[]).is_err());
-        assert!(review_payload("", "COMMENT", "x", &[]).is_err());
-        let mut bad = comments.clone();
-        bad[0].side = "MIDDLE".into();
-        assert!(review_payload("da4593b", "COMMENT", "", &bad).is_err());
     }
 
     #[test]

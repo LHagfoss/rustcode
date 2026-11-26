@@ -1922,8 +1922,9 @@ pub fn machines_cancel(
     Ok(())
 }
 
-/// Forget a machine and its token. It still lists this computer until it is
-/// revoked there.
+/// Forget a machine and its token, after asking the machine to end this
+/// computer's pairing there. Answers what to tell the owner, which says when
+/// the machine could not be asked and still lists this computer.
 ///
 /// The credential goes first: a machine whose token could not be deleted stays
 /// listed, with a plain reason, instead of becoming a row that can never pair
@@ -1932,14 +1933,26 @@ pub fn machines_cancel(
 pub async fn machines_remove(
     machines: tauri::State<'_, Arc<Machines>>,
     id: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let config_dir = config_dir()?;
     let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
     let machine = registry
         .get(&id)
         .ok_or("That machine is no longer saved.")?
         .clone();
+    if let Some(mut entry) = machines.live.lock().unwrap().remove(&machine.host_id) {
+        if let Some(task) = entry.task.take() {
+            task.abort();
+        }
+    }
     let tokens = machines.tokens(&config_dir).await?;
+    let unpaired = rustcode_client::unpair_machine(
+        &Machines::connector(&config_dir)?,
+        &machine,
+        &tokens,
+        rustcode_client::UNPAIR_TIMEOUT,
+    )
+    .await;
     let host_id = machine.host_id.clone();
     token_store::bounded("deleting the pairing token", STORE_TIMEOUT, move || {
         tokens.remove(&host_id)
@@ -1960,12 +1973,10 @@ pub async fn machines_remove(
             machine.name
         ));
     }
-    if let Some(mut entry) = machines.live.lock().unwrap().remove(&machine.host_id) {
-        if let Some(task) = entry.task.take() {
-            task.abort();
-        }
-    }
-    Ok(())
+    Ok(rustcode_client::removal_message(
+        machine.display_name.as_deref().unwrap_or(&machine.name),
+        Some(unpaired),
+    ))
 }
 
 /// Rename a machine. The name is stamped with the time, so the machine

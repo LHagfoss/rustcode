@@ -7,6 +7,9 @@ between) lives only in the orchestrating agent's context, and is lost to a
 restart or a compaction. A workflow run holds that plan in a script and in a
 folder instead (#3394).
 
+How an objective is run as a workflow, and who owns a run, is decided in
+[ADR 0009](adr/0009-objectives-and-coordination.md).
+
 An agent starts a run with `run_workflow`, reads it with `workflow_status` and
 ends it with `stop_workflow`. The desktop app shows it as a card in the chat, a
 row above the composer with Stop, and a list of its worker threads
@@ -140,6 +143,16 @@ they **nest under it**, count against its delegate slots (`delegates-per-thread`
 the agent starts by hand. When every slot is taken, the run waits and tries
 again rather than failing.
 
+**Retrying a run.** A run that ended `failed`, `timed_out` or `cancelled` can
+be retried (#4383): `run_workflow` with `retry_run_id` (and no `script`, `name`
+or `args`), or **Retry** on the run's card in the app
+(`_rustcode/workflows/retry`). The run goes back to `running` under the same id
+with its saved script; its finished calls are answered from `calls.jsonl` with
+no thread started and no budget spent, and only failed or missing calls start
+workers. `concurrency`, `call_budget` and `timeout_minutes` may lower its
+limits, the timeout counts from the retry, and the thread is told once when it
+ends. A `done` or still `running` run is refused.
+
 ## Durability
 
 Everything is under the starting thread's folder,
@@ -175,6 +188,21 @@ calls matched to their answers anyway.
 **Retention.** A thread keeps its newest settled runs (`done`, `failed`,
 `timed_out`, `cancelled`), 20 unless `workflow-kept-runs` says otherwise; when
 a run starts, older settled runs' folders are removed. A run still `running` is never removed, since it may be resumed.
+
+**Who drives a run.** One engine process drives a run at a time, and stamps
+the run's `driver.json` every 10 seconds with its owner id (the one delegate
+links carry). A stamp younger than 45 seconds from another process means that
+process drives it, so the app's engine and the background server, which share
+one config folder, never drive the same run; a resume while it does is refused.
+`<config>/workflows/running/<run id>` names the thread of every run still
+`running`, so an engine finds them without reading every thread (#4387).
+
+**When the engine starts** it looks at those runs, then again every minute, and
+takes up each one no live process drives whose starting thread is at Full
+access, through its own orchestration answers, with no app and without the
+thread being opened. A run of a thread below Full access waits for its thread
+as before. After a sleep or a clock jump nothing is taken up until the next
+look.
 
 **When a run resumes.** The engine resumes the runs a thread left `running`
 when that thread registers with the engine's orchestrator hub (the thread is

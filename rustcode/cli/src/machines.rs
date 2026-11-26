@@ -123,7 +123,10 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             )
             .await
         }
-        MachineCommands::Remove { machine } => remove(&config_dir, machine),
+        MachineCommands::RevokeEverywhere { machine } => {
+            crate::machines_revoke::revoke_everywhere(&config_dir, machine).await
+        }
+        MachineCommands::Remove { machine, local } => remove(&config_dir, machine, *local).await,
         MachineCommands::Discover { secs, json } => {
             discover(Duration::from_secs(*secs), *json).await
         }
@@ -1033,11 +1036,30 @@ fn discovered_table(found: &[DiscoveredMachine]) -> String {
     columns(&table)
 }
 
-fn remove(config_dir: &std::path::Path, selector: &str) -> Result<()> {
-    let mut registry = MachineRegistry::load(config_dir)?;
-    let machine = registry.select(selector)?.clone();
-    registry.remove(&machine.host_id)?;
-    match TokenStore::open(config_dir).and_then(|tokens| tokens.remove(&machine.host_id)) {
+pub(crate) async fn remove(
+    config_dir: &std::path::Path,
+    selector: &str,
+    local: bool,
+) -> Result<()> {
+    let machine = MachineRegistry::load(config_dir)?.select(selector)?.clone();
+    let tokens = TokenStore::open(config_dir);
+    let unpaired = match (&tokens, local) {
+        (Ok(tokens), false) => {
+            let connector = Connector::new(config_dir, ClientKind::Desktop)?;
+            Some(
+                rustcode_client::unpair_machine(
+                    &connector,
+                    &machine,
+                    tokens,
+                    rustcode_client::UNPAIR_TIMEOUT,
+                )
+                .await,
+            )
+        }
+        _ => None,
+    };
+    MachineRegistry::load(config_dir)?.remove(&machine.host_id)?;
+    match tokens.and_then(|tokens| tokens.remove(&machine.host_id)) {
         Ok(()) => {}
         Err(error) => eprintln!(
             "warning: {} was removed but its token could not be deleted: {error:#}",
@@ -1045,8 +1067,8 @@ fn remove(config_dir: &std::path::Path, selector: &str) -> Result<()> {
         ),
     }
     println!(
-        "Removed {}. The machine still lists this computer until you revoke it there.",
-        machine.name
+        "{}",
+        rustcode_client::removal_message(&machine.name, unpaired)
     );
     Ok(())
 }
