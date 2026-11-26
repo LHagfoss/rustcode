@@ -38,6 +38,7 @@ import {
   Archive,
   ArrowDownUp,
   BarChart3,
+  CircleDot,
   Clock,
   Filter,
   FolderPlus,
@@ -178,6 +179,15 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       words: "open git pull requests pr github review merge changes",
       disabled: s.agent?.pullRequests ? undefined : "Not available with this harness",
       run: () => setPanel("pulls"),
+    },
+    {
+      id: "issues",
+      label: "Open Issues",
+      detail: "GitHub issues and worktree fan-out",
+      icon: CircleDot,
+      words: "open issues github bugs tasks worktree fan out",
+      disabled: s.agent?.pullRequests ? undefined : "Not available with this harness",
+      run: () => setPanel("issues"),
     },
     {
       id: "usage",

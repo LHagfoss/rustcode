@@ -22,6 +22,7 @@ pub mod discord_rpc;
 pub mod doctor;
 mod fleet;
 mod git_actions;
+pub mod github_issues;
 pub mod harness;
 mod harness_usage;
 pub mod home;

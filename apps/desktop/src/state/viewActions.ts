@@ -190,7 +190,7 @@ function panelForThread(s: AppState, id: string | null): AppState["panel"] {
   if (kept === undefined && typeof window !== "undefined" && window.innerWidth > PANEL_SHEET_AT)
     return DEFAULT_PANEL;
   if (!kept) return null;
-  if (kept === "pulls" && !s.agent?.pullRequests) return null;
+  if ((kept === "pulls" || kept === "issues") && !s.agent?.pullRequests) return null;
   if (kept === "peek" && !s.peekId) return null;
   return kept;
 }

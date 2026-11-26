@@ -36,12 +36,13 @@ import { PANEL_SHEET_AT } from "../state/viewActions";
 import { ChevronLeft } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
 import { PanelToggle, useCardOverHeader } from "./PanelToggle";
-import { cx, Tooltip } from "./primitives";
+import { cx, Segments, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
 const ThreadDetails = lazy(() => import("./ThreadDetails").then((m) => ({ default: m.ThreadDetails })));
 const PullsPanel = lazy(() => import("./PullRequests").then((m) => ({ default: m.PullsPanel })));
+const IssuesPanel = lazy(() => import("./IssuesPanel").then((m) => ({ default: m.IssuesPanel })));
 
 /** The views the panel shows. */
 type Kind = NonNullable<AppState["panel"]>;
@@ -337,6 +338,7 @@ export function RightPanel() {
     details: "Properties",
     changes: "Changes",
     pulls: "Pull requests",
+    issues: "Issues",
     peek: peekIsSideChat ? "Side chat" : "Thread",
   };
   const home = kind === "details";
@@ -358,7 +360,19 @@ export function RightPanel() {
                 <ChevronLeft size={16} />
               </button>
             </Tooltip>
-            <span className="truncate font-semibold text-body">{titles[kind]}</span>
+            {kind === "pulls" || kind === "issues" ? (
+              <Segments
+                label="GitHub panel"
+                value={kind}
+                onChange={(next) => showPanel(next)}
+                options={[
+                  { value: "pulls", label: "Pull requests" },
+                  { value: "issues", label: "Issues" },
+                ]}
+              />
+            ) : (
+              <span className="truncate font-semibold text-body">{titles[kind]}</span>
+            )}
           </>
         )}
         <span className="flex-1" data-tauri-drag-region />
@@ -368,6 +382,7 @@ export function RightPanel() {
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}
         {kind === "pulls" && <PullsPanel />}
+        {kind === "issues" && <IssuesPanel />}
         {kind === "peek" && <ThreadPeek />}
       </Suspense>
     </>

@@ -303,7 +303,12 @@ function PullsSection({
       count={rows.length || undefined}
       folded={folded}
       onToggle={onToggle}
-      action={<OpenButton label="All pull requests" onClick={openAll} />}
+      action={
+        <div className="flex items-center gap-1">
+          <OpenButton label="Issues" onClick={() => showPanel("issues")} />
+          <OpenButton label="All pull requests" onClick={openAll} />
+        </div>
+      }
     >
       {rows.slice(0, PULL_ROWS).map((pull) => (
         <PullRow
