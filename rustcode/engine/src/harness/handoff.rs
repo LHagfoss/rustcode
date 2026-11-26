@@ -1,7 +1,7 @@
 //! Switching a thread to another harness: the new harness
 //! starts its own session, and its first prompt carries the conversation so
-//! far, newest first back to a budget, inside `<context>` before the user's
-//! message. The thread shows a divider where the switch happened; the divider
+//! far inside `<context>` before the user's message: the original task and the
+//! latest summary always, the rest newest first back to a budget. The thread shows a divider where the switch happened; the divider
 //! is a `handoff` message in the thread's history, so a reload shows it too,
 //! and nothing replays it to a model.
 
@@ -17,6 +17,10 @@ pub(crate) const ROLE: &str = "handoff";
 const BUDGET: usize = 64 * 1024;
 /// A tool call's result is cut to this much.
 const TOOL_LIMIT: usize = 600;
+/// The user's first message, always handed over, is cut to this much.
+const TASK_LIMIT: usize = 4 * 1024;
+/// The latest compaction summary, always handed over, is cut to this much.
+const SUMMARY_LIMIT: usize = 16 * 1024;
 
 /// How a thread's origin or destination is named in a divider: the harness,
 /// with the account's name in brackets when it runs on a named login.
@@ -142,28 +146,63 @@ pub(crate) fn divider(marker: &ChatMessage) -> Option<SessionUpdate> {
 /// The preamble of the first prompt after a switch: the conversation so far
 /// in `<context>`, then `User message:` for the prompt that follows. `None`
 /// when there is nothing to hand over.
+#[cfg(test)]
 pub(crate) fn context(history: &[ChatMessage], from: &str, to: &str) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut used = 0;
-    let mut omitted = 0;
-    for message in super::transcript::without_startup_banner(history)
+    context_for(history, from, to, None)
+}
+
+/// [`context`] for `thread`, whose full transcript the preamble points to
+/// when part of it is left out. The user's first message and the latest
+/// compaction summary are always kept; the rest fills the budget newest
+/// first.
+pub(crate) fn context_for(
+    history: &[ChatMessage],
+    from: &str,
+    to: &str,
+    thread: Option<&str>,
+) -> Option<String> {
+    let history = super::transcript::without_startup_banner(history);
+    let rendered: Vec<(usize, String)> = history
         .iter()
-        .rev()
-    {
-        let Some(line) = render(message) else {
+        .enumerate()
+        .filter_map(|(index, message)| render(message).map(|line| (index, line)))
+        .collect();
+    let task = history
+        .iter()
+        .position(|message| message.role == "user" && !message.content.trim().is_empty());
+    let summary = history
+        .iter()
+        .rposition(|message| message.role == "system" && message.compaction_boundary.is_some());
+    let mut kept: Vec<(usize, String)> = Vec::new();
+    let mut used = 0;
+    for (index, line) in &rendered {
+        let limit = if Some(*index) == task {
+            TASK_LIMIT
+        } else if Some(*index) == summary {
+            SUMMARY_LIMIT
+        } else {
             continue;
         };
+        let line = cut(line, limit);
+        used += line.len();
+        kept.push((*index, line));
+    }
+    let mut omitted = 0;
+    for (index, line) in rendered.iter().rev() {
+        if Some(*index) == task || Some(*index) == summary {
+            continue;
+        }
         if used + line.len() > BUDGET {
             omitted += 1;
             continue;
         }
         used += line.len();
-        lines.push(line);
+        kept.push((*index, line.clone()));
     }
-    if lines.is_empty() {
+    if kept.is_empty() {
         return None;
     }
-    lines.reverse();
+    kept.sort_by_key(|(index, _)| *index);
     let mut out = format!(
         "<context>\nThis conversation started on {} and continues here on {}. \
          It is the conversation so far, oldest first",
@@ -174,8 +213,15 @@ pub(crate) fn context(history: &[ChatMessage], from: &str, to: &str) -> Option<S
         out.push_str(&format!(
             "; {omitted} earlier messages did not fit and are left out"
         ));
+        if let Some(thread) = thread {
+            out.push_str(&format!(
+                " (the whole conversation is in `history.json` in the directory \
+                 `rc threads path {thread}` prints)"
+            ));
+        }
     }
     out.push_str(". Tool results are shortened.\n\n");
+    let lines: Vec<String> = kept.into_iter().map(|(_, line)| line).collect();
     out.push_str(&lines.join("\n\n"));
     out.push_str("\n</context>\n\nUser message:\n");
     Some(out)
@@ -272,14 +318,53 @@ mod tests {
     }
 
     #[test]
-    fn a_long_conversation_keeps_its_newest_part() {
+    fn a_long_conversation_keeps_its_task_and_newest_part() {
         let history: Vec<_> = (0..200)
             .map(|i| ChatMessage::new("user", format!("message {i} {}", "y".repeat(1000))))
             .collect();
         let text = context(&history, "codex", "pi").unwrap();
         assert!(text.contains("message 199"));
-        assert!(!text.contains("message 0 "));
+        assert!(text.contains("message 0 "), "the original task is kept");
+        assert!(!text.contains("message 1 "));
         assert!(text.contains("earlier messages did not fit"));
+        assert!(text.find("message 0 ") < text.find("message 199"));
+        assert!(text.len() < BUDGET + TASK_LIMIT + 1024);
+    }
+
+    #[test]
+    fn the_latest_summary_is_kept_and_the_transcript_is_named() {
+        let mut history = vec![ChatMessage::new("user", "Port the parser to Rust")];
+        let mut summary = ChatMessage::new("system", "Summary: parser half ported");
+        summary.compaction_boundary = Some(rustcode_core::CompactionBoundary {
+            version: 1,
+            summary: "Summary: parser half ported".to_owned(),
+            first_retained_entry: None,
+            history_archive: None,
+        });
+        history.push(summary);
+        history.extend(
+            (0..200)
+                .map(|i| ChatMessage::new("assistant", format!("step {i} {}", "z".repeat(1000)))),
+        );
+        let text = context_for(&history, "codex", "pi", Some("t-42")).unwrap();
+        assert!(text.contains("[user]\nPort the parser to Rust"));
+        assert!(
+            text.contains("[summary of the earlier conversation]\nSummary: parser half ported")
+        );
+        assert!(text.contains("step 199"));
+        assert!(!text.contains("step 0 "));
+        assert!(text.contains("rc threads path t-42"));
+    }
+
+    #[test]
+    fn a_huge_first_message_is_cut() {
+        let history = vec![
+            ChatMessage::new("user", "q".repeat(100_000)),
+            ChatMessage::new("assistant", "ok"),
+        ];
+        let text = context(&history, "codex", "pi").unwrap();
+        assert!(text.len() < TASK_LIMIT + 1024);
+        assert!(text.contains("[assistant]\nok"));
     }
 
     #[test]
