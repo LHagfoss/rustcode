@@ -49,7 +49,7 @@ self-contained HTML fragment:
 - Bundled libraries: `<script src="rustcode-lib:chart.js"></script>` is
   replaced with Chart.js 4.4.7 inline before the page loads
   (`SmartUI.expandingLibraries`). The code ships in the app
-  (`macos/Sources/RustCodeKit/Vendor/ChartJS.swift`, MIT, with its license
+  (historically `macos/Sources/RustCodeKit/Vendor/ChartJS.swift` in the SwiftUI app removed in #2820; MIT, with its license
   and checksum). Nothing is fetched and the policy is unchanged. It loads once
   per page, even with several tags. It doesn't count against the 64 KB limit,
   which applies to the block as written. An unknown name stays as written, and
@@ -378,7 +378,7 @@ advertises `smartUi = 2`, and the engine offers root sessions a
 `smart_ui_preview` tool (`rustcode/engine/src/smart_ui.rs`) plus a short
 `# Smart UI preview` prompt hint. The tool forwards the block body as a
 `_rustcode/smartUi/preview` request. `SmartUIPreviewRenderer`
-(`macos/Sources/RustCode/SmartUIPreviewRenderer.swift`) loads it in the same
+(historically `macos/Sources/RustCode/SmartUIPreviewRenderer.swift` in the SwiftUI app removed in #2820) loads it in the same
 sandbox configuration as the live view, at `SmartUI.previewWidth` (560 pt) in
 a borderless window placed off every screen. It answers with:
 

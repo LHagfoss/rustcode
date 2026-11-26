@@ -1,4 +1,8 @@
-# macOS app architecture
+# macOS app architecture (historical)
+
+> **Historical:** the SwiftUI app in `macos/` was removed in #2820. The current
+> desktop app is the Tauri app in `apps/desktop` ([desktop](../desktop.md)).
+> This page is kept as a record of that design.
 
 The SwiftUI app in `macos/` is a native front end to the Rust engine. It runs
 `rustcode --acp` as a child process and talks ACP v1 to it over stdio

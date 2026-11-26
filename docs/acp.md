@@ -94,6 +94,9 @@ at a time, so a client that renders `ask_question` renders these too.
 
 ## Localhost preview
 
+No current client advertises this capability (the SwiftUI app that did was
+removed in #2820; see #4370).
+
 A client that sends `clientCapabilities._meta.rustcode.preview` (version 1) at
 initialize gets the `localhost_preview` tool in its sessions; no other client
 sees it. Each call is sent to the client as the extension request
