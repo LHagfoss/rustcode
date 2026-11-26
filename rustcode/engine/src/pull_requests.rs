@@ -159,8 +159,8 @@ pub struct PullDetail {
 /// Why the pull requests could not be read, said so the app can show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullError {
-    /// `gh_missing`, `not_connected`, `not_a_repository`, `no_provider` (the
-    /// remote is not on GitHub), `timed_out` or `failed`.
+    /// `gh_missing`, `folder_missing`, `not_connected`, `not_a_repository`,
+    /// `no_provider` (the remote is not on GitHub), `timed_out` or `failed`.
     pub code: &'static str,
     pub message: String,
 }
@@ -409,13 +409,7 @@ pub(crate) async fn gh(
             });
         }
         Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(PullError {
-                code: "gh_missing",
-                message: format!(
-                    "The GitHub CLI (gh) is not installed. Install it ({}) and connect GitHub in Settings ▸ Connections.",
-                    crate::install_hints::host_hint(crate::install_hints::Tool::GitHub)
-                ),
-            });
+            return Err(crate::pull_spawn::not_found(cwd));
         }
         Ok(Err(error)) => {
             return Err(PullError {

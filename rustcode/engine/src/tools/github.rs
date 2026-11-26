@@ -174,13 +174,17 @@ fn run_gh(args: &[&str], repo: Option<&str>, pending_ok: bool) -> Result<String,
     if let Some(repo) = repo {
         command.args(["--repo", repo]);
     }
+    let cwd = super::git::working_directory();
     let output = command
-        .current_dir(super::git::working_directory())
+        .current_dir(&cwd)
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound if !cwd.is_dir() => {
+                format!("The working folder {} no longer exists.", cwd.display())
+            }
             std::io::ErrorKind::NotFound => {
                 format!("The GitHub CLI (gh) is not installed. Ask the user to install it ({}) and connect GitHub in Settings > Connections.", crate::install_hints::host_hint(crate::install_hints::Tool::GitHub))
             }

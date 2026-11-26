@@ -412,6 +412,8 @@ export function pullErrorTitle(code: string): string {
       return "GitHub is not connected";
     case "not_a_repository":
       return "This folder has no GitHub repository";
+    case "folder_missing":
+      return "This folder no longer exists";
     case "no_provider":
       return "No pull request provider for this remote";
     case "timed_out":

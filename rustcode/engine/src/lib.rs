@@ -57,6 +57,7 @@ pub mod prompt_commands;
 pub mod provider_auth;
 pub mod pull_requests;
 pub mod pull_review;
+mod pull_spawn;
 pub mod pull_watch;
 pub mod raw_cli;
 pub mod remote;
