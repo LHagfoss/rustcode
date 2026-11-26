@@ -27,11 +27,11 @@ export function useCardOverHeader(): boolean {
 }
 
 /**
- * The side panel's toggle, "Thread info": the header carries it while the panel is closed, and the
- * panel's card carries it while open, at the card's top right (ui/RightPanel.tsx). Its
+ * The side panel's toggle, an icon alone: the header carries it while the panel is closed, and the
+ * panel's card carries it while open, on the same spot at the card's top right (ui/RightPanel.tsx). Its
  * `data-panel-toggle` takes the keyboard back when a panel closes.
  */
-export function PanelToggle({ className, iconOnly }: { className?: string; iconOnly?: boolean }) {
+export function PanelToggle({ className }: { className?: string }) {
   const open = useApp((s) => !!s.panel);
   const key = useShortcutHint("toggle-panel");
   return (
@@ -43,14 +43,11 @@ export function PanelToggle({ className, iconOnly }: { className?: string; iconO
         data-panel-toggle
         onClick={toggleRightPanel}
         className={cx(
-          "inline-flex h-7 shrink-0 items-center gap-1.5 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
-          iconOnly ? "w-7 justify-center rounded-md" : "rounded-full pr-3 pl-2",
-          open && !iconOnly && "bg-fill text-fg",
+          "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
           className,
         )}
       >
         <PanelRight size={16} />
-        {!iconOnly && PANEL_TOGGLE_LABEL}
       </button>
     </Tooltip>
   );

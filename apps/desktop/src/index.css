@@ -1997,3 +1997,14 @@ aside[aria-hidden="true"] + .rc-main-panel {
 .turn-history[data-more-below] {
   --turn-fade-bottom: 18px;
 }
+
+@keyframes rc-tab-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--rc-tab-from, 0));
+  }
+}
+
+.rc-tab-in {
+  animation: rc-tab-in 220ms var(--ease-snappy);
+}
