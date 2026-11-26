@@ -1589,6 +1589,15 @@ export class MockEngine {
         return mockGit(this.threads, str(params.path) ?? "") as unknown as Json;
       case "_rustcode/git/run":
         return mockGitRun(this.threads, params);
+      case "_rustcode/worktrees/scripts/state":
+      case "_rustcode/worktrees/scripts/trust":
+      case "_rustcode/worktrees/scripts/action":
+        return {
+          configured: false,
+          trusted: false,
+          setup: { status: "idle", output: "" },
+          run: { status: "idle", output: "" },
+        };
       case "_rustcode/pulls/branch":
         return {
           branch: {

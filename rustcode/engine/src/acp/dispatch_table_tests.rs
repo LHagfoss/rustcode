@@ -477,6 +477,24 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for crate::worktrees::HandoffRequest"
     );
     assert!(
+        <worktree_scripts::StateRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/worktrees/scripts/state"
+        ),
+        "method mismatch for worktree_scripts::StateRequest"
+    );
+    assert!(
+        <worktree_scripts::TrustRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/worktrees/scripts/trust"
+        ),
+        "method mismatch for worktree_scripts::TrustRequest"
+    );
+    assert!(
+        <worktree_scripts::ActionRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/worktrees/scripts/action"
+        ),
+        "method mismatch for worktree_scripts::ActionRequest"
+    );
+    assert!(
         <crate::thread_status::PinRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/session/pin"
         ),
