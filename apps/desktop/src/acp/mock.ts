@@ -315,6 +315,11 @@ export class MockEngine {
     };
   }
 
+  /** A restarted engine reads the threads the one before it saved, as the real one reads its folders. */
+  adoptThreads(previous: MockEngine): void {
+    this.threads = previous.threads;
+  }
+
   constructor(
     private readonly emit: (line: string) => void,
     private readonly options: MockOptions = {},
