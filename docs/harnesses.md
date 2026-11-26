@@ -615,8 +615,11 @@ messages, so neither grows with this.
 → `{ "configOptions", "_meta" }` moves a thread to another external harness
 (`harness/handoff.rs`). The old harness
 stops; `harness.json` names the new one, without a native session, with
-`handoff_from` set. Its first prompt carries the conversation so far, newest
-back to about 16k tokens (tool results cut short), as
+`handoff_from` set. Its first prompt carries the conversation so far: the
+user's first message (cut to 4 KB) and the latest compaction summary always,
+then the rest newest first back to about 16k tokens (tool results cut short).
+When messages are left out it names `rc threads path <id>`, whose
+`history.json` holds the whole conversation. The context goes as
 `<context>…</context>\n\nUser message:\n` before the user's text; then
 `handoff_from` clears. The history gets a `handoff` message, which replays as
 an `agent_message_chunk` with `_meta.rustcode.kind == "handoff"` (`from`,

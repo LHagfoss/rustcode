@@ -2196,7 +2196,12 @@ impl ExternalSession {
                 .transcript
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            super::handoff::context(&transcript.history, &from, &self.harness.id)
+            super::handoff::context_for(
+                &transcript.history,
+                &from,
+                &self.harness.id,
+                Some(&self.id),
+            )
         });
         self.transcript
             .lock()
