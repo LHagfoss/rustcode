@@ -750,7 +750,6 @@ pub async fn select_relevant_async(
 
 /// Tentative facts (low confidence) older than 7 days are garbage-collected;
 /// confirmed facts persist. Returns the number of removed facts.
-#[cfg(test)]
 pub const TENTATIVE_CONFIDENCE_MAX: u8 = 30;
 #[cfg(test)]
 pub const TENTATIVE_GC_AFTER_SECONDS: u64 = 7 * 24 * 60 * 60;

@@ -223,6 +223,15 @@ Settings › Agents then adds **Text generation and voice in <project>**
 transcription provider, model, language and Clean up dictated text, each on
 the machine's value until the project sets it. They are kept on this machine
 only, as the `text-generator` and `voice` overrides.
+On this machine, Settings › Agents also lists saved memory
+(`src/ui/ProjectMemory.tsx`): **Memory for <project>** (the repository's facts,
+shared by its worktrees) and **Global memory**, each fact with its category,
+key, value, source, age and a Tentative tag for a low-confidence guess, and a
+Forget button. Forget all empties the project's facts after a confirm; global
+facts stay. The engine answers `_rustcode/memory/list { cwd? }` and
+`_rustcode/memory/forget { cwd?, category?, key?, all?, global? }`
+(`rustcode/engine/src/acp/memory.rs`); an unreadable file is an error, never
+an empty list.
 Other server rows are read-only with a short reason: delegation limits, wake
 batching, workflow limits, presets and limit fallback act across every thread
 on a machine. Credentials, accounts, machine-only rows and app preferences are

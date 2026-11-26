@@ -27,6 +27,7 @@ import { ACP_CAPS, HARNESS_MODELS, initialHarnesses, MOCK_CUSTOM_MODELS, withLas
 import { MockLoops } from "./mockLoops";
 import { MOCK_LOCAL_HOST, mockHostEntry, mockNameWins, mockRemote } from "./mockMachineFixtures";
 import { MockAddedMcp } from "./mockMcp";
+import { MockMemory } from "./mockMemory";
 import { MockOutside } from "./mockOutside";
 import {
   APP_PATCH,
@@ -95,6 +96,7 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private loops = new MockLoops();
+  private memory = new MockMemory();
   private connections = new MockConnections();
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
@@ -856,6 +858,7 @@ export class MockEngine {
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
     if (method.startsWith("_rustcode/loops/")) return this.loops.answer(method, obj(params) ?? {});
+    if (method.startsWith("_rustcode/memory/")) return this.memory.answer(method, obj(params) ?? {});
     if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
       return this.connections.answer(method, obj(params) ?? {});
     if (isMockTransferMethod(method)) {

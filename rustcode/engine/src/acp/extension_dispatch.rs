@@ -1971,12 +1971,6 @@ pub(super) async fn dispatch_request(
             crate::connections::cancel_github_login();
             responder.respond(serde_json::Value::Null)
         }
-        _ => {
-            *unhandled = Some(agent_client_protocol::Dispatch::Request(
-                agent_client_protocol::UntypedMessage { method, params },
-                responder,
-            ));
-            Ok(())
-        }
+        _ => memory::dispatch(method, params, responder, connection, unhandled),
     }
 }

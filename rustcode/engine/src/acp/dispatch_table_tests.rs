@@ -203,6 +203,18 @@ fn every_dispatched_method_matches_its_request_type() {
     assert!(<attachments::AttachmentReadRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/attachments/read"), "method mismatch for attachments::AttachmentReadRequest");
     assert!(<attachments::AttachmentUploadRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/attachments/upload"), "method mismatch for attachments::AttachmentUploadRequest");
     assert!(
+        <memory::MemoryListRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/memory/list"
+        ),
+        "method mismatch for memory::MemoryListRequest"
+    );
+    assert!(
+        <memory::MemoryForgetRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/memory/forget"
+        ),
+        "method mismatch for memory::MemoryForgetRequest"
+    );
+    assert!(
         <machine_sync::MachineSyncRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/environment/sync"
         ),

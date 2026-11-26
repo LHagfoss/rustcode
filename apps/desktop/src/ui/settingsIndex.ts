@@ -179,6 +179,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Text generation",
     keywords: "titles commit message git drafts generator openai anthropic custom endpoint model key",
   },
+  {
+    section: "agents",
+    title: "Global memory",
+    keywords: "remember recall forget facts project memory global saved conventions",
+  },
 
   // --------------------------------------------------------------- Delegation
   {
