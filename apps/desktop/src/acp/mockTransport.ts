@@ -330,7 +330,12 @@ export class MockTransport implements Transport {
       return null;
     }
     // A machine's own channel is opened in process (`MachineTransport` hands it a MockMachine).
-    if (command === "machine_connect" || command === "machine_send" || command === "machine_disconnect") {
+    if (
+      command === "machine_connect" ||
+      command === "machine_send" ||
+      command === "machine_disconnect" ||
+      command === "machine_detach"
+    ) {
       const machine = this.machineList.find((saved) => saved.id === String(args.id));
       return { connected: machine?.state !== "offline" && machine?.state !== "needsPairing" };
     }

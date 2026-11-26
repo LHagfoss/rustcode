@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { STORAGE } from "./appState";
+import { useFilesFollowOff } from "./configFilesFollow";
+import { OUTBOX_KEY, type OutboxChange, useOutbox } from "./machineOutbox";
+import { useSettingsFollow } from "./settingsFollow";
 import { resetForTests, useApp } from "./store";
 import { emptyThread, isRunning } from "./thread";
 import {
@@ -7,7 +10,9 @@ import {
   applyWindowMessage,
   dismissResolvedPermission,
   isPrimaryWindow,
+  primaryWindowChanged,
   setWindowRoleForTests,
+  whenPrimaryWindow,
 } from "./windowSync";
 
 beforeEach(() => {
@@ -97,5 +102,56 @@ describe("windowSync", () => {
 
     setWindowRoleForTests("window-2", "window-2");
     expect(isPrimaryWindow()).toBe(true);
+  });
+
+  test("starts background loops in the primary window only", () => {
+    setWindowRoleForTests("main", "main");
+    const started: string[] = [];
+    whenPrimaryWindow(() => started.push("fleet"));
+    expect(started).toEqual(["fleet"]);
+
+    setWindowRoleForTests("window-2", "main");
+    whenPrimaryWindow(() => started.push("follow"));
+    whenPrimaryWindow(() => started.push("updates"));
+    expect(started).toEqual(["fleet"]);
+
+    primaryWindowChanged("main");
+    expect(started).toEqual(["fleet"]);
+    primaryWindowChanged("window-2");
+    expect(started).toEqual(["fleet", "follow", "updates"]);
+    primaryWindowChanged("window-2");
+    expect(started).toEqual(["fleet", "follow", "updates"]);
+  });
+
+  test("reads follow settings and the machine outbox again when another window writes them", () => {
+    const scope = globalThis as { localStorage?: Storage };
+    const data = new Map<string, string>();
+    scope.localStorage = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+      removeItem: (key: string) => void data.delete(key),
+    } as unknown as Storage;
+    try {
+      const follow = JSON.stringify(["studio"]);
+      data.set("rustcode.settingsFollow", follow);
+      expect(applyStorageChange("rustcode.settingsFollow", follow)).toBe(true);
+      expect(useSettingsFollow.getState().ids).toEqual(["studio"]);
+
+      const off = JSON.stringify({ studio: ["themes"] });
+      data.set("rustcode.settingsFollow.filesOff", off);
+      expect(applyStorageChange("rustcode.settingsFollow.filesOff", off)).toBe(true);
+      expect(useFilesFollowOff.getState().off).toEqual({ studio: ["themes"] });
+
+      const change: OutboxChange = { kind: "pin", key: "studio\u0000t1", value: true, base: false, at: 1 };
+      const outbox = JSON.stringify({ studio: [change] });
+      data.set(OUTBOX_KEY, outbox);
+      expect(applyStorageChange(OUTBOX_KEY, outbox)).toBe(true);
+      expect(useOutbox.getState().byHost).toEqual({ studio: [change] });
+    } finally {
+      delete scope.localStorage;
+      useSettingsFollow.setState({ ids: [] });
+      useFilesFollowOff.setState({ off: {} });
+      useOutbox.setState({ byHost: {} });
+    }
   });
 });

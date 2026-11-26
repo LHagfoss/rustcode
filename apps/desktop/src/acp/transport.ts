@@ -154,7 +154,7 @@ export class MachineTransport implements Transport {
     this.mock = null;
     if (!isTauri()) return;
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("machine_disconnect", { id: this.machineId });
+    await invoke("machine_detach", { id: this.machineId });
   }
 }
 
