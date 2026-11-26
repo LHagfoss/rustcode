@@ -40,7 +40,9 @@ use migrations::MIGRATIONS;
 mod links;
 pub use links::*;
 mod receipts;
+mod shared;
 pub use receipts::*;
+pub use shared::Store;
 
 /// In the configuration directory, beside `index.sqlite`.
 pub const DATA_FILE: &str = "data.sqlite";
@@ -480,8 +482,17 @@ pub fn data_path() -> Option<PathBuf> {
 }
 
 /// Opens (creating and migrating) the store. Used by writers and by the CLI's
-/// one-time backfill; reads use [`query`] instead.
-pub fn open(path: &Path) -> Result<Connection, String> {
+/// one-time backfill; reads use [`query`] instead. The user's own store
+/// reuses one connection ([`shared`]).
+pub fn open(path: &Path) -> Result<Store, String> {
+    let store = shared::connect(path, data_path().as_deref(), open_connection)?;
+    // Retention is checked here rather than after every write: every writer
+    // opens the store, and the pass itself runs at most once an hour.
+    maybe_prune(&store);
+    Ok(store)
+}
+
+fn open_connection(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -492,9 +503,6 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     migrate(&connection)?;
-    // Retention is checked here rather than after every write: every writer
-    // opens the store, and the pass itself runs at most once an hour.
-    maybe_prune(&connection);
     Ok(connection)
 }
 
