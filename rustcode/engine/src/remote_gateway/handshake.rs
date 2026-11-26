@@ -221,6 +221,8 @@ pub enum HandshakeRequest {
     /// just received, so the host may retire the token before it. Only valid
     /// on an authenticated connection, never as a first frame.
     TokenAck(TokenAck),
+    /// End this device's own pairing, after authenticating: the host revokes the record the socket signed in as and closes it with `revoked`.
+    Unpair,
 }
 
 /// The body of a `token_ack` frame: which rotation the device stored.
@@ -247,6 +249,8 @@ pub enum SessionControl {
     NotAControl,
     /// The device acknowledged a rotation.
     TokenAck(TokenAck),
+    /// The device asked to end its own pairing.
+    Unpair,
     /// A frame tagged `token_ack` that does not carry what one must.
     Malformed,
 }
@@ -254,6 +258,14 @@ pub enum SessionControl {
 /// Read a frame that may be a `token_ack`. Only a frame whose tag says so is
 /// parsed, so the session path stays a pass-through.
 pub fn session_control(text: &str) -> SessionControl {
+    if text.contains("\"unpair\"")
+        && matches!(
+            serde_json::from_str::<HandshakeRequest>(text),
+            Ok(HandshakeRequest::Unpair)
+        )
+    {
+        return SessionControl::Unpair;
+    }
     if !text.contains("\"token_ack\"") {
         return SessionControl::NotAControl;
     }
@@ -317,7 +329,10 @@ impl HandshakeRequest {
             Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. } => {
                 wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
             }
-            Self::Describe { .. } | Self::ConnectRequest { .. } | Self::TokenAck(_) => false,
+            Self::Describe { .. }
+            | Self::ConnectRequest { .. }
+            | Self::TokenAck(_)
+            | Self::Unpair => false,
         }
     }
 
@@ -327,7 +342,10 @@ impl HandshakeRequest {
             Self::Pair { capabilities, .. } | Self::Authenticate { capabilities, .. } => {
                 capabilities
             }
-            Self::Describe { .. } | Self::ConnectRequest { .. } | Self::TokenAck(_) => {
+            Self::Describe { .. }
+            | Self::ConnectRequest { .. }
+            | Self::TokenAck(_)
+            | Self::Unpair => {
                 return false;
             }
         };
@@ -404,9 +422,10 @@ impl HandshakeRequest {
             ),
             // Neither says what the device is: an authenticated device was
             // recorded when it paired, and an acknowledgement says nothing.
-            Self::Describe { .. } | Self::Authenticate { .. } | Self::TokenAck(_) => {
-                DeviceProfile::default()
-            }
+            Self::Describe { .. }
+            | Self::Authenticate { .. }
+            | Self::TokenAck(_)
+            | Self::Unpair => DeviceProfile::default(),
         }
     }
 
@@ -932,6 +951,26 @@ mod tests {
             HandshakeRequest::TokenAck(TokenAck {
                 rotation_id: "x".into()
             })
+        );
+    }
+
+    #[test]
+    fn an_unpair_is_a_session_control_frame_and_nothing_else_is() {
+        assert_eq!(
+            session_control(r#"{"type":"unpair"}"#),
+            SessionControl::Unpair
+        );
+        assert_eq!(
+            session_control(r#"{"type":"unpair","request_id":"r1"}"#),
+            SessionControl::Unpair
+        );
+        assert_eq!(
+            session_control(r#"{"type":"submit_prompt","text":"say \"unpair\""}"#),
+            SessionControl::NotAControl
+        );
+        assert_eq!(
+            serde_json::to_string(&HandshakeRequest::Unpair).unwrap(),
+            r#"{"type":"unpair"}"#
         );
     }
 

@@ -792,6 +792,7 @@ mod tests {
             thread_id: None,
             script: None,
             webhook: None,
+            webhook_events: Vec::new(),
             machine: None,
         };
         store.create(record).unwrap();
@@ -867,6 +868,7 @@ mod tests {
             thread_id: None,
             script: None,
             webhook: None,
+            webhook_events: Vec::new(),
             machine: None,
         };
         store.create(record).unwrap();

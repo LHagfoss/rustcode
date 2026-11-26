@@ -18,6 +18,7 @@ import { arr, type Json, type JsonObject, obj } from "../acp/jsonrpc";
 import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
+import { rememberConfigIssues } from "./configIssues";
 import { useMachines } from "./machines";
 import { readProjectBook, updateProjectEntry } from "./projectBook";
 import { matchProject, type Project, projectsOn } from "./projects";
@@ -302,6 +303,7 @@ async function readServerSettings(host: string): Promise<void> {
       try {
         await seedLocalSettings(host);
         const answer = await machineRequest(host, "_rustcode/settings/get", {}, 10_000);
+        rememberConfigIssues(answer);
         const values = obj(obj(answer)?.values);
         if (values && revision === settingsRevision.get(host)) remember(host, values);
         else if (revision === settingsRevision.get(host)) remember(host, localValues());

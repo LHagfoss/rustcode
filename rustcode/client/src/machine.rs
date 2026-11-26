@@ -1740,6 +1740,12 @@ impl Session {
     pub async fn hub_join(self, access: &str, ask: bool) -> Result<AcpChannel> {
         self.connection.hub_open(access, ask).await
     }
+
+    /// End this computer's pairing on the machine; see
+    /// [`crate::transport::Connection::unpair`].
+    pub async fn unpair(self, timeout: std::time::Duration) -> Result<bool> {
+        self.connection.unpair(timeout).await
+    }
 }
 
 /// The titles of the machine's threads, newest first as `session/list` lists

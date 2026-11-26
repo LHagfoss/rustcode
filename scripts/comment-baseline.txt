@@ -1029,7 +1029,7 @@
 14 rustcode/engine/src/workflow/run.rs
 2 rustcode/engine/src/workflow/sandbox.rs
 3 rustcode/engine/src/workflow/store.rs
-4 rustcode/engine/src/workflow/threads.rs
+3 rustcode/engine/src/workflow/threads.rs
 29 rustcode/engine/src/workspace_intelligence.rs
 158 rustcode/engine/src/worktrees.rs
 3 rustcode/engine/tests/storage_migrations_fresh_profile.rs

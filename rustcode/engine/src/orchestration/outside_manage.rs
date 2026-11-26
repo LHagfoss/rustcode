@@ -170,6 +170,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         script: None,
         // A webhook is turned on in the app, where its URL is shown once.
         webhook: false,
+        webhook_events: Vec::new(),
         rotate_webhook: false,
         machine: machine.clone(),
     };

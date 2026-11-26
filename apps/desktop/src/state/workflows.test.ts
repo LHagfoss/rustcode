@@ -5,6 +5,7 @@ import { resetForTests, useApp, watchMachineConnection } from "./store";
 import { emptyThread, isContinueMessage, WORKFLOW_MARK, wakeLine } from "./thread";
 import { runIdOf } from "./toolNames";
 import {
+  canRetry,
   currentPhase,
   elapsedMs,
   endNotice,
@@ -15,6 +16,7 @@ import {
   progressText,
   resetWorkflows,
   resumeWorkflow,
+  retryWorkflow,
   runLine,
   runTitle,
   shouldWake,
@@ -326,4 +328,42 @@ test("Resume targets the owning machine and keeps the saved progress", async () 
   expect(useWorkflows.getState().runs[key]?.[0]?.driven).toBe(true);
   expect(useWorkflows.getState().runs[key]?.[0]?.workers).toHaveLength(3);
   conn.close("test finished");
+});
+
+test("Retry continues a failed run on its machine and only a run that ended unfinished offers it", async () => {
+  expect(canRetry({ ...run(), status: "failed" })).toBe(true);
+  expect(canRetry({ ...run(), status: "timed_out" })).toBe(true);
+  expect(canRetry({ ...run(), status: "cancelled" })).toBe(true);
+  expect(canRetry({ ...run(), status: "done" })).toBe(false);
+  expect(canRetry(run())).toBe(false);
+
+  const { conn, calls } = engine(
+    (method): JsonObject =>
+      method === WorkflowMethod.retry
+        ? { run: { run_id: "wf-1-aaaaaaaa", status: "running", driven: true } }
+        : {},
+  );
+  watchMachineConnection("machine", conn);
+  const key = "machine/t1";
+  upsertRun(key, { ...run(), status: "failed", error: "a worker failed", finishedAt: 5 });
+  await retryWorkflow(key, "wf-1-aaaaaaaa");
+  expect(calls.find((c) => c.method === WorkflowMethod.retry)?.params).toEqual({
+    sessionId: "t1",
+    runId: "wf-1-aaaaaaaa",
+  });
+  const retried = useWorkflows.getState().runs[key]?.[0];
+  expect(retried?.status).toBe("running");
+  expect(retried?.error).toBeUndefined();
+  expect(retried?.workers).toHaveLength(3);
+  conn.close("test finished");
+
+  const refused = engine(() => ({
+    error: { code: "failed", message: "run wf-1-aaaaaaaa finished; there is nothing to retry" },
+  }));
+  watchMachineConnection("other", refused.conn);
+  upsertRun("other/t1", { ...run(), status: "done" });
+  await retryWorkflow("other/t1", "wf-1-aaaaaaaa");
+  expect(useWorkflows.getState().runs["other/t1"]?.[0]?.status).toBe("done");
+  expect(useApp.getState().toasts.some((t) => t.text.includes("Could not retry the workflow"))).toBe(true);
+  refused.conn.close("test finished");
 });

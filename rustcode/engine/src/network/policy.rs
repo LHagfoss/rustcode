@@ -85,8 +85,11 @@ impl InteractivePolicy {
         }) {
             return false;
         }
-        if !auto_confirm {
+        {
             for call in tool_calls {
+                if auto_confirm && !tools::always_asks(&call.name) {
+                    continue;
+                }
                 let requested_filesystem_path = if let Some(requested) =
                     call.arguments.get("filesystem_write_path")
                 {

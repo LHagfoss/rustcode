@@ -755,6 +755,25 @@ impl RemoteLifecycle {
         }
     }
 
+    /// Revoke every device record of the computer whose gateway id is
+    /// `host_id`, as [`Self::revoke`] does one. Answers the names revoked and
+    /// a line for each record that could not be.
+    pub async fn revoke_host(&self, host_id: &str) -> Result<(Vec<String>, Vec<String>)> {
+        let mut revoked = Vec::new();
+        let mut errors = Vec::new();
+        for device in self
+            .devices()?
+            .into_iter()
+            .filter(|device| device.host_id.as_deref() == Some(host_id))
+        {
+            match self.revoke(&device.id).await {
+                Ok(_) => revoked.push(device.name),
+                Err(error) => errors.push(format!("{}: {error:#}", device.name)),
+            }
+        }
+        Ok((revoked, errors))
+    }
+
     /// Accept or deny a device's connection request on the running gateway.
     /// Accepting answers with the code to show; it replaces any outstanding
     /// pairing challenge.

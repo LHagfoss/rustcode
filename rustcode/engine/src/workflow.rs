@@ -17,6 +17,7 @@
 //! app reads a run's summary ([`run_summary`]), stops it and claims the one
 //! wake that tells the starting thread it ended ([`claim_wake`]).
 
+mod driver;
 mod reply;
 mod run;
 mod sandbox;
@@ -137,7 +138,8 @@ pub(crate) fn run_schema() -> Value {
             "args": {"description": "Any JSON; the script reads it as the global `args`"},
             "concurrency": {"type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "How many workers may run at once; the user's setting is the most"},
             "call_budget": {"type": "integer", "minimum": 1, "maximum": MAX_CALL_BUDGET, "description": "How many agent() calls the run may make in all; the user's setting is the most"},
-            "timeout_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MINUTES, "description": "How long the run may take; the user's setting is the most"}
+            "timeout_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MINUTES, "description": "How long the run may take; the user's setting is the most"},
+            "retry_run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Retry this thread's failed, timed-out or stopped run instead of starting one: finished calls are answered from the run, only failed or missing calls start workers. Give this instead of script or name"}
         },
         "additionalProperties": false
     })
@@ -175,6 +177,7 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             "concurrency",
             "call_budget",
             "timeout_minutes",
+            "retry_run_id",
         ],
         STATUS_TOOL_NAME => &["run_id", "wait_ms"],
         STOP_TOOL_NAME => &["run_id"],
@@ -217,6 +220,20 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
         Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.as_str())),
         Some(_) => Err(format!("{key} must be a non-empty string")),
     };
+    if let Some(retry) = map.get("retry_run_id").filter(|value| !value.is_null()) {
+        if text("script")?.is_some() || text("name")?.is_some() || map.contains_key("args") {
+            return Err(
+                "retry_run_id retries a run as it was started: give no script, name or args"
+                    .to_owned(),
+            );
+        }
+        return match retry {
+            Value::String(id) if store::valid_run_id(id) => Ok(()),
+            _ => {
+                Err("retry_run_id must be a run id from run_workflow or workflow_status".to_owned())
+            }
+        };
+    }
     match (text("script")?, text("name")?) {
         (Some(_), Some(_)) => Err("give a script or a name, not both".to_owned()),
         (None, None) => Err("give a script, or the name of one in .rustcode/workflows/".to_owned()),
@@ -305,18 +322,112 @@ fn announce(thread: &str, run_id: &str) {
 /// Drive `record`'s run in the background until it ends.
 fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: String) {
     let id = record.id.clone();
-    let run = Run::new(store, runner, record);
+    let owner = crate::data_store::engine_owner();
+    driver::stamp(&store, &id, owner, driver::now());
+    if let Some(index) = driver::index() {
+        driver::mark_running(&index, &record.thread, &id);
+    }
+    let run = Run::new(store.clone(), runner, record);
+    let stopper = run.stopper();
     ACTIVE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .insert(id.clone(), run.stopper());
+        .insert(id.clone(), stopper.clone());
+    let beat_store = store.clone();
+    let beat_id = id.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = stopper.cancelled() => break,
+                _ = tokio::time::sleep(driver::BEAT_EVERY) => {}
+            }
+            if !active(&beat_id) {
+                break;
+            }
+            driver::stamp(&beat_store, &beat_id, owner, driver::now());
+        }
+    });
     tokio::spawn(async move {
         drive(run, source).await;
         ACTIVE
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(&id);
+        if store
+            .load(&id)
+            .is_some_and(|record| record.status.settled())
+            && let Some(index) = driver::index()
+        {
+            driver::unmark(&index, &id);
+        }
     });
+}
+
+/// Take up, every [`driver::SWEEP_EVERY`] for the life of the engine, the
+/// runs a restart left `running` that no live process drives, when their
+/// thread may start workers without the app (Full access). Called once when
+/// the engine starts (#4387).
+pub(crate) fn keep_resuming() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SWEEPING: AtomicBool = AtomicBool::new(false);
+    if SWEEPING.swap(true, Ordering::SeqCst) || tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async {
+        loop {
+            if !crate::data_store::clock_recently_jumped()
+                && let Some(index) = driver::index()
+            {
+                let _ = tokio::task::spawn_blocking(move || {
+                    sweep(
+                        &index,
+                        |thread| Store::for_thread(thread),
+                        |thread| {
+                            crate::orchestration::local_threads::starts_threads_without_app(thread)
+                        },
+                        |thread| ThreadRunner::new(thread, None, crate::orchestration::VERSION),
+                    )
+                })
+                .await;
+            }
+            tokio::time::sleep(driver::SWEEP_EVERY).await;
+        }
+    });
+}
+
+/// One pass over the running-run index: forget settled runs, resume the
+/// undriven ones `may_start` allows. How many were resumed.
+fn sweep(
+    index: &std::path::Path,
+    store_of: impl Fn(&str) -> Option<Store>,
+    may_start: impl Fn(&str) -> bool,
+    runner_for: impl Fn(&str) -> Arc<dyn AgentRunner>,
+) -> usize {
+    let me = crate::data_store::engine_owner();
+    let mut resumed = 0;
+    for (thread, run_id) in driver::marked(index) {
+        let Some(store) = store_of(&thread) else {
+            driver::unmark(index, &run_id);
+            continue;
+        };
+        match driver::verdict(
+            &store,
+            &run_id,
+            me,
+            driver::now(),
+            active(&run_id),
+            may_start(&thread),
+        ) {
+            driver::Verdict::Forget => driver::unmark(index, &run_id),
+            driver::Verdict::Leave => {}
+            driver::Verdict::Resume => {
+                if resume_one(&store, &run_id, runner_for(&thread)).unwrap_or(false) {
+                    resumed += 1;
+                }
+            }
+        }
+    }
+    resumed
 }
 
 /// Answer one workflow tool call made by `thread`: start, read or stop a run.
@@ -377,6 +488,22 @@ pub(crate) fn start(
     args: &Value,
 ) -> Result<String, String> {
     validate(RUN_TOOL_NAME, args)?;
+    if let Some(run_id) = args.get("retry_run_id").and_then(Value::as_str) {
+        let store = Store::for_thread(thread)
+            .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+        let run = retry_in(&store, run_id, runner, args)?;
+        announce(thread, run_id);
+        let mut answer = json!({
+            "run_id": run_id,
+            "status": "running",
+            "retried": true,
+            "note": "Finished calls are answered from the run; failed or missing calls start workers again. Read it with workflow_status, stop it with stop_workflow."
+        });
+        if let Some(limits) = run.get("limits") {
+            answer["limits"] = limits.clone();
+        }
+        return Ok(answer.to_string());
+    }
     let (name, source) = match args.get("name").and_then(Value::as_str) {
         Some(name) => (Some(name.to_owned()), named_script(thread, name)?),
         None => (
@@ -423,8 +550,29 @@ fn resume_in(store: &Store, runner: &Arc<dyn AgentRunner>) -> usize {
     store
         .list()
         .into_iter()
-        .filter(|record| resume_one(store, &record.id, runner.clone()).unwrap_or(false))
+        .filter(
+            |record| match resume_one(store, &record.id, runner.clone()) {
+                Ok(resumed) => resumed,
+                Err(_) => {
+                    retry_after_stale(store.clone(), record.id.clone(), runner.clone());
+                    false
+                }
+            },
+        )
         .count()
+}
+
+/// Try `run_id` again once a driver that died just before this engine started
+/// has gone stale, so a thread that registers right after a restart still gets
+/// its run back.
+fn retry_after_stale(store: Store, run_id: String, runner: Arc<dyn AgentRunner>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(driver::STALE_MS as u64 + 1_000)).await;
+        let _ = resume_one(&store, &run_id, runner);
+    });
 }
 
 // Serialize the transition between a saved run and a live driver.
@@ -469,6 +617,75 @@ fn resume_run_in(
         .ok_or_else(|| format!("no run {run_id} in this thread"))
 }
 
+/// Retry `run_id` for a client that asked (the app's Retry button), with its
+/// workers routed like [`resume_run`]'s.
+pub(crate) fn retry_run(
+    thread: &str,
+    run_id: &str,
+    client: Option<Arc<dyn crate::preview::PreviewClient>>,
+    version: u8,
+) -> Result<Value, String> {
+    validate(STOP_TOOL_NAME, &json!({ "run_id": run_id }))?;
+    let store = Store::for_thread(thread)
+        .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+    let version = resume_version(client.is_some(), version);
+    let run = retry_in(
+        &store,
+        run_id,
+        ThreadRunner::new(thread, client, version),
+        &Value::Null,
+    )?;
+    announce(thread, run_id);
+    Ok(run)
+}
+
+/// Put a settled run that did not finish back to `running` and drive it again
+/// from its saved script (#4383). Its finished calls are answered from
+/// `calls.jsonl` and failed ones run anew, as on a resume; `args` may lower its
+/// limits like a start. The run's summary.
+fn retry_in(
+    store: &Store,
+    run_id: &str,
+    runner: Arc<dyn AgentRunner>,
+    args: &Value,
+) -> Result<Value, String> {
+    {
+        let _transition = DRIVER_TRANSITION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut record = store
+            .load(run_id)
+            .ok_or_else(|| format!("no run {run_id} in this thread"))?;
+        match record.status {
+            RunStatus::Running => {
+                return Err(format!(
+                    "run {run_id} is still running; resume it instead of retrying"
+                ));
+            }
+            RunStatus::Done => {
+                return Err(format!("run {run_id} finished; there is nothing to retry"));
+            }
+            RunStatus::Failed | RunStatus::TimedOut | RunStatus::Cancelled => {}
+        }
+        if store.script(run_id).is_none() {
+            return Err(format!("no saved script for run {run_id}"));
+        }
+        record.status = RunStatus::Running;
+        record.error = None;
+        record.result = None;
+        record.finished_at = None;
+        record.woken = false;
+        record.limits = lowered(record.limits, args);
+        record.updated_at = now_ms();
+        store.save(&record)?;
+    }
+    resume_one(store, run_id, runner)?;
+    store
+        .load(run_id)
+        .map(|record| summary(store, &record))
+        .ok_or_else(|| format!("no run {run_id} in this thread"))
+}
+
 fn resume_one(store: &Store, run_id: &str, runner: Arc<dyn AgentRunner>) -> Result<bool, String> {
     let _transition = DRIVER_TRANSITION
         .lock()
@@ -478,6 +695,15 @@ fn resume_one(store: &Store, run_id: &str, runner: Arc<dyn AgentRunner>) -> Resu
         .ok_or_else(|| format!("no run {run_id} in this thread"))?;
     if record.status != RunStatus::Running || active(run_id) {
         return Ok(false);
+    }
+    if driver::held_elsewhere(
+        driver::load(store, run_id).as_ref(),
+        crate::data_store::engine_owner(),
+        driver::now(),
+    ) {
+        return Err(format!(
+            "run {run_id} is driven by another RustCode process on this computer"
+        ));
     }
     let source = store
         .script(run_id)
@@ -1077,6 +1303,181 @@ mod tests {
         assert_eq!(resume_version(true, 2), 2);
         assert_eq!(resume_version(true, engine.saturating_add(5)), engine);
         assert_eq!(resume_version(false, 0), engine);
+    }
+
+    #[tokio::test]
+    async fn a_sweep_resumes_only_undriven_runs_its_thread_may_drive_and_forgets_settled_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let index = driver::index_at(&dir.path().join("config"));
+        let (echo, runner) = echo();
+        let limits = Limits {
+            concurrency: 1,
+            call_budget: 5,
+            timeout_secs: 30,
+        };
+        let thread = "1784626803679";
+        let record = new_record(thread, None, Value::Null, limits);
+        store
+            .create(&record, r#"return await agent("one");"#)
+            .unwrap();
+        driver::mark_running(&index, thread, &record.id);
+        let store_of = |_: &str| Some(store.clone());
+        let runner_for = |_: &str| runner.clone();
+
+        assert_eq!(sweep(&index, store_of, |_| false, runner_for), 0);
+        assert_eq!(driver::marked(&index).len(), 1);
+
+        driver::stamp(&store, &record.id, "another-process", driver::now());
+        assert_eq!(sweep(&index, store_of, |_| true, runner_for), 0);
+        assert_eq!(echo.started.load(Ordering::SeqCst), 0);
+
+        driver::stamp(
+            &store,
+            &record.id,
+            "another-process",
+            driver::now() - driver::STALE_MS - 1,
+        );
+        assert_eq!(sweep(&index, store_of, |_| true, runner_for), 1);
+        let finished = settled(&store, &record.id).await;
+        assert_eq!(finished.status, RunStatus::Done, "{:?}", finished.error);
+        assert_eq!(echo.started.load(Ordering::SeqCst), 1);
+
+        assert_eq!(sweep(&index, store_of, |_| true, runner_for), 0);
+        assert!(driver::marked(&index).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_resume_is_refused_while_another_process_drives_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let record = new_record(
+            "1784626803679",
+            None,
+            Value::Null,
+            Limits {
+                concurrency: 1,
+                call_budget: 5,
+                timeout_secs: 30,
+            },
+        );
+        store
+            .create(&record, r#"return await agent("one");"#)
+            .unwrap();
+        driver::stamp(&store, &record.id, "another-process", driver::now());
+        let refused = resume_one(&store, &record.id, runner).unwrap_err();
+        assert!(refused.contains("another RustCode process"), "{refused}");
+        assert_eq!(echo.started.load(Ordering::SeqCst), 0);
+    }
+
+    fn finished_call(prompt: &str, result: Value) -> store::CallRecord {
+        store::CallRecord {
+            key: format!("{}#0", run::call_hash(prompt, &json!({}))),
+            seq: 0,
+            phase: None,
+            prompt: prompt.to_owned(),
+            harness: None,
+            model: None,
+            state: CallState::Done,
+            attempt: 0,
+            session_id: Some("old-session".to_owned()),
+            link_id: Some("old-link".to_owned()),
+            started_at: 1,
+            finished_at: Some(2),
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retry_answers_finished_calls_from_the_run_and_starts_only_the_failed_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let mut record = new_record(
+            "1784626803679",
+            None,
+            Value::Null,
+            Limits {
+                concurrency: 2,
+                call_budget: 2,
+                timeout_secs: 30,
+            },
+        );
+        record.status = RunStatus::Failed;
+        record.error = Some("the worker thread s-2 ended as failed".to_owned());
+        record.finished_at = Some(3);
+        record.woken = true;
+        store
+            .create(
+                &record,
+                r#"return [await agent("one"), await agent("two")];"#,
+            )
+            .unwrap();
+        store
+            .append_call(&record.id, &finished_call("one", json!("cached answer")))
+            .unwrap();
+
+        let summary = retry_in(&store, &record.id, runner, &json!({"concurrency": 1})).unwrap();
+        assert_eq!(summary["status"], json!("running"));
+        let finished = settled(&store, &record.id).await;
+        assert_eq!(finished.status, RunStatus::Done, "{:?}", finished.error);
+        assert_eq!(
+            finished.result,
+            Some(json!(["cached answer", "done by session-1"]))
+        );
+        assert_eq!(echo.started.load(Ordering::SeqCst), 1);
+        assert_eq!(finished.limits.concurrency, 1);
+        assert_eq!(finished.resumes, 1);
+        assert!(!finished.woken);
+    }
+
+    #[tokio::test]
+    async fn only_a_run_that_ended_without_finishing_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let limits = Limits {
+            concurrency: 1,
+            call_budget: 5,
+            timeout_secs: 30,
+        };
+        let running = new_record("1784626803679", None, Value::Null, limits);
+        store.create(&running, "return 1;").unwrap();
+        let mut done = new_record("1784626803679", None, Value::Null, limits);
+        done.status = RunStatus::Done;
+        store.create(&done, "return 1;").unwrap();
+
+        let refused = retry_in(&store, &running.id, runner.clone(), &Value::Null).unwrap_err();
+        assert!(refused.contains("still running"), "{refused}");
+        let refused = retry_in(&store, &done.id, runner.clone(), &Value::Null).unwrap_err();
+        assert!(refused.contains("nothing to retry"), "{refused}");
+        let refused = retry_in(&store, "wf-0-00000000", runner, &Value::Null).unwrap_err();
+        assert!(refused.contains("no run"), "{refused}");
+        assert_eq!(echo.started.load(Ordering::SeqCst), 0);
+        assert_eq!(store.load(&done.id).unwrap().status, RunStatus::Done);
+    }
+
+    #[test]
+    fn a_retry_takes_a_run_id_and_nothing_that_would_change_the_script() {
+        assert!(validate(RUN_TOOL_NAME, &json!({"retry_run_id": "wf-1-2"})).is_ok());
+        assert!(
+            validate(
+                RUN_TOOL_NAME,
+                &json!({"retry_run_id": "wf-1-2", "timeout_minutes": 5})
+            )
+            .is_ok()
+        );
+        for bad in [
+            json!({"retry_run_id": "wf-1-2", "script": "return 1;"}),
+            json!({"retry_run_id": "wf-1-2", "name": "review"}),
+            json!({"retry_run_id": "wf-1-2", "args": {}}),
+            json!({"retry_run_id": "../x"}),
+            json!({"retry_run_id": 3}),
+        ] {
+            assert!(validate(RUN_TOOL_NAME, &bad).is_err(), "{bad}");
+        }
     }
 
     #[tokio::test]

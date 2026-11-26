@@ -167,18 +167,6 @@ fn host_dir(root: &Path, host: &str) -> Result<PathBuf, String> {
     Ok(root.join(host))
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
-    }
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, bytes)
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    crate::atomic_file::replace_file(&temporary, path)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
-}
-
 fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     std::fs::read(path)
         .ok()
@@ -206,7 +194,7 @@ fn read_index_for_write(root: &Path, host: &str) -> Result<Index, String> {
 fn write_index(root: &Path, host: &str, index: &mut Index) -> Result<(), String> {
     index.version = 1;
     let bytes = serde_json::to_vec(index).map_err(|error| error.to_string())?;
-    write_atomic(&host_dir(root, host)?.join("index.json"), &bytes)
+    crate::atomic_file::write_described(&host_dir(root, host)?.join("index.json"), &bytes)
 }
 
 // ---------------------------------------------------------------- settings
@@ -239,7 +227,7 @@ fn set_settings(
         settings.excluded_projects = seen;
     }
     let bytes = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
-    write_atomic(&root.join("settings.json"), &bytes)?;
+    crate::atomic_file::write_described(&root.join("settings.json"), &bytes)?;
     Ok(settings)
 }
 
@@ -400,7 +388,7 @@ fn put_transcript_in(
     }
     let file = json!({ "revision": revision, "cwd": cwd, "transcript": transcript });
     let bytes_out = serde_json::to_vec(&file).map_err(|error| error.to_string())?;
-    write_atomic(
+    crate::atomic_file::write_described(
         &host_dir(root, host)?
             .join("threads")
             .join(format!("{id}.json")),

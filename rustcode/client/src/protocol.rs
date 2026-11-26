@@ -172,6 +172,8 @@ pub enum HandshakeRequest {
     /// named `rotation_id`, so the machine may retire the token before it. A
     /// session-path frame after authentication, never a first frame.
     TokenAck { rotation_id: String },
+    /// End this device's own pairing on the machine, after authenticating.
+    Unpair,
 }
 
 /// An address the host answers on, as a handshake reports it. The kind is the
@@ -473,6 +475,7 @@ mod tests {
                 "pair_credential.json".to_owned(),
                 "pair_machine.json".to_owned(),
                 "token_ack.json".to_owned(),
+                "unpair.json".to_owned(),
             ]),
             "a golden request was added or removed: update this mirror and this list"
         );

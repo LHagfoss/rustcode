@@ -11,6 +11,14 @@ the next normal save, Rustcode writes the merged configuration to
 fields use compiled defaults. Malformed or newer unsupported TOML is preserved
 and reported instead of being overwritten.
 
+A `config.toml` that cannot be read leaves the engine on built-in defaults
+until it is fixed, and settings are not saved meanwhile (a save names the file
+and the parse error). It is reported, with the parser's line and column, in
+three places: `rustcode doctor` fails `config-load`; Settings shows a notice at
+the top of every page (the `configIssues` list of `_rustcode/settings/get`);
+and the engine's stderr. A project's `.rustcode/config.toml` that cannot be
+read is skipped, and reported the same way as `project-config`.
+
 ## User-data migrations
 
 When a newer RustCode first starts (terminal, `--acp` for the macOS app, or a
