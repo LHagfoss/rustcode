@@ -312,11 +312,12 @@ pub(crate) fn spawn_question_requests(
             }
             let request = question_permission_request(&session_id, &question_id, &prompt);
             let _waiting = crate::thread_status::waiting(&session_id);
-            let answer = clients
-                .request_approval(request)
-                .await
-                .ok()
-                .and_then(|response| question_reply(&response, &prompt));
+            let response = tokio::select! {
+                biased;
+                () = cancel_token.cancelled() => None,
+                answer = clients.request_approval(request) => answer.ok(),
+            };
+            let answer = response.and_then(|response| question_reply(&response, &prompt));
             let answered = match answer {
                 Some(reply) => {
                     crate::controller::apply_question_answer_for_question(

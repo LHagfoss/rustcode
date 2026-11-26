@@ -39,6 +39,13 @@ use serde_json::json;
 
 use super::cursor::{LogMark, Position, UpdateLog, rustcode_meta};
 
+#[path = "clients_approval.rs"]
+mod approval;
+
+#[cfg(test)]
+#[path = "clients_approval_tests.rs"]
+mod approval_tests;
+
 /// A connection's id, unique for the life of the engine.
 pub(crate) type ClientId = u64;
 
@@ -377,6 +384,8 @@ struct Registry {
     /// when it changes, so a client that attached later, or was away when it
     /// changed, would otherwise show a working thread as finished.
     activities: HashMap<String, Activity>,
+    approval_cancels: HashMap<String, approval::CancelSlot>,
+    shutting_down: bool,
 }
 
 /// What `_rustcode/session/activity` last said of a session.
@@ -513,12 +522,46 @@ pub(crate) fn app_hosts_orchestration() -> bool {
 }
 
 /// Every connected client. Cheap to clone; all clones are the same registry.
-#[derive(Clone, Default)]
-pub(crate) struct Clients(Arc<Mutex<Registry>>);
+#[derive(Clone)]
+pub(crate) struct Clients {
+    registry: Arc<Mutex<Registry>>,
+    attached: Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+impl Default for Clients {
+    fn default() -> Self {
+        let (attached, _) = tokio::sync::watch::channel(0);
+        Self {
+            registry: Arc::new(Mutex::new(Registry::default())),
+            attached: Arc::new(attached),
+        }
+    }
+}
 
 impl Clients {
     fn registry(&self) -> std::sync::MutexGuard<'_, Registry> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn notify_attached(&self) {
+        self.attached
+            .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    /// Cancel every approval currently waiting on a client for `session_id`.
+    pub(crate) fn cancel_approvals(&self, session_id: &str) {
+        if let Some(slot) = self.registry().approval_cancels.remove(session_id) {
+            slot.cancel();
+        }
+    }
+
+    /// End every waiting approval across all sessions on engine shutdown.
+    pub(crate) fn shutdown(&self) {
+        let mut registry = self.registry();
+        registry.shutting_down = true;
+        for (_, slot) in registry.approval_cancels.drain() {
+            slot.cancel();
+        }
     }
 
     /// An id for a connection about to start.
@@ -619,6 +662,9 @@ impl Clients {
         registry.logs.remove(session_id);
         registry.activities.remove(session_id);
         registry.timings.remove(session_id);
+        if let Some(slot) = registry.approval_cancels.remove(session_id) {
+            slot.cancel();
+        }
     }
 
     /// The history of `session_id` changed without an update saying so (a
@@ -737,6 +783,7 @@ impl Clients {
             entry
                 .sessions
                 .insert(session_id.to_owned(), Slot { at, queued });
+            self.notify_attached();
         }
     }
 
@@ -1025,6 +1072,7 @@ impl Peer {
             entry
                 .sessions
                 .insert(session_id.to_owned(), Slot { at, queued: head });
+            self.clients.notify_attached();
         }
         Ok(Some(position))
     }
@@ -1081,6 +1129,7 @@ impl Peer {
             entry
                 .sessions
                 .insert(session_id.to_owned(), Slot { at, queued: head });
+            self.clients.notify_attached();
         }
         Ok(Some(position))
     }
@@ -1272,12 +1321,17 @@ impl SessionClients {
         self.requester(Some(Capability::Threads)).is_some()
     }
 
+    /// Ask an attached client for approval, waiting for one to attach or
+    /// reconnect if none is attached or its connection drops before answering.
     pub(crate) async fn request_approval<R: JsonRpcRequest>(
         &self,
         request: R,
     ) -> Result<R::Response, agent_client_protocol::Error> {
         let _approval = self.approval();
-        self.request(None, request).await
+        let untyped = request.to_untyped_message()?;
+        let method = untyped.method.clone();
+        let value = approval::request(self, untyped).await?;
+        R::Response::from_value(&method, value)
     }
 
     fn approval(&self) -> Option<PendingApproval<'_>> {

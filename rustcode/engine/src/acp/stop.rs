@@ -77,6 +77,7 @@ pub(super) async fn stop(
             None => ("none", false),
         }
     };
+    server.clients.cancel_approvals(session_id);
     if route != "harness" {
         crate::tools::abort_background_starts(session_id);
     }

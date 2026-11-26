@@ -818,6 +818,7 @@ impl AcpServer {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.remote.clear_thread_host();
         }
+        self.clients.shutdown();
         self.remote.shutdown().await;
         harnesses::close_all(&self.external).await;
         let route_ids = self
