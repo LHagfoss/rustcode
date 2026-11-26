@@ -259,6 +259,44 @@ export async function stopWorkflow(key: string, runId: string): Promise<void> {
   }
 }
 
+/** Whether a run ended without finishing, so Retry can continue it from its finished calls (issue 4383). */
+export function canRetry(run: WorkflowRun): boolean {
+  return run.status === "failed" || run.status === "timed_out" || run.status === "cancelled";
+}
+
+/**
+ * Retry a failed, timed-out or stopped run on the machine that owns it: the engine answers its finished
+ * calls from the run and starts workers only for the failed or missing ones.
+ */
+export async function retryWorkflow(key: string, runId: string): Promise<void> {
+  try {
+    const { host, id } = splitThreadKey(key);
+    const conn = connectionFor(host);
+    if (!conn) throw new Error("That machine is not connected.");
+    const answer = obj(await conn.request(WorkflowMethod.retry, { sessionId: id, runId }, 30_000));
+    const error = obj(answer?.error);
+    if (error) throw new Error(str(error.message) ?? "The engine rejected the request.");
+    const run = parseWorkflowRun(answer?.run);
+    if (!run) throw new Error("The engine did not return the workflow.");
+    const known = useWorkflows.getState().runs[key]?.find((candidate) => candidate.id === runId);
+    upsertRun(
+      key,
+      known && !run.workers.length
+        ? {
+            ...known,
+            status: run.status,
+            error: run.error,
+            finishedAt: run.finishedAt,
+            driven: run.driven,
+            woken: run.woken,
+          }
+        : run,
+    );
+  } catch (error) {
+    toast(`Could not retry the workflow: ${errorText(error)}`, "error");
+  }
+}
+
 /** Resume one saved run on the machine that owns it. */
 export async function resumeWorkflow(key: string, runId: string): Promise<void> {
   try {

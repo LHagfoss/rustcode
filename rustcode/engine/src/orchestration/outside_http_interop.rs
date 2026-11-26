@@ -714,6 +714,27 @@ async fn a_loop_webhook_takes_only_a_post_from_the_public_host() {
     );
 }
 
+#[tokio::test]
+async fn a_body_over_the_limit_is_answered_413_without_reading_it() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let f = Fixture::start_with(dir.path(), None).await;
+    let authority = f.server.base.trim_start_matches("http://").to_owned();
+    let head = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(&authority).await.unwrap();
+        let request = format!(
+            "POST /hooks/loop-1/secret HTTP/1.1\r\nHost: {authority}\r\nContent-Length: 70000\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await.unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
+    .await
+    .expect("HTTP request stalled");
+    assert!(head.starts_with("HTTP/1.1 413"), "{head}");
+    assert!(head.contains("too_large"), "{head}");
+}
+
 #[test]
 fn public_url_must_be_a_bare_https_origin() {
     assert_eq!(

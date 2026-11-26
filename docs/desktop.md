@@ -1589,7 +1589,7 @@ composer's keys stay outside the table.
   message (`<type>/<slug>`) that can be edited. A worktree thread's menu
   opens it in Finder or Terminal and removes it, asking first and again with
   the engine's reason (uncommitted changes, unpushed commits).
-- **Status and Board.** Running, Needs input, Review and Settled chips on rows
+- **Status and Board.** Running, Needs you, Review and Settled chips on rows
   and in the chat header (a menu marks Review or Settled). *Board* (the
   ⌘K) shows those four columns; drag a card to
   Review or Settled.

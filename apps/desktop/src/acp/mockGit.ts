@@ -17,6 +17,50 @@ export function mockGitChanges(cwd: string, base?: string): JsonObject {
   return { branch: cwd.includes("worktrees") ? "feat/login-form" : "main", files, diff };
 }
 
+/** Canned `git_commits` for a worktree branch: two commits of the agent's and a merge of main. */
+export function mockGitCommits(): JsonObject[] {
+  const now = Math.floor(Date.now() / 1000);
+  return [
+    {
+      sha: "c3d4e5f60718293a4b5c6d7e8f9012345678abcd",
+      subject: "Merge branch 'main' into feat/login-form",
+      author: "Agent",
+      time: now - 600,
+      parents: 2,
+    },
+    {
+      sha: "b2c3d4e5f60718293a4b5c6d7e8f9012345678ab",
+      subject: "Add the login form",
+      author: "Agent",
+      time: now - 1800,
+      parents: 1,
+    },
+    {
+      sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      subject: "Keep the composer's focus ring after sending",
+      author: "Agent",
+      time: now - 3600,
+      parents: 1,
+    },
+  ];
+}
+
+/** Canned `git_commit_changes`: each mock commit holds one of the branch's files. */
+export function mockGitCommitChanges(sha: string): JsonObject {
+  const all = mockGitChanges("/worktrees/mock", "main");
+  const pick = sha.startsWith("b2")
+    ? "src/ui/LoginForm.tsx"
+    : sha.startsWith("a1")
+      ? "src/ui/Composer.tsx"
+      : "src/app.ts";
+  const files = (all.files as JsonObject[]).filter((f) => f.path === pick);
+  const diff = String(all.diff)
+    .split(/(?=^diff --git )/m)
+    .filter((part) => part.startsWith(`diff --git a/${pick} `))
+    .join("");
+  return { files, diff };
+}
+
 /**
  * A QR-shaped module matrix for the mock's pairing dialog (one string of `0`
  * and `1` per row, quiet zone included). It is drawn, not encoded: the mock

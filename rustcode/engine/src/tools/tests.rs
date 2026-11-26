@@ -2876,5 +2876,7 @@ fn skills_are_control_plane_and_isolated() {
     assert_eq!(deferred, 1);
 }
 
+#[path = "tests/browser_approval.rs"]
+mod browser_approval;
 #[path = "tests/protocol.rs"]
 mod protocol;

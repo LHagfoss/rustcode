@@ -74,6 +74,71 @@ pub fn delay_for_attempt(attempt: usize, status: u16) -> Duration {
     Duration::from_millis(ms + jitter(ms, 0.10))
 }
 
+/// Longest wait a provider's `Retry-After` is followed for. A longer one ends
+/// the turn at once, naming the wait, instead of spending every attempt
+/// inside the provider's window.
+pub const MAX_SERVER_WAIT: Duration = Duration::from_secs(60);
+
+/// The wait a provider asked for: `retry-after-ms` (OpenAI-compatible
+/// servers), else `Retry-After` as seconds or an HTTP date (RFC 9110 §10.2.3).
+pub fn server_wait(
+    headers: &reqwest::header::HeaderMap,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    let text = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    parse_server_wait(text("retry-after-ms"), text("retry-after"), now)
+}
+
+fn parse_server_wait(
+    retry_after_ms: Option<&str>,
+    retry_after: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if let Some(ms) = retry_after_ms.and_then(|ms| ms.trim().parse::<f64>().ok())
+        && ms.is_finite()
+        && ms >= 0.0
+    {
+        return Some(Duration::from_millis(ms as u64));
+    }
+    let value = retry_after?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    let wait = at.with_timezone(&chrono::Utc) - now;
+    Some(wait.to_std().unwrap_or(Duration::ZERO))
+}
+
+/// The delay before retry `attempt`: the provider's own wait when it named
+/// one, else [`delay_for_attempt`]. `Err` carries a named wait longer than
+/// [`MAX_SERVER_WAIT`], which is not worth retrying inside the turn.
+pub fn delay_with_server_wait(
+    attempt: usize,
+    status: u16,
+    server_wait: Option<Duration>,
+) -> Result<Duration, Duration> {
+    match server_wait {
+        Some(wait) if wait > MAX_SERVER_WAIT => Err(wait),
+        Some(wait) => {
+            let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+            Ok(Duration::from_millis(ms + jitter(ms.max(100), 0.10)))
+        }
+        None => Ok(delay_for_attempt(attempt, status)),
+    }
+}
+
+/// What a failed turn says when the provider asked for a wait too long to retry.
+pub fn server_wait_note(server_wait: Option<Duration>) -> Option<String> {
+    server_wait
+        .filter(|wait| *wait > MAX_SERVER_WAIT)
+        .map(|wait| {
+            format!(
+                "The provider asked to wait {} seconds before trying again.",
+                wait.as_secs()
+            )
+        })
+}
+
 /// Add up to `frac` of `ms` as pseudo-random jitter (dependency-free).
 fn jitter(ms: u64, frac: f64) -> u64 {
     (ms as f64 * frac * fastrand()) as u64
@@ -110,6 +175,59 @@ pub async fn race_cancellable<F: std::future::Future>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-11-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn retry_after_seconds_milliseconds_and_dates_are_read() {
+        assert_eq!(
+            parse_server_wait(None, Some("7"), now()),
+            Some(Duration::from_secs(7))
+        );
+        assert_eq!(
+            parse_server_wait(Some("1500"), Some("7"), now()),
+            Some(Duration::from_millis(1500))
+        );
+        assert_eq!(
+            parse_server_wait(None, Some("Wed, 25 Nov 2026 12:00:30 GMT"), now()),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            parse_server_wait(None, Some("Wed, 25 Nov 2026 11:00:00 GMT"), now()),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(parse_server_wait(None, Some("soon"), now()), None);
+        assert_eq!(parse_server_wait(None, None, now()), None);
+    }
+
+    #[test]
+    fn headers_are_read_by_name() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("Retry-After", "12".parse().unwrap());
+        assert_eq!(server_wait(&headers, now()), Some(Duration::from_secs(12)));
+    }
+
+    #[test]
+    fn a_named_wait_replaces_the_schedule_and_a_long_one_stops() {
+        let delay = delay_with_server_wait(0, 429, Some(Duration::from_secs(7))).unwrap();
+        assert!(delay >= Duration::from_secs(7) && delay <= Duration::from_millis(7700));
+        assert_eq!(
+            delay_with_server_wait(0, 429, Some(Duration::from_secs(120))),
+            Err(Duration::from_secs(120))
+        );
+        let fallback = delay_with_server_wait(1, 429, None).unwrap();
+        assert!(fallback >= Duration::from_secs(2) && fallback <= Duration::from_millis(2300));
+        assert!(
+            server_wait_note(Some(Duration::from_secs(120)))
+                .unwrap()
+                .contains("120 seconds")
+        );
+        assert_eq!(server_wait_note(Some(Duration::from_secs(5))), None);
+    }
 
     #[test]
     fn retryable_statuses() {

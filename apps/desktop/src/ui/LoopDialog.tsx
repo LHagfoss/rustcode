@@ -144,6 +144,7 @@ function draftOf(loop: Loop | null, project: string, duplicate = false): LoopDra
     threadId: loop.threadId,
     script: loop.script,
     webhook: duplicate ? false : loop.webhook,
+    webhookEvents: loop.webhookEvents?.join(", "),
     machine: loop.machine,
   };
 }
@@ -935,6 +936,18 @@ export function LoopDialog({
                         checked={draft.webhook ?? false}
                         onChange={(webhook) => patch({ webhook, rotateWebhook: false })}
                       />
+                      {draft.webhook && (
+                        <Field label="Events">
+                          <input
+                            value={draft.webhookEvents ?? ""}
+                            onChange={(e) => patch({ webhookEvents: e.target.value })}
+                            placeholder="Every event, or e.g. check_suite, pull_request.review_requested"
+                            aria-label="Webhook events"
+                            {...noTextHelpers}
+                            className={inputClass}
+                          />
+                        </Field>
+                      )}
                       {draft.webhook && isEditing && loop?.webhook && (
                         <div className="flex items-center gap-3 rounded-lg bg-fill-subtle px-3 py-2">
                           <Webhook size={14} className="shrink-0 text-fg-muted" />

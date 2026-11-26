@@ -69,6 +69,45 @@ pub(crate) fn resume(
     }
 }
 
+/// The orchestration host a resume or retry asked by `client_id` starts its
+/// workers through: that client's, when it advertised orchestration v2 or up.
+pub(crate) fn host(
+    clients: &Clients,
+    client_id: super::clients::ClientId,
+    session_id: &str,
+) -> Option<(Arc<dyn crate::preview::PreviewClient>, u8)> {
+    let asker = clients.info(client_id).orchestration;
+    (asker >= 2)
+        .then(|| super::preview::orchestration_client_for(true, &clients.session(session_id)))
+        .flatten()
+        .map(|client| (client, asker))
+}
+
+/// Retry one failed, timed-out or stopped run from its finished calls (#4383).
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/workflows/retry", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowRetryRequest {
+    pub session_id: String,
+    pub run_id: String,
+}
+
+pub(crate) fn retry(
+    request: WorkflowRetryRequest,
+    host: Option<(Arc<dyn crate::preview::PreviewClient>, u8)>,
+) -> Value {
+    let (client, version) = match host {
+        Some((client, version)) => (Some(client), version),
+        None => (None, 0),
+    };
+    match crate::workflow::retry_run(&request.session_id, &request.run_id, client, version) {
+        Ok(run) => json!({ "run": run }),
+        Err(message) => json!({ "error": { "code": "failed", "message": message } }),
+    }
+}
+
 /// `_rustcode/workflows/wake`: claim the wake of an ended run. Answers
 /// `{claimed}`: true once, for the client that should tell the thread.
 #[derive(

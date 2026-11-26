@@ -38,6 +38,9 @@ fn get_job(connection: &Connection, id: &str) -> Result<JobRecord> {
     decode(json.ok_or_else(|| DaemonError::NotFound(id.into()))?)
 }
 
+/// The conflict a webhook delivery the job already ran from is refused with.
+pub const DUPLICATE_DELIVERY: &str = "duplicate webhook delivery";
+
 fn save_job(connection: &Connection, job: &JobRecord) -> Result<()> {
     connection
         .execute(
@@ -161,6 +164,10 @@ impl JobStore {
             UNIQUE(job_id, revision, scheduled_at));
             CREATE UNIQUE INDEX IF NOT EXISTS job_active_run ON job_runs(job_id) WHERE active=1;
             CREATE INDEX IF NOT EXISTS run_history ON job_runs(job_id, scheduled_order DESC);
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            delivery TEXT NOT NULL, seen_at INTEGER NOT NULL,
+            PRIMARY KEY(job_id, delivery));
             PRAGMA user_version=1;").map_err(storage)?;
         tx.commit().map_err(storage)?;
         Ok(Self { connection })
@@ -547,6 +554,21 @@ impl JobStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         let mut job = get_job(&tx, id)?;
+        let delivery = input
+            .as_deref()
+            .and_then(|input| super::webhook::Delivery::from_input(input).delivery);
+        if let Some(delivery) = &delivery {
+            let seen: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM webhook_deliveries WHERE job_id=?1 AND delivery=?2)",
+                    params![id, delivery],
+                    |r| r.get(0),
+                )
+                .map_err(storage)?;
+            if seen {
+                return Err(DaemonError::Conflict(DUPLICATE_DELIVERY.into()));
+            }
+        }
         let active: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM job_runs WHERE job_id=?1 AND active=1)",
@@ -567,6 +589,20 @@ impl JobStore {
         job.updated_at = now;
         job.pending_input = input;
         save_job(&tx, &job)?;
+        if let Some(delivery) = &delivery {
+            tx.execute(
+                "INSERT INTO webhook_deliveries(job_id, delivery, seen_at) VALUES(?1, ?2, ?3)",
+                params![id, delivery, now.timestamp_millis()],
+            )
+            .map_err(storage)?;
+            tx.execute(
+                "DELETE FROM webhook_deliveries WHERE job_id=?1 AND delivery NOT IN (
+                 SELECT delivery FROM webhook_deliveries WHERE job_id=?1
+                 ORDER BY seen_at DESC, rowid DESC LIMIT ?2)",
+                params![id, super::webhook::KEPT_DELIVERIES as i64],
+            )
+            .map_err(storage)?;
+        }
         tx.commit().map_err(storage)
     }
 
@@ -952,6 +988,30 @@ mod tests {
             Err(DaemonError::Conflict(_))
         ));
         assert_eq!(store.get("hook").unwrap().pending_input, None);
+    }
+
+    #[test]
+    fn a_webhook_delivery_starts_one_run_and_its_redelivery_is_refused_as_a_duplicate() {
+        use crate::daemon::webhook::Delivery;
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("hook", at(10))).unwrap();
+        let first = Delivery::new(Some("push"), Some("d-1"), "{}".into()).to_input();
+        store
+            .run_now_with("hook", at(0), Some(first.clone()))
+            .unwrap();
+        let claimed = store
+            .claim_due(at(0), "daemon-a", Duration::minutes(5), 10)
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let refused = store.run_now_with("hook", at(1), Some(first)).unwrap_err();
+        assert!(
+            refused.to_string().contains(DUPLICATE_DELIVERY),
+            "{refused}"
+        );
+        let plain = store.run_now_with("hook", at(1), Some("{}".into()));
+        assert!(
+            matches!(plain, Err(DaemonError::Conflict(ref m)) if !m.contains(DUPLICATE_DELIVERY))
+        );
     }
 
     #[test]

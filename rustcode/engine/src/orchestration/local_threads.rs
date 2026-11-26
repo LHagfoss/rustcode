@@ -206,6 +206,12 @@ impl Access {
     }
 }
 
+/// Whether `session_id` may start delegate threads with no app to approve
+/// them: only at Full access (`delegation`).
+pub(crate) fn starts_threads_without_app(session_id: &str) -> bool {
+    access_of(session_id) == Access::Full
+}
+
 /// The access a thread runs at, from the records the engine keeps: the access
 /// of its last prompt (`sessions::save_session_access`), else its own `/yolo`,
 /// else Settings › General › Default access, which the app seeds into
@@ -1214,7 +1220,7 @@ pub(super) async fn merge_notice(caller: &str, number: u64, result: Value) {
     let receipt = crate::sessions::get_active_session_dir(caller)
         .map(|dir| dir.join(format!("merge-{number}.json")));
     if let Some(path) = &receipt
-        && let Err(why) = crate::worktrees::write_atomic(path, result.to_string().as_bytes())
+        && let Err(why) = crate::atomic_file::write_atomic(path, result.to_string().as_bytes())
     {
         crate::dbg_log!("merge outcome for {caller} could not be saved: {why}");
     }
@@ -1314,12 +1320,43 @@ fn empty_book() -> Value {
 }
 
 /// The app's book, read from the same store it reads.
-fn link_book() -> Value {
+pub(super) fn link_book() -> Value {
     crate::data_store::load_link_book()
         .ok()
         .and_then(|stored| stored.get("book").cloned())
         .filter(Value::is_object)
         .unwrap_or_else(empty_book)
+}
+
+/// Stop the running turns of `targets` on this engine over one connection.
+pub(super) async fn cancel_turns(targets: &[String]) -> Result<(), Value> {
+    let engine = Engine::open(Access::Ask).await?;
+    for target in targets {
+        engine
+            .cancel(target)
+            .map_err(|reason| failed(format!("the stop did not reach the engine: {reason}")))?;
+    }
+    Ok(())
+}
+
+/// Settle link `id` as stopped, already heard, as the app's stop does.
+pub(super) fn stop_link(id: &str) {
+    let at = now();
+    let _ = crate::data_store::change_link(id, |link| {
+        if link
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(is_active)
+        {
+            link_after(
+                link,
+                &json!({"state": "cancelled", "settledAt": at, "notifiedAt": at}),
+                at,
+            )
+        } else {
+            link
+        }
+    });
 }
 
 /// Abandon links a settled sender was waiting on, without interrupting their targets.
