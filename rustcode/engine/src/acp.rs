@@ -28,6 +28,7 @@ pub(crate) mod projects;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
+mod revoke_machine;
 mod rewind;
 pub(crate) mod scheduled;
 mod server_status;
@@ -801,6 +802,7 @@ impl AcpServer {
 
     /// The engine stops: every share, harness, turn and background task ends.
     async fn shutdown(&self) {
+        crate::sessions::flush_history();
         {
             let _updates = self
                 .client_capability_updates

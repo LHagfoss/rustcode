@@ -2,7 +2,7 @@
 import type { JsonObject } from "./jsonrpc";
 import { MockEngine } from "./mock";
 import type { MockOptions } from "./mockFixtures";
-import { mockGitChanges } from "./mockGit";
+import { mockGitChanges, mockGitCommitChanges, mockGitCommits } from "./mockGit";
 import {
   mockDiscovery,
   mockIsPublic,
@@ -365,6 +365,8 @@ export class MockTransport implements Transport {
     if (command === "thread_user_titled") return this.engine?.userTitled.has(String(args.id)) ?? false;
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "project_files") return MOCK_PROJECT_FILES;
+    if (command === "git_commits") return mockGitCommits();
+    if (command === "git_commit_changes") return mockGitCommitChanges(String(args.sha));
     if (command === "git_changes") {
       const changes = mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
       // The summary the panel's counts read leaves the diff body out, as the shell does.

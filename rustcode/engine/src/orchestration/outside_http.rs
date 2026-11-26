@@ -277,7 +277,13 @@ struct Request {
     body: Vec<u8>,
     /// Every byte read, head included, for a `/ws` upgrade relayed as is.
     raw: Vec<u8>,
+    /// Its `Content-Length` was over [`MAX_BODY_BYTES`]: the body was not
+    /// read, and the request is answered 413.
+    too_large: bool,
 }
+
+/// The largest request body this listener reads.
+const MAX_BODY_BYTES: usize = 65536;
 async fn read(stream: &mut TcpStream) -> Option<Request> {
     let mut bytes = Vec::new();
     let end = loop {
@@ -321,8 +327,15 @@ async fn read(stream: &mut TcpStream) -> Option<Request> {
         .transpose()
         .ok()?
         .unwrap_or(0);
-    if length > 65536 {
-        return None;
+    if length > MAX_BODY_BYTES {
+        return Some(Request {
+            method,
+            target,
+            headers,
+            body: Vec::new(),
+            raw: Vec::new(),
+            too_large: true,
+        });
     }
     while bytes.len() < end + length {
         let mut buf = [0; 1024];
@@ -338,6 +351,7 @@ async fn read(stream: &mut TcpStream) -> Option<Request> {
         headers,
         body: bytes[end..end + length].to_vec(),
         raw: bytes,
+        too_large: false,
     })
 }
 async fn respond(stream: &mut TcpStream, status: u16, value: Value, extra: &str) {
@@ -851,6 +865,16 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<Upgrade> {
         respond(&mut stream, 403, json!({"error":"forbidden"}), "").await;
         return None;
     }
+    if req.too_large {
+        respond(
+            &mut stream,
+            413,
+            json!({"error":"too_large","limit":MAX_BODY_BYTES}),
+            "",
+        )
+        .await;
+        return None;
+    }
     let (path, query) = req.target.split_once('?').unwrap_or((&req.target, ""));
     if public
         && (path == SOCKET_PATH || path == TICKET_PATH || path == LOGIN_PATH || path == LOGOUT_PATH)
@@ -1265,9 +1289,11 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<Upgrade> {
                     .and_then(|v| v.strip_prefix("Bearer "))
                     .unwrap_or("");
                 let (id, secret) = rest.split_once('/').unwrap_or((rest, bearer));
-                let ping = req.headers.get("x-github-event").map(String::as_str) == Some("ping");
+                let header = |name: &str| req.headers.get(name).map(String::as_str);
+                let event = header("x-github-event").or_else(|| header("x-event-type"));
+                let delivery = header("x-github-delivery");
                 let (code, answer) =
-                    crate::acp::loops::trigger(id, secret.trim(), &req.body, ping).await;
+                    crate::acp::loops::trigger(id, secret.trim(), &req.body, event, delivery).await;
                 status = code;
                 answer
             }

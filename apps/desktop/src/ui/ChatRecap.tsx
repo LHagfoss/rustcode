@@ -108,7 +108,7 @@ export function useChatRecapWatch() {
 
 const STATE_LABEL: Record<RecapState, string> = {
   running: "Still working",
-  needs: "Waiting on you",
+  needs: "Needs you",
   failed: "The last turn failed",
   done: "Finished",
 };
@@ -145,7 +145,9 @@ export function ChatRecapCard({ threadId, className }: { threadId: string; class
       <div className="flex items-center gap-2">
         <Sparkles size={13} className="shrink-0 text-accent" />
         <span className="font-medium text-fg">Recap</span>
-        <span className="min-w-0 flex-1 truncate text-fg-faint">Last activity {relativeAge(open.since)}</span>
+        <span className="min-w-0 flex-1 truncate text-fg-faint">
+          You were last here {relativeAge(open.since)}
+        </span>
         <span className={cx("flex shrink-0 items-center gap-1.5", STATE_TONE[recap.state])}>
           <span aria-hidden className="size-1.5 rounded-full bg-current" />
           {STATE_LABEL[recap.state]}

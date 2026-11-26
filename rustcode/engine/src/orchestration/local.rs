@@ -141,6 +141,7 @@ pub(crate) async fn answer_json_with_asker(
         }
         super::UPDATE_SESSION => update_own_session(session_id, args),
         super::CONFIGURE_SESSION => super::local_threads::configure(session_id, args).await,
+        super::INTERRUPT_SESSION => super::local_interrupt::answer(session_id, args).await,
         super::THREAD_USAGE => thread_usage(session_id, args),
         super::QUERY_DATA => query_data(args),
         super::MERGE_WHEN_GREEN => {

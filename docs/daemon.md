@@ -214,6 +214,20 @@ login while named accounts exist.
   the secret and answers 200 without a run. A job saved with
   `{ "kind": "manual" }` has no schedule and runs only from its webhook or
   Run now.
+- **Webhook events (#4386).** The run keeps the event and delivery the
+  request headers name (`X-GitHub-Event`, or `X-Event-Type`, and
+  `X-GitHub-Delivery`); the prompt names them above the fenced body
+  ("Webhook event `check_suite` (completed), delivery …"). A job's *Events*
+  (`webhookEvents` when saved, `webhook_events` in the job) limits which
+  deliveries start a run: an event (`check_suite`) or an event and its
+  payload's `action` (`pull_request.review_requested`); any other delivery
+  answers 202 `{"ignored":"event"}` and records nothing. Empty takes every
+  delivery. The job's pre-check script gets `RUSTCODE_WEBHOOK_EVENT`,
+  `RUSTCODE_WEBHOOK_DELIVERY` and `RUSTCODE_WEBHOOK_BODY_FILE` (a private
+  file holding the body), so it can filter on the payload and print nothing
+  to skip the turn. The scheduler remembers a job's last 200 delivery ids: a
+  redelivery answers 200 `{"duplicate":true}` without a run. A body over
+  64 KiB answers 413 `{"error":"too_large"}`.
 - **Scheduled runs can start with the app closed.** While the scheduler
   daemon is running, it uses the app's engine when available and starts the
   shared RustCode server on demand otherwise. The run and its result appear

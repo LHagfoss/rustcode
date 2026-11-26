@@ -36,10 +36,18 @@ installed or launched until the first approved action.
 
 Exact domain entries match only that host; `*.example.org` matches subdomains,
 not the apex. HTTP and HTTPS only; credentials in URLs are refused. Empty lists
-allow nothing. Redirects and page requests, including third-party resources,
-are intercepted using Chrome's [Fetch domain](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/)
-and checked against the current setting. Add resource hosts explicitly if a
-page needs them. This is a browser request policy, not an OS network sandbox.
+allow nothing. Every connection the browser makes, including page loads, third-party
+resources, WebSockets, workers and iframes, goes through a proxy RustCode runs
+on a loopback port for that browser (Chrome's `--proxy-server`, with the
+implicit localhost bypass removed). It opens a connection only to a host on the
+current list, so turning `enabled` off or removing a host takes effect on the
+next connection; a connection already open stays open. WebRTC is limited to
+proxied connections. The page target's requests are also checked by URL with
+Chrome's [Fetch domain](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/),
+which refuses other schemes and URLs with credentials. Add resource hosts
+explicitly if a page needs them. This is a browser request policy, not an OS
+network sandbox: hosts are matched by name, so a listed name that resolves to a
+private address is still reached.
 
 ## Isolation and limits
 
@@ -56,9 +64,21 @@ pasted image (a model without image input gets it described by the configured
 `vision_model`). Typed values are redacted from the engine's approval preview;
 the harness may retain its own tool arguments in its transcript.
 
-This first slice supports one page per thread, standard macOS/Linux Chrome
-locations, visible text capped at 32000 characters, CSS click and text insertion.
-Navigation may return before a page finishes loading; read again after a slow
-page settles. Calls time out, and a failed or cancelled call closes that
-thread's browser. Popups are blocked. No arbitrary JavaScript tool, desktop
-control, uploads, downloads UI, Windows integration is provided.
+`browser_read` returns the URL, the title, the visible text (capped at 32000
+characters) and up to 100 interactive elements from Chrome's accessibility
+tree, each with a ref such as `e12`, a role, a name and states like `disabled`
+or `checked`. Text fields' contents are never listed, so a password is not
+returned. The page's text and elements are wrapped as untrusted content, with a
+note telling the model not to follow instructions in them. `browser_click` and
+`browser_type` take a `ref` from the latest read (preferred) or a CSS
+`selector`. A click is a real mouse press and release at the element's center
+after scrolling it into view, so the page sees trusted input. A ref that is no
+longer on the page fails with a message to read again. Every script RustCode
+runs in the page runs in an isolated world, so the page's own scripts can
+neither see nor change it. `browser_open` waits up to 15 s for the page's load
+event and says when it had not finished.
+
+This slice supports one page per thread and standard macOS/Linux Chrome
+locations. Calls time out, and a failed or cancelled call closes that thread's
+browser. Popups are blocked. No arbitrary JavaScript tool, desktop control,
+uploads, downloads UI or Windows integration is provided.

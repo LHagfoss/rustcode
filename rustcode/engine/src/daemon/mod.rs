@@ -12,6 +12,7 @@ pub mod schedule;
 pub mod scheduler;
 pub mod server;
 pub mod store;
+pub mod webhook;
 
 #[cfg(test)]
 mod action_tests;
