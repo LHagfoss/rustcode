@@ -2,7 +2,7 @@
 // replies full width without a bubble, quiet thought disclosures, one-line
 // tool rows that open to their diff or output, and a turn footer.
 
-import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { effortLabel, type HarnessDenial, modelName } from "../acp/types";
 import { type AnsiLine, ansiClass } from "../lib/ansi";
 import { displayCommand } from "../lib/command";
@@ -11,7 +11,6 @@ import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
 import { splitReply } from "../smartui/parse";
-import { storedImage, storedImageNow } from "../state/attachmentImages";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
@@ -63,7 +62,6 @@ import {
   Globe,
   Hourglass,
   Image as ImageIcon,
-  ImageOff,
   Layers,
   MessageCircleQuestion,
   MessageSquareQuote,
@@ -80,10 +78,10 @@ import {
   Users,
   Wrench,
 } from "./icons";
-import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
 import { McpAppSlot } from "./McpAppView";
+import { ImageUnavailable, MessageGallery, useStoredImages } from "./MessageGallery";
 import { PasteChip } from "./PasteChip";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { turnActions, turnFooterHidden } from "./replyActions";
@@ -100,74 +98,6 @@ function messageMarkdown(text: string): string {
 }
 
 /** An image a message recorded whose file is not on the thread's computer (any more). */
-function ImageUnavailable() {
-  return (
-    <span
-      title="The image file is no longer on the computer this thread ran on"
-      className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted"
-    >
-      <ImageOff size={12} /> Image unavailable
-    </span>
-  );
-}
-
-/**
- * A sent picture's thumbnail. Its height is fixed, so the row is as tall while the picture loads
- * (the placeholder below), once it has decoded, and in `estimatedRowHeight` (ui/Transcript.tsx
- * `THUMBNAIL_ROW`): a picture that grew as it arrived pushed the end of a thread around as it
- * opened. The width follows the picture's shape up to 240px, and a wider one is cropped.
- */
-const THUMBNAIL = "h-[120px] w-auto max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1";
-
-/**
- * A picture a replayed message names, read back from the computer the thread runs on. Clicking it
- * opens every picture of the message that has loaded.
- */
-function StoredImage({ threadId, path, all }: { threadId: string; path: string; all: readonly string[] }) {
-  const [src, setSrc] = useState<string | null | undefined>(() => storedImageNow(threadId, path));
-  useEffect(() => {
-    let live = true;
-    const now = storedImageNow(threadId, path);
-    if (now !== undefined) setSrc(now);
-    else void storedImage(threadId, path).then((url) => live && setSrc(url));
-    return () => {
-      live = false;
-    };
-  }, [threadId, path]);
-  const name = path.split(/[\\/]/).pop() || "Image";
-  if (src === null) return <ImageUnavailable />;
-  if (src === undefined) {
-    return (
-      <span
-        role="img"
-        aria-label={`Loading ${name}`}
-        className="flex h-[120px] w-[160px] items-center justify-center rounded-lg bg-fill-subtle text-fg-faint"
-      >
-        <ImageIcon size={16} />
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      aria-label={`Open ${name}`}
-      className="rounded-lg"
-      onClick={() => {
-        const pictures = all.flatMap((p) => {
-          const url = storedImageNow(threadId, p);
-          return url ? [{ src: url, alt: p.split(/[\\/]/).pop() || "Image" }] : [];
-        });
-        openLightbox(
-          pictures,
-          pictures.findIndex((x) => x.src === src),
-        );
-      }}
-    >
-      <img src={src} alt={name} title={name} className={THUMBNAIL} />
-    </button>
-  );
-}
-
 /**
  * A message's Edit and Retry: shown on hover with Copy, and dimmed rather than removed while a
  * turn runs (`aria-disabled` keeps the tooltip that says why).
@@ -224,6 +154,14 @@ export const UserRow = memo(function UserRow({
   const sentHere = attachments.some((a) => a.kind === "image");
   const stored = sentHere ? [] : paths;
   const gone = sentHere ? 0 : lost;
+  const sentPictures = useMemo(
+    () =>
+      (item.attachments ?? []).flatMap((a) =>
+        a.kind === "image" && a.preview ? [{ src: a.preview, name: a.name }] : [],
+      ),
+    [item.attachments],
+  );
+  const storedPictures = useStoredImages(threadId ?? "", stored);
   // A turn the app woke the thread for (a delegate finished, or asks): a
   // divider row like a compaction, never a message that reads as the user's.
   if (item.wake) return <WakeRow text={item.text} flat />;
@@ -240,28 +178,10 @@ export const UserRow = memo(function UserRow({
             // panel opens the text itself. New messages carry the paste as their own text.
             a.kind === "text" ? (
               <PasteChip key={i} text={a.text ?? ""} />
-            ) : a.kind === "image" && a.preview ? (
-              <button
-                key={i}
-                type="button"
-                aria-label={`Open ${a.name}`}
-                className="rounded-lg"
-                onClick={() => {
-                  const pictures = attachments.flatMap((x) =>
-                    x.kind === "image" && x.preview ? [{ src: x.preview, alt: x.name }] : [],
-                  );
-                  openLightbox(
-                    pictures,
-                    pictures.findIndex((x) => x.src === a.preview),
-                  );
-                }}
-              >
-                <img src={a.preview} alt={a.name} title={a.name} className={THUMBNAIL} />
-              </button>
-            ) : (
+            ) : a.kind === "image" && a.preview ? null : (
               <span
                 key={i}
-                className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout"
+                className="flex h-[26px] items-center gap-1.5 self-center rounded-full bg-fill-subtle px-2 text-callout"
               >
                 {a.kind === "image" ? (
                   <ImageIcon size={12} />
@@ -272,9 +192,7 @@ export const UserRow = memo(function UserRow({
               </span>
             ),
           )}
-          {stored.map((path, i) => (
-            <StoredImage key={`s${i}`} threadId={threadId ?? ""} path={path} all={stored} />
-          ))}
+          <MessageGallery pictures={sentHere ? sentPictures : storedPictures} />
           {Array.from({ length: gone }, (_, i) => (
             <ImageUnavailable key={`g${i}`} />
           ))}
