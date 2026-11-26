@@ -148,6 +148,11 @@ Use [`scripts/bench-build-boundaries.md`](../scripts/bench-build-boundaries.md)
 to measure clean, warm, and focused-edit Cargo rebuild costs without cleaning a
 shared target directory.
 
+## Thread state
+
+Which process owns each file in a thread's folder, when it is on disk and
+what a restart rebuilds it from: [ADR 0010](adr/0010-thread-state-ownership.md).
+
 ## Thread index
 
 `~/.config/rustcode/index.sqlite` (`engine/src/thread_index.rs`) indexes the

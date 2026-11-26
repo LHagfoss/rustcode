@@ -19,3 +19,4 @@ changes, update the record in the same pull request.
 | [0007](0007-desktop-pinned-section-headers.md) | Opened chat sections pin their header by script, not CSS `sticky` |
 | [0008](0008-builtin-agent-crate.md) | The built-in agent gets its own crate, behind a `BuiltinAgent` trait |
 | [0009](0009-objectives-and-coordination.md) | Objectives run as workflow runs, and the engine owns them |
+| [0010](0010-thread-state-ownership.md) | Who owns each piece of thread state, and how it comes back after a crash |
