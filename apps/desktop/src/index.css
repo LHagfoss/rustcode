@@ -155,11 +155,11 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --rc-bg: #0b0b0c;
-    --rc-sidebar: #151517;
-    --rc-surface: #1d1d20;
-    --rc-surface-2: #242428;
-    --rc-surface-3: #2a2a2e;
+    --rc-bg: #111113;
+    --rc-sidebar: #0a0a0b;
+    --rc-surface: #1a1a1d;
+    --rc-surface-2: #212125;
+    --rc-surface-3: #29292e;
     /* The composer shares the sidebar surface, in the shared glass (see the light theme above). */
     --rc-composer-bg: color-mix(in srgb, var(--rc-composer-hue) var(--rc-glass-alpha), transparent);
     --rc-composer-bg-focus: color-mix(
@@ -172,11 +172,11 @@
       var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 12%)),
       transparent
     );
-    --rc-border: #ffffff08;
-    --rc-border-strong: #ffffff18;
-    --rc-text: #ededed;
-    --rc-text-muted: #a1a1a1;
-    --rc-text-faint: #6b6b6b;
+    --rc-border: #ffffff0a;
+    --rc-border-strong: #ffffff17;
+    --rc-text: #f2f1ee;
+    --rc-text-muted: #aeada9;
+    --rc-text-faint: #7a7975;
     --rc-accent: #93a3e8;
     --rc-accent-text: #0b0b0c;
     --rc-danger: #f26d6d;
@@ -184,19 +184,20 @@
     --rc-warning: #e5a54b;
     --rc-focus: #93a3e8;
     --rc-selection: #93a3e84d;
-    --rc-code-bg: #111113;
+    --rc-code-bg: #0c0c0e;
     --rc-scrollbar: #ffffff26;
     --rc-shadow-color: #00000040;
+    --rc-composer-hue: color-mix(in srgb, #ffffff 5%, var(--rc-bg));
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --rc-bg: #0b0b0c;
-  --rc-sidebar: #151517;
-  --rc-surface: #1d1d20;
-  --rc-surface-2: #242428;
-  --rc-surface-3: #2a2a2e;
+  --rc-bg: #111113;
+  --rc-sidebar: #0a0a0b;
+  --rc-surface: #1a1a1d;
+  --rc-surface-2: #212125;
+  --rc-surface-3: #29292e;
   --rc-composer-bg: color-mix(in srgb, var(--rc-composer-hue) var(--rc-glass-alpha), transparent);
   --rc-composer-bg-focus: color-mix(
     in srgb,
@@ -208,11 +209,11 @@
     var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 12%)),
     transparent
   );
-  --rc-border: #ffffff08;
-  --rc-border-strong: #ffffff18;
-  --rc-text: #ededed;
-  --rc-text-muted: #a1a1a1;
-  --rc-text-faint: #6b6b6b;
+  --rc-border: #ffffff0a;
+  --rc-border-strong: #ffffff17;
+  --rc-text: #f2f1ee;
+  --rc-text-muted: #aeada9;
+  --rc-text-faint: #7a7975;
   --rc-accent: #93a3e8;
   --rc-accent-text: #0b0b0c;
   --rc-danger: #f26d6d;
@@ -220,9 +221,10 @@
   --rc-warning: #e5a54b;
   --rc-focus: #93a3e8;
   --rc-selection: #93a3e84d;
-  --rc-code-bg: #111113;
+  --rc-code-bg: #0c0c0e;
   --rc-scrollbar: #ffffff26;
   --rc-shadow-color: #00000040;
+  --rc-composer-hue: color-mix(in srgb, #ffffff 5%, var(--rc-bg));
 }
 
 /* Derived from the tokens above: never set by a theme. */
@@ -286,6 +288,16 @@
    Wider settings move the cap only (Settings › Chat); "full" lets the pane decide. */
 :root {
   --rc-chat-content-max-width: 46rem;
+}
+
+.rc-main-panel {
+  margin: 8px 8px 8px 0;
+  border-radius: var(--rc-radius-xl);
+  box-shadow: 0 0 0 1px var(--rc-separator);
+}
+
+aside[aria-hidden="true"] + .rc-main-panel {
+  margin-left: 8px;
 }
 
 :root[data-chat-width="wide"] {

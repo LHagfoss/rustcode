@@ -42,16 +42,16 @@ files and the engine snapshot the names use underscores (`surface_2`,
 
 | Token | Use | Default dark | Default light |
 |---|---|---|---|
-| `bg` | The chat and main panes | `#0b0b0c` | `#ffffff` |
-| `sidebar` | The sidebar | `#151517` | `#f7f7f8` |
-| `surface` | Resting cards: composer, settings groups, error cards | `#1d1d20` | `#eaeaea` |
-| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#242428` | `#ffffff` |
-| `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#2a2a2e` | `#e4e4e6` |
+| `bg` | The main panel: an inset, rounded card over the window (`.rc-main-panel`) | `#111113` | `#ffffff` |
+| `sidebar` | The window and the sidebar on it, a step darker than `bg` in dark | `#0a0a0b` | `#f7f7f8` |
+| `surface` | Resting cards: composer, settings groups, error cards | `#1a1a1d` | `#eaeaea` |
+| `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#212125` | `#ffffff` |
+| `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#29292e` | `#e4e4e6` |
 | `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0a` | `#0000000a` |
 | `border-strong` | A line that must read: a chart marker, a dashed outline, the knob's ring | `#ffffff1c` | `#0000001f` |
-| `text` | Primary text and icons | `#ededed` | `#171717` |
-| `text-muted` | Secondary text, idle icons | `#a1a1a1` | `#5c5c5c` |
-| `text-faint` | Metadata, placeholders, disabled | `#6b6b6b` | `#9a9a9a` |
+| `text` | Primary text and icons | `#f2f1ee` | `#171717` |
+| `text-muted` | Secondary text, idle icons | `#aeada9` | `#5c5c5c` |
+| `text-faint` | Metadata, placeholders, disabled | `#7a7975` | `#9a9a9a` |
 | `accent` | Links, toggles on, progress, selection marks | `#93a3e8` | `#2f6fe4` |
 | `accent-text` | Text and icons drawn on `accent` | `#0b0b0c` | `#ffffff` |
 | `danger` | Errors, destructive actions | `#f26d6d` | `#d93d3d` |
@@ -59,7 +59,7 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `warning` | Needs you, warnings | `#e5a54b` | `#b7791f` |
 | `focus` | The keyboard focus ring (drawn at 40%) | `#93a3e8` | `#2f6fe4` |
 | `selection` | Selected text | `#93a3e84d` | `#2f6fe433` |
-| `code-bg` | Code blocks, diffs, terminal | `#111113` | `#f6f6f7` |
+| `code-bg` | Code blocks, diffs, terminal | `#0c0c0e` | `#f6f6f7` |
 | `scrollbar` | Scrollbar thumb | `#ffffff26` | `#00000026` |
 
 The surfaces step evenly in lightness (CIE L\*): dark `bg` 3.0, `sidebar`

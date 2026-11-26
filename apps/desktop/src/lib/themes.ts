@@ -63,16 +63,16 @@ export function cssName(token: Token): string {
 }
 
 const DARK: Record<Token, string> = {
-  bg: "#0b0b0c",
-  sidebar: "#151517",
-  surface: "#1d1d20",
-  surface_2: "#242428",
-  surface_3: "#2a2a2e",
-  border: "#ffffff08",
-  border_strong: "#ffffff18",
-  text: "#ededed",
-  text_muted: "#a1a1a1",
-  text_faint: "#6b6b6b",
+  bg: "#111113",
+  sidebar: "#0a0a0b",
+  surface: "#1a1a1d",
+  surface_2: "#212125",
+  surface_3: "#29292e",
+  border: "#ffffff0a",
+  border_strong: "#ffffff17",
+  text: "#f2f1ee",
+  text_muted: "#aeada9",
+  text_faint: "#7a7975",
   accent: "#93a3e8",
   accent_text: "#0b0b0c",
   danger: "#f26d6d",
@@ -80,7 +80,7 @@ const DARK: Record<Token, string> = {
   warning: "#e5a54b",
   focus: "#93a3e8",
   selection: "#93a3e84d",
-  code_bg: "#111113",
+  code_bg: "#0c0c0e",
   scrollbar: "#ffffff26",
 };
 

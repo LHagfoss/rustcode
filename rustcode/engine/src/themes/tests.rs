@@ -42,10 +42,10 @@ fn the_default_theme_is_the_neutral_rustcode_dark() {
     let theme = find(&builtin_themes(), "rustcode").unwrap().clone();
     let tokens = &theme.desktop.tokens;
     assert_eq!(theme.desktop.mode, Mode::Dark);
-    assert_eq!(tokens.bg, "#0b0b0c");
-    assert_eq!(tokens.text, "#ededed");
-    assert_eq!(tokens.text_muted, "#a1a1a1");
-    assert_eq!(tokens.text_faint, "#6b6b6b");
+    assert_eq!(tokens.bg, "#111113");
+    assert_eq!(tokens.text, "#f2f1ee");
+    assert_eq!(tokens.text_muted, "#aeada9");
+    assert_eq!(tokens.text_faint, "#7a7975");
     assert!(contrast(rgb(&tokens.text), rgb(&tokens.bg)) > 15.0);
 }
 
@@ -229,7 +229,7 @@ fn a_previous_builtin_copy_is_upgraded_in_a_temp_dir() {
         ThemeSource::Builtin,
         "an upgraded copy is the built-in, not a user theme"
     );
-    assert_eq!(themes["rustcode"].desktop.tokens.surface, "#1d1d20");
+    assert_eq!(themes["rustcode"].desktop.tokens.surface, "#1a1a1d");
     // A copy the user edited at some point is theirs: it never byte-matched a
     // built-in, so it is neither upgraded nor counted as one.
     let (_, old) = PREVIOUS_BUILTINS
@@ -310,10 +310,10 @@ fn cli_commands_report_and_fail_clearly() {
     assert!(listed.starts_with("* rustcode"), "{listed}");
     assert!(listed.contains("nord"));
     let shown = cli::show("rustcode", false, None).unwrap();
-    assert!(shown.contains("bg             #0b0b0c"), "{shown}");
+    assert!(shown.contains("bg             #111113"), "{shown}");
     let json: ThemeEntry =
         serde_json::from_str(&cli::show("rustcode", true, None).unwrap()).unwrap();
-    assert_eq!(json.tokens.bg, "#0b0b0c");
+    assert_eq!(json.tokens.bg, "#111113");
     assert!(cli::show("missing", false, None).is_err());
     assert!(
         cli::path(Some("rustcode"), None).is_err(),

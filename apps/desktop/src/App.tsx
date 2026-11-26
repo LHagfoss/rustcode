@@ -261,9 +261,9 @@ export function App() {
           native title bar draw themselves.
         */}
         <WindowControls className="absolute top-0 right-0 z-40" />
-        <div className="flex h-full w-full overflow-hidden bg-sidebar-glass">
+        <div data-tauri-drag-region className="flex h-full w-full overflow-hidden bg-sidebar-glass">
           <Sidebar />
-          <div className="relative flex min-w-0 flex-1 bg-bg">
+          <div className="rc-main-panel relative flex min-w-0 flex-1 overflow-hidden bg-bg">
             {/*
               The view and the terminal under it. The right panel is docked inside
               the chat view's own row (ui/ChatView.tsx), so it is never drawn over

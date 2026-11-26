@@ -165,10 +165,10 @@ rc theme path [<name>]                # user directory, or the theme's file
       "path": "/Users/me/.config/rustcode/themes/rustcode.toml",
       "mode": "dark",
       "tokens": {
-        "bg": "#0b0b0c", "sidebar": "#151517", "surface": "#1d1d20",
-        "surface_2": "#242428", "surface_3": "#2a2a2e", "border": "#1f1f22",
-        "border_strong": "#2c2c30", "text": "#ededed", "text_muted": "#a1a1a1",
-        "text_faint": "#6b6b6b", "accent": "#93a3e8", "accent_text": "#0b0b0c",
+        "bg": "#111113", "sidebar": "#0a0a0b", "surface": "#1a1a1d",
+        "surface_2": "#212125", "surface_3": "#29292e", "border": "#1c1c1f",
+        "border_strong": "#29292c", "text": "#f2f1ee", "text_muted": "#aeada9",
+        "text_faint": "#7a7975", "accent": "#93a3e8", "accent_text": "#0b0b0c",
         "danger": "#f26d6d", "success": "#5fbf8a", "warning": "#e0b25c",
         "focus": "#93a3e8", "selection": "#252a3d", "code_bg": "#101012",
         "scrollbar": "#2a2a2e"
