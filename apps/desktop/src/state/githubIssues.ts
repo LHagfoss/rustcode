@@ -15,7 +15,7 @@ import {
   toast,
   useApp,
 } from "./store";
-import { LOCAL_HOST } from "./threadKeys";
+import { isRemoteThread, LOCAL_HOST } from "./threadKeys";
 
 export const ISSUE_LIMIT = 50;
 export const DEFAULT_ISSUE_INSTRUCTION = "Investigate and implement this GitHub issue.";
@@ -328,4 +328,14 @@ export async function fanOutIssueThreads(
     toast(`Could not start worktree threads: ${failed[0]?.error ?? "unknown error"}`, "error");
   }
   return { created, failed };
+}
+
+/** Whether the Issues panel can list issues for `threadKey`: not for a thread on another computer, whose repos this machine cannot read. */
+export function issuesAvailableFor(threadKey: string | null | undefined): boolean {
+  return !threadKey || !isRemoteThread(threadKey);
+}
+
+/** The repository the Issues panel lists for the thread `threadKey`, if it can list any. */
+export function issuesCwd(threadKey: string | null | undefined, cwd: string | undefined): string | undefined {
+  return issuesAvailableFor(threadKey) ? cwd || undefined : undefined;
 }

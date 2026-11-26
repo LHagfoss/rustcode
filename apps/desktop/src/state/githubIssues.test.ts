@@ -6,6 +6,8 @@ import {
   type GitHubIssue,
   issueBranchSlug,
   issueErrorTitle,
+  issuesAvailableFor,
+  issuesCwd,
   issueThreadMessage,
   issueThreadTitle,
   parseIssue,
@@ -153,5 +155,17 @@ describe("github issue prompt seeding and worktree naming", () => {
     };
     const prompt = issueThreadMessage(minimal, "Write a minimal regression test first.");
     expect(prompt).toBe("Write a minimal regression test first.\n\nIssue #9: Fix crash");
+  });
+});
+
+describe("remote threads", () => {
+  test("lists issues only for threads on this computer", () => {
+    expect(issuesAvailableFor(undefined)).toBe(true);
+    expect(issuesAvailableFor("thread-1")).toBe(true);
+    expect(issuesAvailableFor("studio/thread-1")).toBe(false);
+    expect(issuesCwd("thread-1", "/repo")).toBe("/repo");
+    expect(issuesCwd(null, "/repo")).toBe("/repo");
+    expect(issuesCwd("thread-1", "")).toBeUndefined();
+    expect(issuesCwd("studio/thread-1", "/repo")).toBeUndefined();
   });
 });
