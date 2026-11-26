@@ -6,7 +6,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AcpConnection } from "../acp/jsonrpc";
-import type { Transport } from "../acp/transport";
+import { MachineTransport, type Transport, type TransportEvent } from "../acp/transport";
 import { setShellTransport } from "../lib/shell";
 import {
   type Machine,
@@ -15,6 +15,7 @@ import {
   refreshMachines,
   refreshMachineThreads,
   resetMachinesForTests,
+  useMachines,
 } from "./machines";
 
 const BOX = "gw-3912aaaabbbbcccc";
@@ -154,5 +155,73 @@ describe("an initialize answer from a connection a reconnect replaced", () => {
       "session/list",
       "session/list",
     ]);
+  });
+});
+
+describe("offlineSince tracks link open and closed events", () => {
+  test("link open clears stale offlineSince and a subsequent drop records the new time", async () => {
+    const originalStart = MachineTransport.prototype.start;
+    const handlers = new Map<string, (event: TransportEvent) => void>();
+    MachineTransport.prototype.start = async function (this: MachineTransport, onEvent) {
+      handlers.set(this.machineId, onEvent);
+    };
+    try {
+      const stale = Date.parse("2026-11-08T09:00:00Z");
+      shell.machines = [{ ...machine(BOX), state: "offline", lastConnectedAt: "2026-11-08T09:00:00Z" }];
+      await refreshMachines();
+      await tick();
+      expect(useMachines.getState().offlineSince[BOX]).toBe(stale);
+
+      const emit = handlers.get(BOX);
+      expect(emit).toBeDefined();
+      if (!emit) return;
+
+      emit({ type: "open", engine: "Box" });
+      expect(useMachines.getState().machines[0]?.state).toBe("connected");
+      expect(useMachines.getState().offlineSince[BOX]).toBeUndefined();
+
+      const beforeDrop = Date.now();
+      emit({ type: "closed", reason: "connection reset" });
+      const firstDrop = useMachines.getState().offlineSince[BOX];
+      expect(useMachines.getState().machines[0]?.state).toBe("offline");
+      expect(firstDrop).toBeDefined();
+      expect(firstDrop ?? 0).toBeGreaterThanOrEqual(beforeDrop);
+      expect(firstDrop).not.toBe(stale);
+
+      await tick(15);
+      emit({ type: "closed", reason: "still away" });
+      expect(useMachines.getState().offlineSince[BOX]).toBe(firstDrop);
+
+      emit({ type: "open", engine: "Box" });
+      expect(useMachines.getState().machines[0]?.state).toBe("connected");
+      expect(useMachines.getState().offlineSince[BOX]).toBeUndefined();
+    } finally {
+      MachineTransport.prototype.start = originalStart;
+    }
+  });
+
+  test("closed event while already offline keeps the existing offlineSince timestamp", async () => {
+    const originalStart = MachineTransport.prototype.start;
+    const handlers = new Map<string, (event: TransportEvent) => void>();
+    MachineTransport.prototype.start = async function (this: MachineTransport, onEvent) {
+      handlers.set(this.machineId, onEvent);
+    };
+    try {
+      const stale = Date.parse("2026-11-08T09:00:00Z");
+      shell.machines = [{ ...machine(BOX), state: "offline", lastConnectedAt: "2026-11-08T09:00:00Z" }];
+      await refreshMachines();
+      await tick();
+      expect(useMachines.getState().offlineSince[BOX]).toBe(stale);
+
+      const emit = handlers.get(BOX);
+      expect(emit).toBeDefined();
+      if (!emit) return;
+
+      emit({ type: "closed", reason: "retry failed" });
+      expect(useMachines.getState().machines[0]?.state).toBe("offline");
+      expect(useMachines.getState().offlineSince[BOX]).toBe(stale);
+    } finally {
+      MachineTransport.prototype.start = originalStart;
+    }
   });
 });
