@@ -143,7 +143,9 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   }, [open]);
   const shown = plan ? shownWindow(plan) : undefined;
   const left = shown ? leftPercent(shown) : null;
-  const low = plan?.windows.find((w) => w !== shown && leftPercent(w) < 20);
+  const low = plan?.windows.find(
+    (w) => (w !== shown && leftPercent(w) < 20) || planPace(w)?.kind === "runsOut",
+  );
   const fraction = usage?.size ? Math.min(1, usage.used / usage.size) : null;
   if (left === null && fraction === null) return null;
   const planSummary =
@@ -200,7 +202,6 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           className={cx(tipSurface, "z-40 flex w-[320px] flex-col overflow-hidden p-3")}
           {...tip.contentProps}
         >
-          {planSummary && <p className="mb-3 text-caption text-fg-muted">{planSummary}</p>}
           <UsageCard
             plan={plan}
             cached={fromCache}
@@ -538,7 +539,7 @@ function UsageCard({
   );
 }
 
-/** One window: its name and reset, a bar of what is left (it drains) with quarter ticks, the numbers. */
+/** One window: its name and reset, a bar of what is left (bright: still left at the reset at this rate), the numbers. */
 export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: string }) {
   const left = leftPercent(w);
   const reset = resetLabel(w);
@@ -558,35 +559,52 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
         aria-valuetext={`${left}% left`}
         className="relative h-[6px] overflow-hidden rounded-full bg-fill-strong"
       >
-        <span
-          className={cx(
-            "absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-snappy",
-            planTint(left),
-          )}
-          style={{ width: `max(${left > 0 ? 3 : 0}px, ${left}%)` }}
-        />
-        {[25, 50, 75].map((tick) => (
-          <span key={tick} className="absolute inset-y-0 w-px bg-bg/70" style={{ left: `${tick}%` }} />
-        ))}
-        {pace && (
-          <span
-            data-pace-mark
-            className="absolute inset-y-0 w-[2px] -translate-x-1/2 rounded-full bg-fg/80"
-            style={{ left: `${pace.evenLeft}%` }}
-          />
+        {pace ? (
+          <>
+            <span
+              data-pace-spend
+              className={cx(
+                "absolute inset-y-0 left-0 rounded-full",
+                pace.kind === "runsOut" ? "bg-warning/45" : cx(planTint(left), "opacity-35"),
+              )}
+              style={{ width: `${left}%` }}
+            />
+            {pace.kind === "atReset" && (
+              <span
+                data-pace-end
+                className={cx("absolute inset-y-0 left-0 rounded-full", planTint(left))}
+                style={{ width: `max(3px, ${100 - pace.percent}%)` }}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <span
+              className={cx(
+                "absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-snappy",
+                planTint(left),
+              )}
+              style={{ width: `max(${left > 0 ? 3 : 0}px, ${left}%)` }}
+            />
+            {[25, 50, 75].map((tick) => (
+              <span key={tick} className="absolute inset-y-0 w-px bg-bg/70" style={{ left: `${tick}%` }} />
+            ))}
+          </>
         )}
       </div>
-      <span className={cx("font-medium text-caption tabular", left < 20 ? "text-warning" : "text-fg")}>
-        {left}% left
-      </span>
-      {pace && (
-        <span
-          data-pace={pace.kind}
-          className={cx("text-caption", pace.kind === "runsOut" ? "text-warning" : "text-fg-faint")}
-        >
-          {paceLabel(pace)}
+      <div className="flex items-baseline justify-between gap-3">
+        <span className={cx("font-medium text-caption tabular", left < 20 ? "text-warning" : "text-fg")}>
+          {left}% left
         </span>
-      )}
+        {pace && (
+          <span
+            data-pace={pace.kind}
+            className={cx("text-caption", pace.kind === "runsOut" ? "text-warning" : "text-fg-muted")}
+          >
+            {paceLabel(pace)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
