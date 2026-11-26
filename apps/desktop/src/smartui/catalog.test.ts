@@ -198,6 +198,62 @@ describe("shorthand catalog", () => {
     );
   });
 
+  test("details keep immediately following HTML, sources and :: end blocks inside the fold", () => {
+    const htmlSources = expandShorthand(
+      [
+        ":: details Kilder",
+        '<ol class="rc-sources">',
+        '<li><a href="https://www.shopify.com/no/pricing">Shopify</a></li>',
+        "</ol>",
+        "",
+        ":: p After",
+      ].join("\n"),
+    );
+    expect(htmlSources).toBe(
+      [
+        '<details class="rc-details"><summary><span>Kilder</span></summary>',
+        '<ol class="rc-sources">',
+        '<li><a href="https://www.shopify.com/no/pricing">Shopify</a></li>',
+        "</ol>",
+        "</details>",
+        "",
+        "<p>After</p>",
+      ].join("\n"),
+    );
+
+    const blankBeforeHtml = expandShorthand(
+      [":: details Kilder", "", "<ol>", '<li><a href="https://example.com">One</a></li>', "</ol>"].join("\n"),
+    );
+    expect(blankBeforeHtml).toBe(
+      [
+        '<details class="rc-details"><summary><span>Kilder</span></summary>',
+        "<ol>",
+        '<li><a href="https://example.com">One</a></li>',
+        "</ol>",
+        "</details>",
+      ].join("\n"),
+    );
+
+    const mergedSources = expandShorthand(
+      [":: details Kilder", ":: sources", "- Docs | https://example.com/docs"].join("\n"),
+    );
+    expect(mergedSources).toBe(
+      '<details class="rc-details rc-sources"><summary>Kilder</summary><ol><li><a href="https://example.com/docs">Docs</a></li></ol></details>',
+    );
+
+    const nestedWithEnd = expandShorthand(
+      [":: details More", ":: list", "- One | detail", ":: end", ":: p Outside"].join("\n"),
+    );
+    expect(nestedWithEnd).toBe(
+      [
+        '<details class="rc-details"><summary><span>More</span></summary>',
+        '<ul class="rc-list"><li class="rc-item"><b>One</b><p>detail</p></li></ul>',
+        "</details>",
+        "<p>Outside</p>",
+      ].join("\n"),
+    );
+  });
+
   test("the catalog the skill and smart_ui_check name", () => {
     expect([...BLOCKS].sort()).toEqual(
       [
