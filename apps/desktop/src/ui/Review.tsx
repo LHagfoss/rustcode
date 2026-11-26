@@ -9,7 +9,7 @@ import { primaryModifier } from "../lib/platform";
 // draft a comment; the drafts go to the agent as one message, or to the pull
 // request as one review with line comments (`_rustcode/pulls/review`).
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
@@ -17,8 +17,9 @@ import { Method } from "../acp/types";
 import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { comparisonBase, shortRef } from "../lib/gitRef";
-import { type GitCommit, gitChanges, gitCommitChanges, gitCommits } from "../lib/native";
+import { type GitCommit, gitChanges, gitCommitChanges, gitCommits, openInEditor } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
+import { hasShell } from "../lib/shell";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
   fileTree,
@@ -40,6 +41,13 @@ import {
   useReviewDrafts,
 } from "../state/reviewDrafts";
 import {
+  diffLineEditorTarget,
+  diffRootForReview,
+  orderedReviewComments,
+  reviewCommentKeyMap,
+  stepTarget,
+} from "../state/reviewNav";
+import {
   patchHash,
   setViewed,
   stepFile,
@@ -58,14 +66,18 @@ import {
   useApp,
   worktreeOf,
 } from "../state/store";
+import { splitThreadKey } from "../state/threadKeys";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
 import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  ExternalLink,
   FileDiff,
   Folder,
+  MessageSquare,
   MessageSquarePlus,
   RefreshCw,
   Send,
@@ -224,14 +236,20 @@ const FileDiffView = memo(function FileDiffView({
   file,
   mode,
   comments,
+  commentIds,
+  activeCommentId,
   onAdd,
   onRemove,
+  onOpenLine,
 }: {
   file: ReviewFile;
   mode: "unified" | "split";
   comments: ReviewComment[];
+  commentIds: ReadonlyMap<ReviewComment, string>;
+  activeCommentId: string | null;
   onAdd: (c: ReviewComment) => void;
   onRemove: (c: ReviewComment) => void;
+  onOpenLine?: (line: PatchLine) => void;
 }) {
   const [editing, setEditing] = useState<{
     side: "LEFT" | "RIGHT";
@@ -248,6 +266,26 @@ const FileDiffView = memo(function FileDiffView({
     const i = where.get(line) ?? 0;
     return <Code pieces={pieces[i]!} html={html} start={starts[i]!} tint={wordTint(line.kind)} />;
   };
+  const canOpen = (line: PatchLine) =>
+    Boolean(onOpenLine && file.status !== "D" && line.kind !== "del" && line.new !== undefined);
+  const openOnDoubleClick = (e: MouseEvent, line: PatchLine) => {
+    if (!onOpenLine || !canOpen(line)) return;
+    if ((e.target as HTMLElement | null)?.closest("button")) return;
+    onOpenLine(line);
+  };
+  const openButton = (line: PatchLine) =>
+    onOpenLine && canOpen(line) ? (
+      <Tooltip label="Open in editor">
+        <button
+          type="button"
+          aria-label={`Open line ${line.new} in editor`}
+          onClick={() => onOpenLine(line)}
+          className="ml-2 flex size-[18px] shrink-0 items-center justify-center rounded-xs text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-hover/line:opacity-100 focus-visible:opacity-100"
+        >
+          <ExternalLink size={12} />
+        </button>
+      </Tooltip>
+    ) : null;
   const at = (side: "LEFT" | "RIGHT", n?: number) =>
     n === undefined ? [] : comments.filter((c) => c.side === side && c.line === n);
   const start = (line: PatchLine, side: "LEFT" | "RIGHT", extend = false) => {
@@ -273,22 +311,30 @@ const FileDiffView = memo(function FileDiffView({
     const saved = at(side, n);
     return (
       <>
-        {saved.map((c, i) => (
-          <div
-            key={i}
-            className="my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg bg-accent/10 px-2 py-1.5 font-sans text-callout rc-in"
-          >
-            <span className="selectable flex-1 whitespace-pre-wrap">{c.body}</span>
-            <button
-              type="button"
-              aria-label="Remove comment"
-              onClick={() => onRemove(c)}
-              className="text-fg-faint hover:text-fg"
+        {saved.map((c, i) => {
+          const id = commentIds.get(c);
+          const active = id !== undefined && id === activeCommentId;
+          return (
+            <div
+              key={id ?? i}
+              data-review-comment={id}
+              className={cx(
+                "my-1 mr-3 ml-[8ch] flex items-start gap-2 rounded-lg px-2 py-1.5 font-sans text-callout rc-in",
+                active ? "bg-accent/15 ring-1 ring-accent" : "bg-accent/10",
+              )}
             >
-              <X size={12} />
-            </button>
-          </div>
-        ))}
+              <span className="selectable flex-1 whitespace-pre-wrap">{c.body}</span>
+              <button
+                type="button"
+                aria-label="Remove comment"
+                onClick={() => onRemove(c)}
+                className="text-fg-faint hover:text-fg"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          );
+        })}
         {editing && editing.side === side && editing.line === n && (
           <CommentBox
             onCancel={() => setEditing(null)}
@@ -319,7 +365,10 @@ const FileDiffView = memo(function FileDiffView({
                 </div>
               ) : (
                 <div key={i}>
-                  <div className={cx("flex", tint(line.kind))}>
+                  <div
+                    onDoubleClick={(e) => openOnDoubleClick(e, line)}
+                    className={cx("group/line flex pr-1.5", tint(line.kind))}
+                  >
                     <Gutter
                       line={line}
                       side="LEFT"
@@ -343,6 +392,7 @@ const FileDiffView = memo(function FileDiffView({
                       {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
                     </span>
                     {code(line)}
+                    {openButton(line)}
                   </div>
                   {after(line, line.kind === "del" ? "LEFT" : "RIGHT")}
                   {line.kind === "ctx" && after(line, "LEFT")}
@@ -364,7 +414,15 @@ const FileDiffView = memo(function FileDiffView({
                         : undefined;
                     return (
                       <div key={side} className={cx("min-w-0", side === "RIGHT" && "border-border border-l")}>
-                        <div className={cx("flex", shown && shown.kind !== "ctx" && tint(shown.kind))}>
+                        <div
+                          onDoubleClick={
+                            side === "RIGHT" && shown ? (e) => openOnDoubleClick(e, shown) : undefined
+                          }
+                          className={cx(
+                            "group/line flex pr-1.5",
+                            shown && shown.kind !== "ctx" && tint(shown.kind),
+                          )}
+                        >
                           {shown ? (
                             <>
                               <Gutter
@@ -375,6 +433,7 @@ const FileDiffView = memo(function FileDiffView({
                                 picked={picked(side, side === "LEFT" ? shown.old : shown.new)}
                               />
                               {code(shown)}
+                              {side === "RIGHT" && openButton(shown)}
                             </>
                           ) : (
                             <span className="h-[18px] flex-1 bg-fill-subtle/50" />
@@ -444,6 +503,28 @@ export function Review({ threadId }: { threadId: string }) {
   const [post, runPost] = useOp();
   const posting = opRunning(post);
 
+  const local = !splitThreadKey(threadId).host;
+  const editorRoot = diffRootForReview(source.kind, cwd, wt?.path);
+  const canOpenLine = local && hasShell() && Boolean(editorRoot);
+  const openLineInEditor = useCallback(
+    (filePath: string, fileStatus: string, line: PatchLine) => {
+      if (!canOpenLine) return;
+      const target = diffLineEditorTarget(editorRoot, filePath, line, { local, fileStatus });
+      if (!target) return;
+      openInEditor(target.path, target.line).catch((e) =>
+        toast(e instanceof Error ? e.message : String(e), "error"),
+      );
+    },
+    [canOpenLine, editorRoot, local],
+  );
+  const [activeComment, setActiveComment] = useState<{ scope: string; id: string; tick: number } | null>(
+    null,
+  );
+  const activeCommentId = activeComment?.scope === draftKey ? activeComment.id : null;
+  const activeCommentTick = activeComment?.scope === draftKey ? activeComment.tick : 0;
+  const pendingScrollComment = useRef<string | null>(null);
+  const keepOpenForPath = useRef<string | null>(null);
+
   useEffect(() => {
     void refreshCheckpoints(threadId);
   }, [threadId]);
@@ -451,6 +532,12 @@ export function Review({ threadId }: { threadId: string }) {
   // A folded file opens again for the next one, and for another source.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fold belongs to one file of one source
   useEffect(() => {
+    if (keepOpenForPath.current && keepOpenForPath.current === selected) {
+      keepOpenForPath.current = null;
+      setCollapsed(false);
+      return;
+    }
+    keepOpenForPath.current = null;
     setCollapsed(null);
   }, [selected, sourceKey(source)]);
 
@@ -526,6 +613,26 @@ export function Review({ threadId }: { threadId: string }) {
   }, [load]);
   const tree = useMemo(() => fileTree((files ?? []).map((f) => f.path)), [files]);
   const order = useMemo(() => tree.flatMap((group) => group.files), [tree]);
+  const commentIds = useMemo(() => reviewCommentKeyMap(comments), [comments]);
+  const orderedComments = useMemo(() => orderedReviewComments(comments, order), [comments, order]);
+  const activeCommentIndex =
+    activeCommentId === null ? -1 : orderedComments.findIndex((entry) => entry.id === activeCommentId);
+  const jumpComment = (step: 1 | -1) => {
+    const next = stepTarget(orderedComments, activeCommentId, step);
+    if (!next) return;
+    setActiveComment((prev) => ({
+      scope: draftKey,
+      id: next.item.id,
+      tick: (prev?.scope === draftKey ? prev.tick : 0) + 1,
+    }));
+    pendingScrollComment.current = next.item.id;
+    if (selected !== next.item.path) {
+      keepOpenForPath.current = next.item.path;
+      setSelected(next.item.path);
+    } else {
+      setCollapsed(false);
+    }
+  };
   const viewedBook = useReviewViewed((s) => s.book);
   const hashes = useMemo(() => new Map((files ?? []).map((f) => [f.path, patchHash(f.lines)])), [files]);
   const viewedOf = (path: string) =>
@@ -543,15 +650,17 @@ export function Review({ threadId }: { threadId: string }) {
   };
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keys.current = (e) => {
-    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !order.length) return;
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']"))
       return;
-    if (e.key === "j" || e.key === "k") {
+    if ((e.key === "j" || e.key === "k") && order.length) {
       const next = stepFile(order, selected, e.key === "j" ? 1 : -1);
       if (next) setSelected(next);
     } else if (e.key === "v" && selected) toggleViewed(selected);
-    else return;
+    else if ((e.key === "n" || e.key === "p") && orderedComments.length > 0) {
+      jumpComment(e.key === "n" ? 1 : -1);
+    } else return;
     e.preventDefault();
   };
   useEffect(() => {
@@ -561,6 +670,21 @@ export function Review({ threadId }: { threadId: string }) {
   }, []);
   const file = files?.find((f) => f.path === selected);
   const folded = collapsed ?? (file ? viewedOf(file.path) === "viewed" : false);
+  useEffect(() => {
+    const targetId = pendingScrollComment.current;
+    if (!targetId || targetId !== activeCommentId || activeCommentTick === 0 || !selected || folded) return;
+    const frame = requestAnimationFrame(() => {
+      const root = diffRef.current;
+      if (!root) return;
+      const el = Array.from(root.querySelectorAll<HTMLElement>("[data-review-comment]")).find(
+        (node) => node.getAttribute("data-review-comment") === targetId,
+      );
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      pendingScrollComment.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeCommentId, activeCommentTick, selected, folded, diffRef]);
   const label = sourceLabel(source, wt?.branch);
   // The branch's counts compare against the base its worktree was made from; the
   // other scopes name their comparison themselves (HEAD, a turn, a pull request).
@@ -690,6 +814,36 @@ export function Review({ threadId }: { threadId: string }) {
               <span className="text-caption text-fg-faint">No turn diffs</span>
             </Tooltip>
           )
+        )}
+        {orderedComments.length > 0 && (
+          <div className="flex items-center gap-0.5 rounded-full bg-fill-subtle px-1 py-0.5 text-caption text-fg-muted">
+            <MessageSquare size={12} className="ml-1 shrink-0" />
+            <span className="px-1 tabular">
+              {activeCommentIndex >= 0
+                ? `${activeCommentIndex + 1} of ${orderedComments.length}`
+                : `${orderedComments.length}`}
+            </span>
+            <Tooltip label="Previous comment (P)">
+              <button
+                type="button"
+                aria-label="Previous comment"
+                onClick={() => jumpComment(-1)}
+                className="flex size-5 items-center justify-center rounded-full hover:bg-fill hover:text-fg"
+              >
+                <ChevronUp size={12} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Next comment (N)">
+              <button
+                type="button"
+                aria-label="Next comment"
+                onClick={() => jumpComment(1)}
+                className="flex size-5 items-center justify-center rounded-full hover:bg-fill hover:text-fg"
+              >
+                <ChevronDown size={12} />
+              </button>
+            </Tooltip>
+          </div>
         )}
         <Tooltip label={wide ? "Unified or side by side" : "Side by side needs a wider view"}>
           <span>
@@ -856,8 +1010,13 @@ export function Review({ threadId }: { threadId: string }) {
                       file={file}
                       mode={mode}
                       comments={comments.filter((c) => c.path === file.path)}
+                      commentIds={commentIds}
+                      activeCommentId={activeCommentId}
                       onAdd={(c) => setComments((all) => [...all, c])}
                       onRemove={(c) => setComments((all) => all.filter((x) => x !== c))}
+                      onOpenLine={
+                        canOpenLine ? (line) => openLineInEditor(file.path, file.status, line) : undefined
+                      }
                     />
                   ) : (
                     <p className="text-callout text-fg-muted">
