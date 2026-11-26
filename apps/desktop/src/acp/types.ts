@@ -1101,6 +1101,13 @@ export interface HarnessModel {
   default_effort?: string;
 }
 
+/** How a login is billed: a plan (Claude Pro/Max, ChatGPT) is not billed per token. */
+export type Billing = "subscription" | "api" | "unknown";
+
+/** `billing` as the engine sent it; anything else is `unknown`. */
+export const parseBilling = (value: unknown): Billing =>
+  value === "subscription" || value === "api" ? value : "unknown";
+
 /** A named login of a harness: a config directory of its own (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). */
 export interface HarnessAccount {
   id: string;
@@ -1114,6 +1121,7 @@ export interface HarnessAccount {
   auth: "ok" | "needs_login" | "unknown";
   /** True for the Mac's own login (`~/.claude`, `~/.codex`), whatever path it was written as. */
   own_dir?: boolean;
+  billing?: Billing;
 }
 
 /** A login directory found on this Mac that no account names yet. */
@@ -1148,6 +1156,8 @@ export interface Harness {
   last?: HarnessLast | null;
   /** Named logins of this harness (`[[harness_accounts]]`); empty for most harnesses. */
   accounts?: HarnessAccount[];
+  /** How the harness's default login is billed. */
+  billing?: Billing;
   /**
    * The variable naming a named login's directory (`CLAUDE_CONFIG_DIR`,
    * `CODEX_HOME`), and the harness's own command that signs one in. Both are
@@ -1267,6 +1277,7 @@ export function parseHarnessAccounts(value: Json | undefined): HarnessAccount[] 
         config_dir: str(o.config_dir) ?? "",
         auth: auth === "ok" ? "ok" : auth === "needs_login" ? "needs_login" : "unknown",
         own_dir: bool(o.own_dir) ?? false,
+        billing: parseBilling(o.billing),
       },
     ];
   });
@@ -1339,6 +1350,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         models: parseHarnessModels(o.models),
         last: parseHarnessLast(o.last),
         accounts: parseHarnessAccounts(o.accounts),
+        billing: parseBilling(o.billing),
         account_env: str(o.account_env) ?? null,
         account_login_command: Array.isArray(o.account_login_command)
           ? arr(o.account_login_command).flatMap((c) => (typeof c === "string" ? [c] : []))

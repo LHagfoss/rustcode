@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+#[path = "billing.rs"]
+pub(crate) mod billing;
+
 /// One status probe gets a little longer than a version print: Claude Code's
 /// own `claude auth status` bound in its ACP adapter is 5 s, and a cold start
 /// of that CLI is slower than `--version`.

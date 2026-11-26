@@ -43,7 +43,7 @@ import { StatusIcon } from "./Status";
 import { useStoredTurns, withStoredTurns } from "./storedTurns";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
-import { contextTone, threadTotals, turnCost } from "./threadTotals";
+import { contextTone, costTotal, threadBilling, threadTotals, turnCost } from "./threadTotals";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -91,9 +91,10 @@ export function ThreadDetails() {
   const summary = useApp((s) => (s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined));
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const harnessId = thread?.harness?.id ?? summary?.harness;
-  const harnessName = useApp((s) =>
-    harnessId ? (s.harnesses?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId) : undefined,
+  const harnessEntry = useApp((s) =>
+    harnessId ? s.harnesses?.harnesses.find((h) => h.id === harnessId) : undefined,
   );
+  const harnessName = harnessId ? (harnessEntry?.name ?? harnessId) : undefined;
   const status = useApp((s) => (s.selectedId ? statusOf(s, s.selectedId) : "idle"));
   const items = thread?.items;
   const counts = useMemo(() => threadCounts(items ?? []), [items]);
@@ -146,6 +147,7 @@ export function ThreadDetails() {
   const used = contextPercent(usage);
   const model = modelName(summary?.model);
   const account = thread.harness?.account ?? summary?.account;
+  const billing = threadBilling(harnessEntry, account);
   const activity: [string, string][] = [
     ["Messages", String(counts.messages)],
     ["Tool calls", String(counts.tools)],
@@ -236,17 +238,7 @@ export function ThreadDetails() {
       )}
       <Section id="activity" title="Activity" folded={isFolded("activity")} onToggle={toggle}>
         <dl className="mx-2 mb-2 grid grid-cols-3 divide-x divide-border rounded-lg bg-fill-subtle py-2">
-          <Total
-            label="Cost"
-            value={totals.usd === undefined ? "–" : `${totals.estimated ? "~" : ""}${formatCost(totals.usd)}`}
-            tip={
-              totals.usd === undefined
-                ? "No cost reported or priced yet"
-                : totals.estimated
-                  ? "Partly estimated from tokens at list price"
-                  : "As the harness reported it"
-            }
-          />
+          <Total {...costTotal(totals, billing, formatCost)} />
           <Total label="Worked" value={formatDuration(totals.workedMs)} tip="Time the agent spent on turns" />
           <Total
             label="Tokens"

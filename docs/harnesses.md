@@ -95,6 +95,9 @@ All methods are on the client's existing `rustcode --acp` connection.
     "installed": true,          // command resolves on PATH
     "version": "0.162.1",       // when cheaply known
     "auth": "ok" | "needs_login" | "unknown",
+    // How the default login is billed, from its sign-in file: a claude.ai or
+    // ChatGPT sign-in is "subscription" (not billed per token), an API key "api"
+    "billing": "subscription" | "api" | "unknown",
     "login_command": ["codex", "login"],   // run in a terminal by the client
     "install_hint": "brew install codex",
     "capabilities": { /* see above */ },
@@ -106,7 +109,8 @@ All methods are on the client's existing `rustcode --acp` connection.
     "accounts": [{              // named logins of this harness; [] for most
       "id": "paral-2", "name": "Paral 2",
       "config_dir": "~/.claude-paral-2", "auth": "ok" | "needs_login" | "unknown",
-      "own_dir": false          // true for the Mac's own login, ~/.claude or ~/.codex
+      "own_dir": false,         // true for the Mac's own login, ~/.claude or ~/.codex
+      "billing": "subscription" | "api" | "unknown"   // as above, for this login
     }],
     // How a client adds and signs in a named login, from the engine; null for
     // a harness without named logins (Claude Code and Codex have them).

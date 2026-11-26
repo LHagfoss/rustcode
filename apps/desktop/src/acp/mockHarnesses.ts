@@ -92,6 +92,7 @@ export function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         auth: "ok",
         login_command: ["codex", "login"],
         install_hint: "brew install codex",
+        billing: "subscription",
         capabilities: CODEX_CAPS,
         // How a named Codex login is run, as the engine describes it.
         account_env: "CODEX_HOME",
@@ -102,12 +103,14 @@ export function initialHarnesses(onboarded: boolean): HarnessSnapshot {
             name: "Paral",
             config_dir: "~/.codex-paral",
             auth: "ok",
+            billing: "subscription",
           },
           {
             id: "personal-1",
             name: "Personal 1",
             config_dir: "~/.codex-personal-1",
             auth: "ok",
+            billing: "api",
           },
         ],
         // The Mac's own Codex home, which no account names yet.
