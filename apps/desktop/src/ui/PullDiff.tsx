@@ -5,14 +5,27 @@
 // thread's composer as a draft. Reply, Resolve and the "+" on a diff line's
 // number write to GitHub through the engine (issue 3768); a failure keeps the text.
 
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  type KeyboardEvent,
+  type MouseEvent,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { PullDetail, PullRequest } from "../acp/rustcode";
 import { pullErrorTitle } from "../acp/rustcode";
 import { formatBinding } from "../lib/keys";
+import { openInEditor } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
 import { primaryModifier } from "../lib/platform";
 import { count } from "../lib/plural";
 import { type FeedbackItem, feedbackItems, formatReviewFeedback } from "../lib/reviewFeedback";
+import { hasShell } from "../lib/shell";
 import { runWordMarks } from "../lib/wordDiff";
 import { appendToComposer } from "../state/composerInsert";
 import type { PatchLine } from "../state/diff";
@@ -44,6 +57,7 @@ import {
   reviewConversations,
   unresolvedFeedback,
 } from "../state/pullReview";
+import { diffLineEditorTarget, orderedPullConversations, stepTarget } from "../state/reviewNav";
 import { toast } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { StatusMark } from "./ChangesPanel";
@@ -51,13 +65,15 @@ import { Fragments, useMarkedFragments } from "./DiffView";
 import {
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleCheck,
   CirclePlus,
+  ExternalLink,
   MessageSquare,
   MessageSquarePlus,
 } from "./icons";
 import { Markdown } from "./Markdown";
-import { Callout, cx, noTextHelpers, Pill, Skeleton } from "./primitives";
+import { Callout, cx, noTextHelpers, Pill, Skeleton, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 /**
@@ -244,10 +260,14 @@ export function ConversationCard({
   conversation,
   pull,
   cwd,
+  highlighted = false,
+  revealVersion = 0,
 }: {
   conversation: Conversation;
   pull: PullRequest;
   cwd: string;
+  highlighted?: boolean;
+  revealVersion?: number;
 }) {
   // The resolved state the user just set, shown until the read after it agrees or it fails.
   const [resolvedNow, setResolvedNow] = useState<boolean | null>(null);
@@ -258,6 +278,9 @@ export function ConversationCard({
   useEffect(() => {
     if (resolvedNow === conversation.resolved) setResolvedNow(null);
   }, [conversation.resolved, resolvedNow]);
+  useEffect(() => {
+    if (highlighted && revealVersion > 0) setOpen(true);
+  }, [highlighted, revealVersion]);
   const [first, ...replies] = conversation.comments;
   if (!first) return null;
   const threadId = conversation.threadId;
@@ -285,7 +308,10 @@ export function ConversationCard({
   const range = conversationRange(conversation);
   if (!open && resolved) {
     return (
-      <div className="my-1 font-sans">
+      <div
+        data-pull-conversation={conversation.id}
+        className={cx("my-1 rounded-md font-sans", highlighted && "ring-1 ring-accent")}
+      >
         <Pill size="sm" quiet onClick={() => setOpen(true)} aria-expanded={false}>
           <CircleCheck size={12} className="text-success" />
           Resolved · {first.author || "Deleted user"}
@@ -297,7 +323,11 @@ export function ConversationCard({
   }
   return (
     <article
-      className="my-1 flex flex-col gap-2 rounded-lg bg-surface p-2 font-sans shadow-1"
+      data-pull-conversation={conversation.id}
+      className={cx(
+        "my-1 flex flex-col gap-2 rounded-lg bg-surface p-2 font-sans shadow-1",
+        highlighted && "ring-1 ring-accent",
+      )}
       aria-label={`Conversation on ${conversation.path}${range ? `:${range}` : ""}`}
     >
       <div className="flex items-center gap-1.5 text-caption text-fg-muted">
@@ -353,11 +383,17 @@ const PullFile = memo(function PullFile({
   conversations,
   pull,
   cwd,
+  activeConversationId,
+  revealVersion,
+  onOpenLine,
 }: {
   file: PullDiffFile;
   conversations: readonly Conversation[];
   pull: PullRequest;
   cwd: string;
+  activeConversationId: number | null;
+  revealVersion: number;
+  onOpenLine?: (line: PatchLine) => void;
 }) {
   const [open, setOpen] = useState(!file.large && file.status !== "D");
   // The lines a new comment is on: clicked on one line's number, shift-clicked on another for a range.
@@ -379,6 +415,19 @@ const PullFile = memo(function PullFile({
   };
   const composerAt = picked ? Math.max(picked.start, picked.end) : -1;
   const placement = useMemo(() => placeConversations(file, conversations), [file, conversations]);
+  const hasActiveConversation =
+    activeConversationId !== null &&
+    conversations.some((c) => c.path === file.path && c.id === activeConversationId);
+  useEffect(() => {
+    if (hasActiveConversation && revealVersion > 0) setOpen(true);
+  }, [hasActiveConversation, revealVersion]);
+  const canOpen = (line: PatchLine) =>
+    Boolean(onOpenLine && file.status !== "D" && line.kind !== "del" && line.new !== undefined);
+  const openOnDoubleClick = (e: MouseEvent, line: PatchLine) => {
+    if (!onOpenLine || !canOpen(line)) return;
+    if ((e.target as HTMLElement | null)?.closest("button")) return;
+    onOpenLine(line);
+  };
   const texts = useMemo(() => (open ? file.lines.map((line) => line.text) : []), [open, file.lines]);
   const marks = useMemo(() => (open ? runWordMarks(file.lines) : []), [open, file.lines]);
   const { pieces, html, starts } = useMarkedFragments(texts, marks, file.path);
@@ -409,7 +458,14 @@ const PullFile = memo(function PullFile({
         <DiffCount added={file.added} removed={file.removed} />
       </div>
       {placement.unplaced.map((c) => (
-        <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
+        <ConversationCard
+          key={c.id}
+          conversation={c}
+          pull={pull}
+          cwd={cwd}
+          highlighted={c.id === activeConversationId}
+          revealVersion={revealVersion}
+        />
       ))}
       {!open ? (
         file.large && (
@@ -434,8 +490,9 @@ const PullFile = memo(function PullFile({
               ) : (
                 <div key={i}>
                   <div
+                    onDoubleClick={(e) => openOnDoubleClick(e, line)}
                     className={cx(
-                      "flex pr-3",
+                      "group/line flex pr-1.5",
                       tint(line.kind),
                       picked &&
                         i >= Math.min(picked.start, picked.end) &&
@@ -481,16 +538,36 @@ const PullFile = memo(function PullFile({
                     >
                       {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
                     </span>
-                    <Fragments
-                      pieces={pieces[i] ?? []}
-                      html={html}
-                      start={starts[i] ?? 0}
-                      tint={line.kind === "add" ? "add" : line.kind === "del" ? "del" : undefined}
-                    />
+                    <span className="min-w-0 flex-1">
+                      <Fragments
+                        pieces={pieces[i] ?? []}
+                        html={html}
+                        start={starts[i] ?? 0}
+                        tint={line.kind === "add" ? "add" : line.kind === "del" ? "del" : undefined}
+                      />
+                    </span>
+                    {onOpenLine && canOpen(line) && (
+                      <Tooltip label="Open in editor">
+                        <button
+                          type="button"
+                          aria-label={`Open line ${line.new} in editor`}
+                          onClick={() => onOpenLine(line)}
+                          className="ml-2 flex size-[18px] shrink-0 items-center justify-center rounded-xs text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-hover/line:opacity-100 focus-visible:opacity-100"
+                        >
+                          <ExternalLink size={12} />
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
                   {placement.atLine.get(i)?.map((c) => (
                     <div key={c.id} className="px-2 whitespace-normal">
-                      <ConversationCard conversation={c} pull={pull} cwd={cwd} />
+                      <ConversationCard
+                        conversation={c}
+                        pull={pull}
+                        cwd={cwd}
+                        highlighted={c.id === activeConversationId}
+                        revealVersion={revealVersion}
+                      />
                     </div>
                   ))}
                   {i === composerAt && target && (
@@ -515,11 +592,27 @@ const PullFile = memo(function PullFile({
 });
 
 /** The pull request's diff and review conversations, read when the view opens. */
-export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest; detail?: PullDetail }) {
+export function PullDiff({
+  cwd,
+  pull,
+  detail,
+  local = true,
+}: {
+  cwd: string;
+  pull: PullRequest;
+  detail?: PullDetail;
+  local?: boolean;
+}) {
   // A diff for a pull request already left is dropped, not drawn over the one opened after it.
   const [diff, runLoad] = useOp<PullDiffFile[]>();
   const files = diff.data ?? null;
   const error = opError(diff);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const pullScope = `${cwd}\u0000${pull.number}`;
+  const [activeConv, setActiveConv] = useState<{ scope: string; id: number; tick: number } | null>(null);
+  const activeId = activeConv?.scope === pullScope ? activeConv.id : null;
+  const revealVersion = activeConv?.scope === pullScope ? activeConv.tick : 0;
+  const pendingScrollId = useRef<number | null>(null);
   useEffect(() => {
     void runLoad(async () => {
       const answer = await loadPullDiff(cwd, pull.number);
@@ -528,6 +621,60 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
     });
   }, [cwd, pull.number, runLoad]);
   const conversations = useMemo(() => (detail ? reviewConversations(detail) : []), [detail]);
+  const orderedConversations = useMemo(
+    () => orderedPullConversations(conversations, files ?? []),
+    [conversations, files],
+  );
+  const activeIndex =
+    activeId === null ? -1 : orderedConversations.findIndex((entry) => entry.id === activeId);
+  const jumpConversation = useCallback(
+    (step: 1 | -1) => {
+      const next = stepTarget(orderedConversations, activeId, step);
+      if (!next) return;
+      setActiveConv((prev) => ({
+        scope: pullScope,
+        id: next.item.id,
+        tick: (prev?.scope === pullScope ? prev.tick : 0) + 1,
+      }));
+      pendingScrollId.current = next.item.id;
+    },
+    [orderedConversations, activeId, pullScope],
+  );
+  useEffect(() => {
+    const targetId = pendingScrollId.current;
+    if (targetId === null || targetId !== activeId || revealVersion === 0 || !files) return;
+    const frame = requestAnimationFrame(() => {
+      const root = containerRef.current;
+      if (!root) return;
+      const el = root.querySelector<HTMLElement>(`[data-pull-conversation="${targetId}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      pendingScrollId.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeId, revealVersion, files]);
+  const canOpenLine = local && hasShell() && Boolean(cwd);
+  const openLineInEditor = useCallback(
+    (filePath: string, fileStatus: string, line: PatchLine) => {
+      if (!canOpenLine) return;
+      const target = diffLineEditorTarget(cwd, filePath, line, { local, fileStatus });
+      if (!target) return;
+      openInEditor(target.path, target.line).catch((e) =>
+        toast(e instanceof Error ? e.message : String(e), "error"),
+      );
+    },
+    [canOpenLine, cwd, local],
+  );
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || !orderedConversations.length) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='menu']"))
+      return;
+    if (e.key === "n" || e.key === "p") {
+      e.preventDefault();
+      jumpConversation(e.key === "n" ? 1 : -1);
+    }
+  };
   const general = useMemo(
     () => (detail ? feedbackItems(detail).filter((item) => item.kind !== "line") : []),
     [detail],
@@ -540,13 +687,47 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
   const elsewhere = files ? conversations.filter((c) => !shown.has(c.path)) : [];
   return (
     <CompletionSource.Provider value={completion}>
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-caption text-fg-muted">
-          <span className="flex-1">
+      <div
+        ref={containerRef}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        className="flex flex-col gap-2 outline-none"
+      >
+        <div className="flex flex-wrap items-center gap-2 text-caption text-fg-muted">
+          <span className="min-w-0 flex-1">
             {files ? `${count(files.length, "file")} · ` : ""}
             {count(conversations.length, "conversation")}
             {conversations.length > 0 && `, ${open.length} unresolved`}
           </span>
+          {orderedConversations.length > 0 && (
+            <div className="flex items-center gap-0.5 rounded-full bg-fill-subtle px-1 py-0.5 text-caption text-fg-muted">
+              <span className="px-1 tabular">
+                {activeIndex >= 0
+                  ? `${activeIndex + 1} of ${orderedConversations.length}`
+                  : `${orderedConversations.length}`}
+              </span>
+              <Tooltip label="Previous comment (P)">
+                <button
+                  type="button"
+                  aria-label="Previous comment"
+                  onClick={() => jumpConversation(-1)}
+                  className="flex size-5 items-center justify-center rounded-full hover:bg-fill hover:text-fg"
+                >
+                  <ChevronUp size={12} />
+                </button>
+              </Tooltip>
+              <Tooltip label="Next comment (N)">
+                <button
+                  type="button"
+                  aria-label="Next comment"
+                  onClick={() => jumpConversation(1)}
+                  className="flex size-5 items-center justify-center rounded-full hover:bg-fill hover:text-fg"
+                >
+                  <ChevronDown size={12} />
+                </button>
+              </Tooltip>
+            </div>
+          )}
           <Pill
             size="sm"
             disabled={open.length === 0}
@@ -578,7 +759,14 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
           </section>
         )}
         {elsewhere.map((c) => (
-          <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
+          <ConversationCard
+            key={c.id}
+            conversation={c}
+            pull={pull}
+            cwd={cwd}
+            highlighted={c.id === activeId}
+            revealVersion={revealVersion}
+          />
         ))}
         {error && <Callout tone="danger">{error}</Callout>}
         {!files && !error && (
@@ -590,7 +778,16 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
         )}
         {files?.length === 0 && <p className="text-callout text-fg-muted">The diff is empty.</p>}
         {files?.map((file) => (
-          <PullFile key={file.path} file={file} conversations={conversations} pull={pull} cwd={cwd} />
+          <PullFile
+            key={file.path}
+            file={file}
+            conversations={conversations}
+            pull={pull}
+            cwd={cwd}
+            activeConversationId={activeId}
+            revealVersion={revealVersion}
+            onOpenLine={canOpenLine ? (line) => openLineInEditor(file.path, file.status, line) : undefined}
+          />
         ))}
       </div>
     </CompletionSource.Provider>

@@ -578,7 +578,7 @@ function PullView({ cwd, host, number }: { cwd: string; host: string; number: nu
       )}
       {tab === "diff" && summary && (
         <div className="mt-3">
-          <PullDiff cwd={cwd} pull={summary} detail={detail} />
+          <PullDiff cwd={cwd} local={!host} pull={summary} detail={detail} />
         </div>
       )}
       {tab === "details" && detail && (
