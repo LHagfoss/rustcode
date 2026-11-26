@@ -18,6 +18,7 @@ pub(crate) mod machine_exec;
 mod machine_sync;
 mod machine_update;
 mod mcp_app;
+mod memory;
 mod mirror;
 pub(crate) mod outside;
 mod permissions;

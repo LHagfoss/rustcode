@@ -3,6 +3,7 @@ import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
+import { ProjectMemory } from "./ProjectMemory";
 import { TextGeneration } from "./TextGeneration";
 import { VoiceGroup } from "./VoiceGroup";
 
@@ -752,6 +753,7 @@ function AgentsPage() {
       </div>
       {thisMachine && <TextGeneration />}
       {thisMachine && chosenProject && <ProjectGenerators project={chosenProject} />}
+      {thisMachine && <ProjectMemory project={chosenProject} />}
     </>
   );
 }
