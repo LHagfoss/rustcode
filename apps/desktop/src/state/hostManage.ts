@@ -59,6 +59,7 @@ import {
   sameReach,
   updateLink,
 } from "./orchestration";
+import { queuePullNotice } from "./pullNotices";
 import { QUEUE_REASON } from "./queue";
 import { parseQueueBook } from "./queues";
 import { takeAgentRename } from "./renameCommand";
@@ -983,19 +984,17 @@ export function deliver(
   const thread = useApp.getState().threads[target];
   if (isRunning(thread)) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
+    const row = () => ({
+      id: localId("queued"),
+      text,
+      ...(link ? { link } : {}),
+      from,
+      queuedAt: Date.now(),
+      ...(extras ? { extras } : {}),
+    });
     updateThread(target, (t) => ({
       ...t,
-      queue: [
-        ...t.queue,
-        {
-          id: localId("queued"),
-          text,
-          ...(link ? { link } : {}),
-          from,
-          queuedAt: Date.now(),
-          ...(extras ? { extras } : {}),
-        },
-      ],
+      queue: link || extras ? [...t.queue, row()] : queuePullNotice(t.queue, text, row),
     }));
   } else {
     void runPrompt(target, text, extras, { link, sender: from });

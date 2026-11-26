@@ -2,8 +2,9 @@
 // cannot repeat an event, even when another client already handed it to the thread.
 import { type AcpConnection, arr, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { deliver } from "./host";
+import { currentNews, pullNoticeText } from "./pullNotices";
 import { openThread, useApp } from "./store";
-import { isLoaded, withPullMark } from "./thread";
+import { isLoaded } from "./thread";
 import { threadKey } from "./threadKeys";
 import { sessionById } from "./threadStatus";
 
@@ -44,10 +45,11 @@ export async function deliverPullWatch(conn: AcpConnection, params: JsonObject, 
 
 /**
  * The one message a batch of a pull request's news makes: one turn for all of it, marked as the
- * app's, so it shows as a notice row and not as something the user typed.
+ * app's, so it shows as a notice row and not as something the user typed. Check news a merge or a
+ * later check result makes moot is left out.
  */
 export function pullNotice(number: number, said: string[]): string {
-  return withPullMark(`Pull request #${number}: ${said.join(" · ")}`);
+  return pullNoticeText([[number, currentNews(said)]]);
 }
 
 /** Only successful create commands opt a thread into automatic CI delivery. */
