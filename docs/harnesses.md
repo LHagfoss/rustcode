@@ -624,8 +624,16 @@ When messages are left out it names `rc threads path <id>`, whose
 `handoff_from` clears. The history gets a `handoff` message, which replays as
 an `agent_message_chunk` with `_meta.rustcode.kind == "handoff"` (`from`,
 `to`, `model`) and is never sent to a model; the app draws it as a divider.
-A built-in RustCode thread can move to an external harness; moving one to
-RustCode is not supported yet. A running turn must stop first. In the app,
+A built-in RustCode thread can move to an external harness, and an external
+thread can move to RustCode (`acp/switch_to_builtin.rs`): its harness stops,
+`harness.json` is removed so the thread opens as a built-in one, and the
+`handoff` message carries the same `<context>` preamble in a `context` field.
+Built-in requests then start at that message: the earlier external
+transcript stays in `history.json` for display, but its display-only tool
+calls are never replayed as provider messages; the preamble goes once,
+ahead of the first user message after the switch
+(`harness/handoff/builtin.rs`). The app opens the thread again after the
+switch. A running turn must stop first. In the app,
 the composer's model picker › Harness switches an open thread.
 
 ## Compaction

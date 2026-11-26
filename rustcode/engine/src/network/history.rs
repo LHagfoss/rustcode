@@ -418,6 +418,8 @@ fn to_messages_with_scope(
     instructions: RequestInstructions<'_>,
     scope: RequestHistoryScope,
 ) -> Vec<serde_json::Value> {
+    let view = crate::harness::handoff::builtin::request_view(history);
+    let history: &[ChatMessage] = &view;
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": instructions.base,

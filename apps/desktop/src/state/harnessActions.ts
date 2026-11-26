@@ -17,6 +17,7 @@ import {
 } from "../acp/types";
 import { type EffortMemory, restoreChoice } from "./harness";
 import { newThreadAccountOn } from "./logins";
+import { reloadThread } from "./lostTurns";
 import { CLAUDE_CODE, markClaudePlansStarted, refreshPlanCache, refreshPlanUsage } from "./planUsage";
 import {
   type AppState,
@@ -613,7 +614,8 @@ export async function switchThreadAccount(id: string, account: string | null): P
  * Move a thread to another harness: the
  * harness starts fresh and its first prompt carries the conversation so far
  * (`_rustcode/session/harness`). It starts on the model and effort it was
- * last left on; the thread shows a divider where it switched.
+ * last left on; the thread shows a divider where it switched. A thread moved to RustCode itself
+ * is opened again, since the engine runs it as a built-in thread from then on.
  */
 export async function switchThreadHarness(
   id: string,
@@ -655,6 +657,7 @@ export async function switchThreadHarness(
       ),
     }));
     if (harness === CLAUDE_CODE) markClaudePlansStarted();
+    if (harness === "rustcode") await reloadThread(id);
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness, host);
     void refreshPlanUsage(id);

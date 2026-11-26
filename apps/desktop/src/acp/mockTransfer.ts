@@ -34,7 +34,8 @@ export function handleMockTransfer(
     const thread = state.getThread(params.sessionId);
     const id = str(params.harness) ?? "";
     const h = state.harnesses.harnesses.find((x) => x.id === id);
-    if (!h || h.builtin) throw Object.assign(new Error(`cannot switch to '${id}'`), { code: -32602 });
+    if (!h || (h.builtin && (!thread.harness || thread.harness === id)))
+      throw Object.assign(new Error(`cannot switch to '${id}'`), { code: -32602 });
     const account = str(params.account) ?? null;
     if (account && !(h.accounts ?? []).some((a) => a.id === account))
       throw Object.assign(new Error(`unknown ${id} account '${account}'`), { code: -32602 });
