@@ -111,6 +111,7 @@ export function issueErrorTitle(code: string): string {
     case "gh_missing":
     case "not_connected":
     case "not_a_repository":
+    case "folder_missing":
     case "timed_out":
       return pullErrorTitle(code);
     default:

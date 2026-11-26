@@ -66,28 +66,50 @@ fn augmented_path_from(
     dirs.join(":")
 }
 
-/// Find a locally installed executable before falling back to PATH lookup.
-/// This is used by compiler checks and belongs with the PATH construction
-/// helper rather than with network transport.
+/// Find an installed executable the way the user's terminal would: the
+/// process `PATH` in order first, then the well-known install folders an app
+/// launched from the Dock does not inherit, then the login shell's `PATH`.
+/// Falls back to the bare name, which the operating system looks up itself.
 pub(crate) fn resolve_bin(name: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        format!("{home}/.cargo/bin/{name}"),
-        format!("/opt/homebrew/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-        format!("/usr/bin/{name}"),
-    ];
-    for candidate in candidates {
-        if Path::new(&candidate).exists() {
-            return PathBuf::from(candidate);
-        }
+    if cfg!(windows) {
+        return PathBuf::from(name);
     }
-    PathBuf::from(name)
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    crate::shell_env::add_well_known_path_dirs(&mut dirs);
+    if let Some(found) = find_executable(&dirs, name) {
+        return found;
+    }
+    let shell_dirs: Vec<PathBuf> = crate::shell_env::login_shell_var("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    find_executable(&shell_dirs, name).unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// The first `dirs` entry holding an executable file called `name`.
+fn find_executable(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
+    dirs.iter()
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{augmented_path, augmented_path_from};
+    use super::{augmented_path, augmented_path_from, find_executable};
 
     #[test]
     fn augmented_path_keeps_standard_tool_directories() {
@@ -108,6 +130,31 @@ mod tests {
             augmented_path_from("/home/test", Some("/custom/bin:/usr/bin"), true, false),
             "/home/test/.cargo/bin:/home/test/.bun/bin:/home/test/.nvm/versions/node/current/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/custom/bin"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_first_path_entry_with_an_executable_wins() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let [plain, first, second] = ["plain", "first", "second"].map(|dir| {
+            let dir = root.path().join(dir);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("gh"), "").unwrap();
+            dir
+        });
+        for dir in [&first, &second] {
+            std::fs::set_permissions(dir.join("gh"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        let dirs = [
+            std::path::PathBuf::from("relative"),
+            plain,
+            first.clone(),
+            second,
+        ];
+        assert_eq!(find_executable(&dirs, "gh"), Some(first.join("gh")));
+        assert_eq!(find_executable(&dirs, "missing"), None);
     }
 
     #[test]
