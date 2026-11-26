@@ -187,6 +187,10 @@ pub struct RemoteConfig {
     /// Only the user config may set this.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<String>,
+    /// Days a paired device may go unused before it is refused and must pair
+    /// again (#4404); unset is 90, `0` never expires one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_expiry_days: Option<u32>,
 }
 
 /// `[outside]` in config.toml: how agents RustCode did not start reach this

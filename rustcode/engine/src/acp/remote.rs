@@ -1376,6 +1376,9 @@ fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
     if let Some(access) = device.access {
         value["access"] = json!(access.name());
     }
+    if device.idle_expired {
+        value["idleExpired"] = json!(true);
+    }
     value
 }
 
@@ -2410,6 +2413,7 @@ mod tests {
             host_id: Some("host-0123456789abcdef".into()),
             signs_with_key: false,
             access: None,
+            idle_expired: false,
         };
         assert_eq!(
             device_json(&summary, Some(true)),
@@ -2508,6 +2512,7 @@ mod tests {
             host_id: None,
             signs_with_key: false,
             access: None,
+            idle_expired: false,
         }
     }
 

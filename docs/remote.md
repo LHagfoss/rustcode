@@ -399,8 +399,10 @@ labels chosen by the device, not identities. Pairing gives a device access to
 every session this host shares, now and later, until it is revoked or the
 pairing expires.
 
-A device that asks for `token_rotation` in its `pair` frame has no expiry: the
-pairing lasts until it is revoked. (The gateway takes the capability today;
+A device that asks for `token_rotation` in its `pair` frame has no fixed
+expiry: the pairing lasts until it is revoked, or until it goes unused for
+`[remote] idle_expiry_days` (90 by default, `0` for never), the same as a
+device that signs in with its key. (The gateway takes the capability today;
 the phone app's client change belongs to its own repository.) It holds a refresh
 token, which every reconnect replaces, and a 15-minute access token that
 reconnects without replacing anything. Only digests are stored, and the

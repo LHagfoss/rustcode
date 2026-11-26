@@ -201,4 +201,11 @@ describe("connection requests", () => {
     // A clock that ran behind the engine's never reads as the future.
     expect(lastSeenLabel({ lastSeenAt: now + 60_000 }, now)).toBe("Last seen just now");
   });
+
+  test("a device idle past the limit reads as expired, with what to do", () => {
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    const idle = { lastSeenAt: Date.parse("2026-08-12T12:00:00Z"), idleExpired: true };
+    expect(lastSeenLabel(idle, now)).toMatch(/^Expired: not used since .+\. Pair again to use it\.$/);
+    expect(lastSeenLabel({ idleExpired: true }, now)).toBe("Expired: not used. Pair again to use it.");
+  });
 });

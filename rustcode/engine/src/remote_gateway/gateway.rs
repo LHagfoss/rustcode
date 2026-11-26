@@ -963,6 +963,12 @@ impl Shared {
                     "unknown device or key; pair this device again",
                 )
             })?;
+        if record.is_idle(now, super::idle::limit()) {
+            return Err(HandshakeResponse::error(
+                ErrorCode::Unauthorized,
+                super::idle::REFUSAL,
+            ));
+        }
         self.mark_seen(&mut state, &record.id, now);
         let welcome = HandshakeResponse::Authenticated {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
@@ -1006,6 +1012,12 @@ impl Shared {
             .list()
             .iter()
             .find(|record| record.id == device_id);
+        if device.is_some_and(|record| record.is_idle(now, super::idle::limit())) {
+            return Err(HandshakeResponse::error(
+                ErrorCode::Unauthorized,
+                super::idle::REFUSAL,
+            ));
+        }
         let device_name = device.map(|record| record.name.clone());
         let family_id = device
             .and_then(|record| record.family_id())

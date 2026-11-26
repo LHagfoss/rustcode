@@ -224,6 +224,10 @@ pub struct DeviceSummary {
     /// or nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<super::access::Access>,
+    /// Unused past `[remote] idle_expiry_days` (#4404): refused until it
+    /// pairs again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle_expired: bool,
 }
 
 fn unknown_platform() -> String {
@@ -241,6 +245,7 @@ impl From<&DeviceRecord> for DeviceSummary {
             host_id: device.host_id.clone(),
             signs_with_key: device.has_key(),
             access: Some(device.access_level()),
+            idle_expired: device.is_idle_now(),
         }
     }
 }
