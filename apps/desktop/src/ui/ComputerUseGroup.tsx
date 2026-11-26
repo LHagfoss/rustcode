@@ -2,6 +2,7 @@ import { useState } from "react";
 import { obj } from "../acp/jsonrpc";
 import { errorText, request, toast } from "../state/store";
 import { addDomain } from "./computerUse";
+import { Switch } from "./primitives";
 import { Action, Group, Loading, Row, useEngineData } from "./settingsKit";
 
 export function ComputerUseGroup() {
@@ -17,12 +18,15 @@ export function ComputerUseGroup() {
   const entries = Array.isArray(settings?.allowed_domains)
     ? settings.allowed_domains.filter((v): v is string => typeof v === "string")
     : [];
-  async function save(enabled: boolean, domains: string[]) {
+  const actions = settings?.grant_covers_actions === true;
+  async function save(enabled: boolean, domains: string[], coversActions = actions) {
     setPending(true);
     setFailure(null);
     try {
       const answer = await request("_rustcode/settings/set", {
-        values: { "computer-use": { enabled, allowed_domains: domains } },
+        values: {
+          "computer-use": { enabled, allowed_domains: domains, grant_covers_actions: coversActions },
+        },
       });
       setData(obj(obj(answer)?.values)?.["computer-use"] ?? null);
     } catch (e) {
@@ -49,7 +53,7 @@ export function ComputerUseGroup() {
       onEnabledChange={(value) => {
         if (!pending) void save(value, entries);
       }}
-      footer="Every action asks for approval, including reads and screenshots. Start a new thread after enabling."
+      footer="Every action asks for approval. Allow a site for a thread to let its reads and screenshots run without asking; the thread's Browser chip revokes it. Start a new thread after enabling."
     >
       {settings.browser_available !== true && (
         <Row
@@ -109,6 +113,17 @@ export function ComputerUseGroup() {
             </Action>
           </form>
         </div>
+      </Row>
+      <Row
+        title="Also allow clicks and typing on granted sites"
+        subtitle="Off: a site allowed for a thread still asks before each click and each typed text."
+      >
+        <Switch
+          label="Also allow clicks and typing on granted sites"
+          checked={actions}
+          disabled={pending}
+          onChange={(on) => void save(current, entries, on)}
+        />
       </Row>
       {failure && (
         <div role="alert" className="px-4 py-3 text-danger text-caption">

@@ -1792,6 +1792,14 @@ Every thread that has the server also gets **`manage_pull_links`**
 itself out of the watch store, for the same reason: it needs no client and no
 orchestration version.
 
+It also gets project memory: **`remember`** (`key`, `value`, optional
+`category` and `scope`), **`recall_memory`** (`query`, optional `scope`) and
+**`forget_memory`** (`key`, optional `scope`). The server answers them itself
+against the calling thread's folder with the built-in tools' own handlers, so
+an external thread and a built-in one on any worktree of the same repository
+read and write one memory file, with the same limits (64 facts, 768 bytes a
+value, 32 KiB a file) and refusals. No orchestration version gates them.
+
 a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
 `rustcode`), started by the harness with the engine's own executable:
 

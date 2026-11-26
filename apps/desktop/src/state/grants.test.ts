@@ -1,7 +1,16 @@
 // Timed approvals as the panel reads them.
 
 import { describe, expect, test } from "bun:test";
-import { activeGrants, grantActive, grantRemaining, parseGrants, type TimedGrant } from "./grants";
+import {
+  activeGrants,
+  browserChipLabel,
+  browserGrantId,
+  grantActive,
+  grantRemaining,
+  parseBrowserGrants,
+  parseGrants,
+  type TimedGrant,
+} from "./grants";
 
 const NOW = 1_760_000_000_000; // ms; a fixed clock keeps the strings still
 const at = (secondsFromNow: number): TimedGrant => ({
@@ -39,5 +48,36 @@ describe("grants", () => {
     expect(grantActive(at(1), NOW)).toBe(true);
     expect(grantActive(at(0), NOW)).toBe(false);
     expect(activeGrants([at(600), at(60), at(-1)], NOW).map((g) => g.remainingSecs)).toEqual([60, 600]);
+  });
+});
+
+describe("browser site grants", () => {
+  test("the list reads each thread's hosts and skips rows without any", () => {
+    const answer = {
+      grants: [],
+      browser: [
+        {
+          id: "browser:a",
+          sessionId: "a",
+          origins: ["https://staging.example.com"],
+          hosts: ["staging.example.com"],
+        },
+        { id: "browser:b", sessionId: "b", origins: [], hosts: [] },
+        { id: "browser:c", hosts: ["x.test"] },
+      ],
+    };
+    expect(parseBrowserGrants(answer)).toEqual({ a: ["staging.example.com"] });
+    expect(parseBrowserGrants({ grants: [] })).toEqual({});
+  });
+
+  test("the chip names the first site and counts the rest, and hides without a grant", () => {
+    expect(browserChipLabel(["staging.example.com"])).toBe("Browser: staging.example.com");
+    expect(browserChipLabel(["a.test", "b.test", "c.test"])).toBe("Browser: a.test +2");
+    expect(browserChipLabel([])).toBeNull();
+    expect(browserChipLabel(undefined)).toBeNull();
+  });
+
+  test("a revoke names the thread", () => {
+    expect(browserGrantId("t1")).toBe("browser:t1");
   });
 });

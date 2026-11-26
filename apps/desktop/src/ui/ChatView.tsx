@@ -1,4 +1,5 @@
 import { isLoading, openError } from "../state/thread";
+import { BrowserGrantChip } from "./BrowserGrantChip";
 // The chat view: the header (project / title, plan, usage, panels), then one row
 // holding the chat column — transcript and composer stack with error and
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
@@ -222,6 +223,7 @@ function Header({
           {thread && <OriginChip threadId={thread.id} />}
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
           <RemoteThreadIndicator sessionId={thread?.id} />
+          {thread && <BrowserGrantChip threadId={thread.id} />}
         </>
       }
       right={right.length ? right : undefined}

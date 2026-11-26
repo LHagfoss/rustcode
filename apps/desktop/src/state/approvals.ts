@@ -13,7 +13,7 @@ import {
 } from "../acp/types";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { type QuestionChoice, shapeQuestionAnswer } from "../lib/questionAnswer";
-import { parseGrants } from "./grants";
+import { browserGrantId, parseBrowserGrants, parseGrants } from "./grants";
 import { linkWaitEnded } from "./host";
 import { autoAnswer, type PermissionMode } from "./permissions";
 import { projectKey } from "./projectBook";
@@ -106,8 +106,8 @@ export function answerPermission(request: PermissionRequest, option: PermissionO
     settleLine(request, option ? `Answered: ${option.name}` : "Dismissed the question", !!option);
   if (!answered || request.question) return;
   settleApproval(request, option);
-  // An hour's grant is the engine's to keep: list it again so the panel shows it.
-  if (option && optionScope(option) === "hour") void refreshGrants();
+  // An hour's grant and a browser site grant are the engine's to keep: list them again to show them.
+  if (option && (optionScope(option) === "hour" || option.id === BROWSER_SITE_OPTION)) void refreshGrants();
 }
 
 /** How long an answered card stays as one settled line before it leaves. */
@@ -158,8 +158,9 @@ const resolvedTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export async function refreshGrants(conn: AcpConnection | null = connectionFor("")): Promise<void> {
   if (!conn) return;
   try {
-    const grants = parseGrants(await conn.request(Method.permissions, {}, 10_000));
-    if (connectionFor("") === conn) set({ grants });
+    const answer = await conn.request(Method.permissions, {}, 10_000);
+    if (connectionFor("") === conn)
+      set({ grants: parseGrants(answer), browserGrants: parseBrowserGrants(answer) });
   } catch {
     // An older engine has none to list; what is known stays as it is.
   }
@@ -170,11 +171,30 @@ export async function revokeGrant(id: string): Promise<void> {
   const conn = connectionFor("");
   if (!conn) return;
   try {
-    const grants = parseGrants(await conn.request(Method.permissionsRevoke, { id }, 10_000));
-    if (connectionFor("") === conn) set({ grants });
+    const answer = await conn.request(Method.permissionsRevoke, { id }, 10_000);
+    if (connectionFor("") === conn)
+      set({ grants: parseGrants(answer), browserGrants: parseBrowserGrants(answer) });
   } catch (error) {
     toast(`Could not revoke it: ${errorText(error)}`, "error");
   }
+}
+
+/** The option id of a browser card's "Allow <host> for this thread" (engine computer_use/grants.rs). */
+const BROWSER_SITE_OPTION = "allow-site";
+
+/**
+ * Stop a thread's browser: the engine drops its site grants and closes the browser, and the
+ * browser cards still waiting are answered as declined.
+ */
+export async function stopBrowser(threadId: string): Promise<void> {
+  for (const request of get().threads[threadId]?.permissions ?? []) {
+    if (request.toolCallId.startsWith("computer-use-")) answerPermission(request, null);
+  }
+  set((s) => {
+    const { [threadId]: _gone, ...rest } = s.browserGrants;
+    return { browserGrants: rest };
+  });
+  await revokeGrant(browserGrantId(threadId));
 }
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */

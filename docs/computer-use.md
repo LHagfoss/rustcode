@@ -13,7 +13,8 @@ approval channels, denial and cancellation fail closed.
 This preview is **off by default**. Open **Settings → Voice & computer use** on
 this machine, turn on the switch in the **Computer use** title (Browser tools)
 and add allowed domains. The section
-reports when Chrome/Chromium needs installing. Every action asks for approval.
+reports when Chrome/Chromium needs installing. Every action asks for approval
+unless the thread holds a site grant (below).
 Only headless mode is currently supported. You can also edit your user
 `~/.config/rustcode/config.toml` (or `RUSTCODE_CONFIG_DIR/config.toml`), add:
 
@@ -28,11 +29,30 @@ allowed_domains = ["example.com", "*.example.org"]
 Start a new thread after changing the setting. Ask it to open
 an allowed URL, approve the action in RustCode, then read, click a CSS selector,
 or type into a CSS selector. Each step asks for approval, including reads and
-screenshots. Auto-approve does not skip these cards on any harness,
+screenshots, until you allow the site for the thread. Auto-approve does not skip these cards on any harness,
 and a headless `rc` run, which has nobody to ask, refuses the tools. Plan mode
 refuses `browser_open`, `browser_click` and `browser_type`; reads and
 screenshots still ask. Turn `enabled` off to refuse subsequent calls. No browser is
 installed or launched until the first approved action.
+
+### Allowing a site for a thread
+
+When the card knows the page's site, it also offers **Allow staging.example.com
+for this thread**. After that, in that thread, `browser_read`,
+`browser_screenshot` and `browser_open` on the same origin (scheme, host and
+port) run without a card. `browser_click` and `browser_type` still ask unless
+**Also allow clicks and typing on granted sites** is on
+(`grant_covers_actions = true` under `[computer_use]`). Another origin, another
+thread or a restarted engine asks again: grants are kept in memory only and end
+when the thread closes.
+
+While a thread holds a grant, its header shows a **Browser: staging.example.com**
+chip. Clicking it is the stop control. The grant ends, the thread's browser
+closes, and a browser card still waiting is answered as revoked. The same grants
+are listed by `_rustcode/permissions` under `browser`, and
+`_rustcode/permissions/revoke` with `id: "browser:<thread id>"` revokes one.
+The grant covers calls through RustCode's MCP hub (Codex, Claude Code and the
+other external harnesses). The built-in harness still asks on every call.
 
 Exact domain entries match only that host; `*.example.org` matches subdomains,
 not the apex. HTTP and HTTPS only; credentials in URLs are refused. Empty lists

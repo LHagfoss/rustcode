@@ -1708,6 +1708,12 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
 }
 
 pub fn remember(args: &Value) -> Result<String, String> {
+    remember_in(crate::memory::tool_scope_root().as_deref(), args)
+}
+
+/// [`remember`] against the memory of `root`, for a thread whose tool call
+/// is not running in the engine: the `rustcode` MCP server's.
+pub(crate) fn remember_in(root: Option<&std::path::Path>, args: &Value) -> Result<String, String> {
     let key = args
         .get("key")
         .and_then(|v| v.as_str())
@@ -1730,7 +1736,7 @@ pub fn remember(args: &Value) -> Result<String, String> {
         crate::memory::upsert_global(fact)?;
         Ok(format!("Remembered globally: [{category}] {key} = {value}"))
     } else {
-        crate::memory::upsert(crate::memory::tool_scope_root().as_deref(), fact)?;
+        crate::memory::upsert(root, fact)?;
         Ok(format!(
             "Remembered for this project: [{category}] {key} = {value}"
         ))
@@ -1738,14 +1744,22 @@ pub fn remember(args: &Value) -> Result<String, String> {
 }
 
 pub fn recall_memory(args: &Value) -> Result<String, String> {
+    recall_memory_in(crate::memory::tool_scope_root().as_deref(), args)
+}
+
+/// [`recall_memory`] against the memory of `root`, for a thread whose tool call
+/// is not running in the engine: the `rustcode` MCP server's.
+pub(crate) fn recall_memory_in(
+    root: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or("missing required argument 'query'")?;
     let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
 
-    let facts =
-        crate::memory::search_facts(crate::memory::tool_scope_root().as_deref(), query, scope);
+    let facts = crate::memory::search_facts(root, query, scope);
     if facts.is_empty() {
         return Ok(format!("No remembered facts found matching '{query}'."));
     }
@@ -1761,6 +1775,15 @@ pub fn recall_memory(args: &Value) -> Result<String, String> {
 }
 
 pub fn forget_memory(args: &Value) -> Result<String, String> {
+    forget_memory_in(crate::memory::tool_scope_root().as_deref(), args)
+}
+
+/// [`forget_memory`] against the memory of `root`, for a thread whose tool call
+/// is not running in the engine: the `rustcode` MCP server's.
+pub(crate) fn forget_memory_in(
+    root: Option<&std::path::Path>,
+    args: &Value,
+) -> Result<String, String> {
     let key = args
         .get("key")
         .and_then(|v| v.as_str())
@@ -1777,8 +1800,7 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
         }
     }
     if scope == "all" || scope == "project" {
-        if let Ok(removed) = crate::memory::remove(crate::memory::tool_scope_root().as_deref(), key)
-        {
+        if let Ok(removed) = crate::memory::remove(root, key) {
             total_removed += removed;
         }
     }

@@ -98,7 +98,9 @@ pub use schema::mcp_tool_display_name;
 pub(crate) use schema::{mcp_canonical_name, resolve_mcp_tool_call};
 
 pub(crate) use filesystem::edit_target_and_replacement;
-pub(crate) use misc::{mcp_servers_approval, search_web_async};
+pub(crate) use misc::{
+    forget_memory_in, mcp_servers_approval, recall_memory_in, remember_in, search_web_async,
+};
 
 pub use rustcode_tool_protocol::ToolCall;
 
