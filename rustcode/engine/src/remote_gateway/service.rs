@@ -325,7 +325,7 @@ pub fn paired_devices(config_directory: &Path) -> usize {
         .map(|devices| {
             devices
                 .iter()
-                .filter(|device| !device.is_expired(now))
+                .filter(|device| !device.is_expired(now) && !device.is_idle_now())
                 .count()
         })
         .unwrap_or(0)

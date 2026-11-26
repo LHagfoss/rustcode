@@ -213,6 +213,7 @@ mod tests {
                 host_id: None,
                 signs_with_key: false,
                 access: None,
+                idle_expired: false,
             })
             .collect();
         status

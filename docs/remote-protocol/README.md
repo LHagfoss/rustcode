@@ -258,7 +258,9 @@ older than `unpair` does not answer it with `revoked`; a client that sees no
 ### Rotating tokens, no expiry
 
 A device that names `"capabilities": ["token_rotation"]` in `pair` gets no
-static token and no `expires_at`: its pairing lasts until it is revoked. The
+static token and no `expires_at`: its pairing lasts until it is revoked or
+goes unused for the host's idle limit (90 days by default), after which
+`authenticate` answers `unauthorized` and the device pairs again. The
 host hands it a **refresh token**, which every reconnect replaces, and a
 short-lived **access token**, which reconnects inside its 15 minutes without
 replacing anything. A client that does not name the capability keeps the

@@ -135,9 +135,19 @@ export function deviceLabel(kind: DeviceKind, platform: string): string {
 }
 
 /** When a paired device was last there: "Connected now", "Last seen 3 h ago", or unknown for an old pairing. */
-export function lastSeenLabel(device: Pick<RemoteDevice, "lastSeenAt" | "connected">, now: number): string {
+export function lastSeenLabel(
+  device: Pick<RemoteDevice, "lastSeenAt" | "connected" | "idleExpired">,
+  now: number,
+): string {
   if (device.connected) return "Connected now";
   const at = device.lastSeenAt;
+  if (device.idleExpired) {
+    const since =
+      at === undefined
+        ? ""
+        : ` since ${new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+    return `Expired: not used${since}. Pair again to use it.`;
+  }
   if (at === undefined) return "Last seen: unknown";
   const minutes = Math.floor(Math.max(0, now - at) / 60_000);
   if (minutes < 1) return "Last seen just now";

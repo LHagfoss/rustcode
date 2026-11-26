@@ -164,6 +164,8 @@ export interface RemoteDevice {
   routes?: RemoteConnectionRoute[];
   /** Its ceiling over ACP, as this computer set it; absent from an engine without levels. */
   access?: AccessLevel;
+  /** Unused past the idle limit (`[remote] idle_expiry_days`): refused until it pairs again. */
+  idleExpired?: boolean;
 }
 
 /** The kind of network a connected device reached this computer over. */
@@ -447,6 +449,7 @@ function parseDevice(value: Json | undefined): RemoteDevice[] {
   if (routes.length > 0) device.routes = routes;
   const access = ACCESS_LEVELS.find((level) => level === str(entry.access));
   if (access) device.access = access;
+  if (bool(entry.idleExpired)) device.idleExpired = true;
   return [device];
 }
 

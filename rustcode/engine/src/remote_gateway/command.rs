@@ -514,8 +514,10 @@ fn format_devices_at(devices: &[DeviceRecord], now: chrono::DateTime<chrono::Utc
         "{:<16}  {:<8}  {:<10}  {:<14}  {:<16}  {:<16}  NAME",
         "DEVICE", "KIND", "PLATFORM", "LAST SEEN", "PAIRED (UTC)", "EXPIRES (UTC)"
     )];
+    let idle = super::idle::limit();
     for device in devices {
         let expires = match device.expires_at() {
+            _ if device.is_idle(now, idle) => "expired (idle)".to_owned(),
             // A device that rotates its tokens or signs in with its key
             // lasts until it is revoked.
             None => "until revoked".to_owned(),
@@ -567,6 +569,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "paired_at": device.paired_at,
                 "last_seen_at": device.last_seen_at,
                 "expires_at": device.expires_at(),
+                "idle_expired": device.is_idle_now(),
                 "rotates": device.rotates(),
                 "signs_with_key": device.has_key(),
                 "kind": device.kind,
@@ -1036,6 +1039,9 @@ mod tests {
         let now = enrolled.record.paired_at + chrono::Duration::days(40);
         let table = format_devices_at(devices.list(), now);
         assert!(table.contains("until revoked"), "{table}");
+        let idle = enrolled.record.paired_at + chrono::Duration::days(100);
+        let table_idle = format_devices_at(devices.list(), idle);
+        assert!(table_idle.contains("expired (idle)"), "{table_idle}");
         let json = devices_json(devices.list());
         assert_eq!(json[0]["expires_at"], serde_json::Value::Null);
         assert_eq!(json[0]["rotates"], true);
@@ -1140,6 +1146,7 @@ mod tests {
                     host_id: None,
                     signs_with_key: false,
                     access: None,
+                    idle_expired: false,
                 },
                 DeviceSummary {
                     id: "bb".into(),
@@ -1150,6 +1157,7 @@ mod tests {
                     host_id: Some("host-0123456789abcdef".into()),
                     signs_with_key: false,
                     access: None,
+                    idle_expired: false,
                 },
             ],
             pairing: Some(PairingStatus {

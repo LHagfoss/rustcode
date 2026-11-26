@@ -226,8 +226,13 @@ Revocation, from the quickest to the widest:
 5. `/remote off` or `rc remote stop`: nobody reaches the gateway;
    pairings are kept.
 6. Replay of a retired refresh token: the whole pairing is revoked by the host.
-7. Expiry: a static token ends after 30 days; a rotating pairing lasts until
-   revoked.
+7. Expiry: a static token ends after 30 days. Any pairing, rotating or
+   key-signed included, that has not connected for `[remote]
+   idle_expiry_days` (90 by default; `0` turns it off) is refused like an
+   expired static token, and listed as expired (idle) in Settings › Remote
+   access and `rc remote devices` until it is removed or pairs again. Every
+   authentication moves its last-seen time, so a device in use never lapses
+   (#4404).
 
 A revoked device is refused with `unauthorized` or `revoked` when it returns,
 and the refusal is listed under *Refused connections* for a quarter of an hour.
