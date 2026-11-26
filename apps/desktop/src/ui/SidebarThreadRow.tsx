@@ -579,6 +579,8 @@ export const ROW_HEIGHT = 54;
 const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
 /** Line 2 starts where the title does, past the project mark (14px and its 6px gap). */
 const ROW_INDENT = "pl-5";
+/** `MouseEvent.button` of the middle button (a pressed scroll wheel): it settles the row. */
+const MIDDLE_BUTTON = 1;
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -921,6 +923,14 @@ export const ThreadRow = memo(function ThreadRow({
               data-row-id={session.id}
               tabIndex={navActive ? 0 : -1}
               onClick={() => selectThread(session.id)}
+              onMouseDown={(e) => {
+                if (e.button === MIDDLE_BUTTON) e.preventDefault();
+              }}
+              onAuxClick={(e) => {
+                if (e.button !== MIDDLE_BUTTON) return;
+                e.preventDefault();
+                if (!done) settleThread(session.id);
+              }}
               onDoubleClick={startRename}
               onKeyDown={(e) => {
                 if (e.key === "F2") {
