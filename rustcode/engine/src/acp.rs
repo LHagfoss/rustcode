@@ -11,6 +11,7 @@ mod cursor;
 pub(crate) mod data;
 mod edit_diff;
 mod extension_dispatch;
+mod github_issues;
 mod harnesses;
 mod hosted;
 pub(crate) mod loops;

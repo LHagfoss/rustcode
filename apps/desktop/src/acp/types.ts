@@ -99,6 +99,7 @@ export const Method = {
   accountLogout: "_rustcode/connections/account/logout",
   accountRefresh: "_rustcode/connections/account/refresh",
   pulls: "_rustcode/pulls",
+  issues: "_rustcode/issues",
   /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
   permissions: "_rustcode/permissions",
   permissionsRevoke: "_rustcode/permissions/revoke",

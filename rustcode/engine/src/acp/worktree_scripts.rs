@@ -56,7 +56,7 @@ pub(crate) struct ActionRequest {
     pub action: String,
 }
 
-/// Dispatch worktree script methods, forwarding anything else to `memory::dispatch`.
+/// Dispatch worktree script methods, forwarding anything else to `github_issues::dispatch`.
 pub(super) fn dispatch(
     method: String,
     params: Value,
@@ -120,6 +120,6 @@ pub(super) fn dispatch(
                 Ok(())
             })
         }
-        _ => super::memory::dispatch(method, params, responder, connection, unhandled),
+        _ => super::github_issues::dispatch(method, params, responder, connection, unhandled),
     }
 }

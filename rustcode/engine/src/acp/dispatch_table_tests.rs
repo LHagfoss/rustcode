@@ -546,6 +546,12 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for PullsRequest"
     );
     assert!(
+        <github_issues::IssuesRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/issues"
+        ),
+        "method mismatch for github_issues::IssuesRequest"
+    );
+    assert!(
         <PullViewRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/pulls/view"
         ),

@@ -241,7 +241,7 @@ export interface AppState {
   /** The engine learned a different Smart UI setting at initialize: a restart applies the new one. */
   smartUiPending: boolean;
   /** The panel on the right of the chat. */
-  panel: "details" | "changes" | "pulls" | "peek" | null;
+  panel: "details" | "changes" | "pulls" | "issues" | "peek" | null;
   /** The thread shown beside this one in the panel's Thread tab. */
   peekId: string | null;
   /**
@@ -455,7 +455,7 @@ export const MAX_PANELS = 500;
  * The views the panel can show. Declared before the store: `parsePanels` reads it while the store
  * is created, and a `const` further down is not initialized yet then (a blank window on start).
  */
-export const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "peek"];
+export const PANELS: readonly PanelKind[] = ["details", "changes", "pulls", "issues", "peek"];
 
 export const STORAGE = {
   smartUi: "rustcode.smartUi",
