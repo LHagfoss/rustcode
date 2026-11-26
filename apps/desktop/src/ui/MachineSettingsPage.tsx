@@ -10,10 +10,18 @@
 // here waits for that machine's next launch, which the footer says.
 
 import { useEffect, useMemo, useState } from "react";
+import type { AccessLevel } from "../acp/remote";
 import type { Harness } from "../acp/types";
 import { opError, opRunning, useOp } from "../lib/op";
 import { currentPlatform } from "../lib/platform";
-import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
+import {
+  ACCESS_OPTIONS,
+  devicePlatform,
+  deviceRoute,
+  deviceStatus,
+  machineAccess,
+  versionLine,
+} from "../state/deviceRows";
 import { accountState } from "../state/harness";
 import { allowMachineBack, useMachineAccess } from "../state/machineAccess";
 import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
@@ -42,7 +50,7 @@ import {
   useLocalIdentity,
   useMachines,
 } from "../state/machines";
-import { revokeRemoteDevice } from "../state/remoteAccess";
+import { revokeRemoteDevice, setDeviceAccess } from "../state/remoteAccess";
 import { pendingFor, revokeEverywhereAsk, usePendingRevocations } from "../state/revokeEverywhere";
 import { setFollowsThisComputer, useSettingsFollow } from "../state/settingsFollow";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
@@ -69,6 +77,7 @@ import {
   Group,
   Row,
   SectionTitle,
+  Select,
   SettingsHeaderActions,
   useSettingsPageMeta,
 } from "./settingsKit";
@@ -310,6 +319,14 @@ function Access({ machine }: { machine: Machine }) {
             {back?.busy ? <Spinner /> : null}
             {back?.busy ? "Allowing…" : "Allow"}
           </Action>
+        )}
+        {access.inbound?.access && (
+          <Select
+            label={`How much ${machineName(machine)} may do here`}
+            value={access.inbound.access}
+            options={ACCESS_OPTIONS}
+            onChange={(level) => void setDeviceAccess(access.inbound!.id, level as AccessLevel)}
+          />
         )}
         {access.inbound && (
           <Action danger onClick={() => void revokeRemoteDevice(access.inbound!.id)}>

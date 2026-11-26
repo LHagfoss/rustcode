@@ -1166,6 +1166,19 @@ async fn list_machines(_args: &Value) -> Value {
     if !host_id.is_empty() {
         local_row["host_id"] = json!(host_id);
     }
+    let now = chrono::Utc::now();
+    local_row["capacity"] = crate::fleet::capacity::Capacity::measure(now).row(now);
+    let fleet = crate::config::get_config_dir()
+        .map(|dir| crate::fleet::Fleet::load(&dir))
+        .unwrap_or_default();
+    let reported = |id: &str| {
+        fleet
+            .entries
+            .iter()
+            .find(|entry| entry.host_id == id)
+            .and_then(|entry| entry.capacity)
+            .map(|capacity| capacity.row(now))
+    };
     let mut machines = vec![local_row];
     let saved = crate::config::get_config_dir()
         .and_then(|dir| std::fs::read_to_string(dir.join("machines.json")).ok())
@@ -1200,6 +1213,9 @@ async fn list_machines(_args: &Value) -> Value {
         }
         if let Some(last_connected) = machine.last_connected_at {
             row["last_connected"] = json!(last_connected);
+        }
+        if let Some(capacity) = reported(&machine.host_id) {
+            row["capacity"] = capacity;
         }
         machines.push(row);
     }
@@ -1236,6 +1252,9 @@ async fn list_machines(_args: &Value) -> Value {
             }
             if let Some(via) = peer.via {
                 row["via"] = json!(via);
+            }
+            if let Some(capacity) = peer.capacity {
+                row["capacity"] = capacity.row(now);
             }
             rows.push(row);
         }

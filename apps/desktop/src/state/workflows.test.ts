@@ -367,3 +367,8 @@ test("Retry continues a failed run on its machine and only a run that ended unfi
   expect(useApp.getState().toasts.some((t) => t.text.includes("Could not retry the workflow"))).toBe(true);
   refused.conn.close("test finished");
 });
+
+test("a run waiting on a checkpoint says it needs the user", () => {
+  expect(run().needsUser).toBe(false);
+  expect(run({ needs_user: true }).needsUser).toBe(true);
+});

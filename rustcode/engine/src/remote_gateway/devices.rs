@@ -11,6 +11,7 @@
 //! stored, and the access token's digest lives in memory alone, so a restart
 //! needs a refresh rather than an access token.
 
+use super::access::Access;
 use super::handshake::Secret;
 use super::pairing::{constant_time_eq, digest};
 use crate::daemon::private_files::{
@@ -176,9 +177,12 @@ fn unknown_platform() -> String {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRecord {
-    /// Full ACP access explicitly granted by the host owner.
+    /// ACP access granted by the host owner; `access` says how much.
     #[serde(default)]
     pub acp: bool,
+    /// The granted level when `acp` is set; absent (an older record) is full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<Access>,
     /// Random identifier assigned by the gateway. The only identity.
     pub id: String,
     /// Label supplied by the device. Not unique, not trusted.
@@ -396,6 +400,11 @@ fn random_id() -> String {
 }
 
 impl DeviceRecord {
+    /// What the device may drive over ACP.
+    pub fn access_level(&self) -> Access {
+        super::control::requested_access(self.acp, self.access)
+    }
+
     /// Whether the device exchanges a rotating refresh token for a new one.
     pub fn rotates(&self) -> bool {
         self.rotation.is_some()
@@ -650,6 +659,7 @@ impl Devices {
         };
         let record = DeviceRecord {
             acp: false,
+            access: None,
             id: random_id(),
             name: sanitize_name(name),
             token_sha256,
@@ -947,13 +957,23 @@ impl Devices {
 
     /// Change only the host-controlled grant, never client-supplied metadata.
     pub fn set_acp(&mut self, selector: &str, allow: bool) -> Result<DeviceRecord, DeviceError> {
+        self.set_access(selector, super::control::requested_access(allow, None))
+    }
+
+    /// Set the device's ACP ceiling; `none` withdraws ACP access.
+    pub fn set_access(
+        &mut self,
+        selector: &str,
+        level: Access,
+    ) -> Result<DeviceRecord, DeviceError> {
         let id = self.select(selector)?.id.clone();
         let record = self
             .devices
             .iter_mut()
             .find(|record| record.id == id)
             .unwrap();
-        record.acp = allow;
+        record.acp = level != Access::None;
+        record.access = record.acp.then_some(level);
         Ok(record.clone())
     }
 

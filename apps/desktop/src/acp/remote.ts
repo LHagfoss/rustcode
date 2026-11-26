@@ -23,7 +23,13 @@ export const RemoteMethod = {
   revoke: "_rustcode/remote/revoke",
   /** A connect code for another computer (`connectCode`), or `{ cancel: true }` to withdraw it. */
   connectCode: "_rustcode/remote/connect_code",
+  /** How much a paired computer may drive here (`{ deviceId, access }`). */
+  access: "_rustcode/remote/access",
 } as const;
+
+/** A paired computer's ceiling over ACP, lowest first: nothing, read threads, run threads, everything. */
+export type AccessLevel = "none" | "read" | "threads" | "full";
+export const ACCESS_LEVELS: readonly AccessLevel[] = ["none", "read", "threads", "full"];
 
 /**
  * What a paired device is, as it said when it paired: the phone app, the desktop app on another
@@ -156,6 +162,8 @@ export interface RemoteDevice {
    * (the machine's answer only; absent from an engine that does not classify them).
    */
   routes?: RemoteConnectionRoute[];
+  /** Its ceiling over ACP, as this computer set it; absent from an engine without levels. */
+  access?: AccessLevel;
 }
 
 /** The kind of network a connected device reached this computer over. */
@@ -437,6 +445,8 @@ function parseDevice(value: Json | undefined): RemoteDevice[] {
   if (connected !== undefined) device.connected = connected;
   const routes = parseConnectionRoutes(entry.routes);
   if (routes.length > 0) device.routes = routes;
+  const access = ACCESS_LEVELS.find((level) => level === str(entry.access));
+  if (access) device.access = access;
   return [device];
 }
 

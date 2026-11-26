@@ -459,7 +459,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List paired computers and this computer, with their connection state, routes, threads, harnesses and projects. Use the ID or name in machine arguments. Remote thread IDs already include the machine. Remote changes ask for approval. With probe, retry each route. Offline machines are refused.",
+    description: "List paired computers and this computer, with their connection state, routes, threads, harnesses and projects. Use the ID or name in machine arguments. Remote thread IDs already include the machine. Remote changes ask for approval. With probe, retry each route. Offline machines are refused. Prefer an idle capacity, off battery.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

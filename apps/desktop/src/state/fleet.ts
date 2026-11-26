@@ -47,6 +47,8 @@ export interface FleetEntry {
   lastSeenAt: string | null;
   /** The computer this one was learned through, when it did not tell us itself. */
   via: string | null;
+  /** How busy it was at its last report about itself, as the engine sent it (`fleet/capacity.rs`). */
+  capacity?: JsonObject;
 }
 
 /** What a sync answers: the computer itself and everything it knows of the others. */
@@ -70,6 +72,7 @@ export function parseFleetEntry(value: Json | undefined): FleetEntry | null {
     version: str(entry.version) ?? null,
     lastSeenAt: str(entry.lastSeenAt) ?? null,
     via: str(entry.via) ?? null,
+    ...(obj(entry.capacity) ? { capacity: obj(entry.capacity) } : {}),
   };
 }
 
@@ -88,6 +91,7 @@ export function parseFleetView(value: Json | undefined): FleetView | null {
       version: str(host.version) ?? null,
       lastSeenAt: str(host.lastSeenAt) ?? null,
       via: null,
+      ...(obj(host.capacity) ? { capacity: obj(host.capacity) } : {}),
     },
     osName: str(root.osName) ?? null,
     entries: arr(root.entries)
@@ -102,6 +106,7 @@ export function wireEntry(entry: FleetEntry): JsonObject {
   if (entry.nameUpdatedAt) wire.nameUpdatedAt = entry.nameUpdatedAt;
   if (entry.version) wire.version = entry.version;
   if (entry.lastSeenAt) wire.lastSeenAt = entry.lastSeenAt;
+  if (entry.capacity) wire.capacity = entry.capacity;
   return wire;
 }
 
@@ -350,4 +355,28 @@ export function startFleetSync(): void {
   });
   setInterval(() => void syncFleet(), SYNC_EVERY_MS);
   soon();
+}
+
+/** A report older than this is stale (`fleet/capacity.rs` `FRESH_SECS`). */
+const CAPACITY_FRESH_SECS = 180;
+
+/**
+ * A machine's capacity as `list_machines` shows it, with its age and whether it is stale, or null
+ * when it never reported one.
+ */
+export function capacityRow(capacity: JsonObject | undefined, now = Date.now()): JsonObject | null {
+  const at = Date.parse(str(capacity?.at) ?? "");
+  if (!capacity || !Number.isFinite(at)) return null;
+  const age = Math.max(0, Math.round((now - at) / 1000));
+  const count = (value: Json | undefined) => (typeof value === "number" && value >= 0 ? value : 0);
+  return {
+    cores: count(capacity.cores),
+    load1: count(capacity.load1Hundredths) / 100,
+    memory_free_mb: count(capacity.memoryFreeMb),
+    on_battery: typeof capacity.onBattery === "boolean" ? capacity.onBattery : null,
+    running_turns: count(capacity.runningTurns),
+    at: str(capacity.at) ?? null,
+    age_secs: age,
+    stale: age > CAPACITY_FRESH_SECS,
+  };
 }

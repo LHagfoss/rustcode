@@ -562,6 +562,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
             serde_json::json!({
                 "id": device.id,
                 "acp": device.acp,
+                "access": device.access_level().name(),
                 "name": device.name,
                 "paired_at": device.paired_at,
                 "last_seen_at": device.last_seen_at,
@@ -1138,6 +1139,7 @@ mod tests {
                     platform: "ios".into(),
                     host_id: None,
                     signs_with_key: false,
+                    access: None,
                 },
                 DeviceSummary {
                     id: "bb".into(),
@@ -1147,6 +1149,7 @@ mod tests {
                     platform: "windows".into(),
                     host_id: Some("host-0123456789abcdef".into()),
                     signs_with_key: false,
+                    access: None,
                 },
             ],
             pairing: Some(PairingStatus {

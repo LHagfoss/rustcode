@@ -281,7 +281,7 @@ remote access on is the short moment before it has registered.
 | `rc remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rc remote off` | Stop the running gateway (alias of `stop`). |
 | `rc remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rc remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
+| `rc remote devices allow <id> [--access read\|threads\|full]` / `deny <id>` | Grant ACP access at a level (`full` by default), or deny it and immediately disconnect the device. |
 | `rc remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rc remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rc remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected (with the network each arrived over and whether it is encrypted), the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
@@ -733,6 +733,15 @@ saved, and is paired on its own (**Pair** in Settings › Machines).
   syncs with either. A computer that was offline keeps its old name until it
   syncs; the first sync after it reconnects brings the newest one. Renaming
   this computer announces it the same way, to every connected machine.
+- **Capacity:** each computer's own entry carries `capacity`
+  (`engine/src/fleet/capacity.rs`): `cores`, `load1Hundredths` (the
+  one-minute load average times 100), `memoryFreeMb`, `onBattery` (Linux
+  power supplies; absent where it cannot tell), `runningTurns` and `at`.
+  Whole numbers only, clamped on receipt; the newer `at` wins in a merge, and
+  an older computer ignores the field. `list_machines` shows it as `capacity`
+  (`load1`, `memory_free_mb`, `on_battery`, `running_turns`, `age_secs`,
+  `stale` past three minutes), measured now for this computer, so an agent
+  placing work can prefer an idle machine on mains power.
 - **Known through another:** a computer this one is not paired with is listed
   read-only, with who told us and when it was last seen. The list is only as
   fresh as that last report, so its row says *last seen*, never *online*.
@@ -1479,8 +1488,32 @@ version 1. The grant defaults to false, including for existing device records.
 Self-reported device kind never grants access. Accepting a desktop's ask-to-connect
 request grants ACP after it enters the request-bound code; the approval says
 "Can see and run all threads on this machine". Pairing with a standalone short
-code never grants ACP. The owner can run `rc remote devices allow <id>`
+code never grants ACP. The owner can run `rc remote devices allow <id> [--access read|threads|full]`
 or `rc remote devices deny <id>`; deny immediately disconnects the device.
+
+Each grant has a level, a ceiling on what the device may call
+(`remote_gateway/access.rs`), set in Settings › Machines › ‹machine› ›
+Access or with `--access`:
+
+- `read`: `initialize`, `session/list`, `session/load`, session status and
+  replay, thread search, activity, project facts, worktree state, usage,
+  harness listings, the fleet exchange and attachment reads. Its answers to
+  the engine's own requests (permission prompts) are dropped.
+- `threads`: `read` plus every other `session/*` method, steer, stop, title,
+  snooze, repair, harness switch, moving a thread's folder, attachment
+  uploads, project browse/create/clone, pull request links and reading
+  settings and skills.
+- `full`: every method below, including settings, skills, harness accounts,
+  jobs, outside agents, `machine/exec`, `machine/update`, and thread
+  export/import/remove.
+
+A method above the level is answered with error `-32601` whose message
+names the level and how to raise it, with `data.code: "unauthorized_access"`
+and `data.access`. A record from before levels has only `acp`: `true` reads
+as `full`. A lowered level applies to the device's open connections at their
+next frame; `none` closes them. `threads` is a ceiling on RustCode control,
+not a sandbox: a prompt it sends still runs tools here under the thread's own
+permission mode.
 Devices without the grant receive a gateway
 `error` with code `unauthorized_access` when opening ACP. When no engine is
 running, or none of the described ones answers, the gateway started by
