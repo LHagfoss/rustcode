@@ -1414,15 +1414,22 @@ rc machines hub join vps --access delegate
   an offline member wait in a mailbox on the hub (`remote/hub-mailbox.json`:
   at most 32 per machine and 256 in all, dropped after 7 days) and are
   delivered when it links again, each with a retry key so a redelivery does
-  not run twice. Anything else for an offline member fails at once, naming it
-  and when it was last seen.
+  not run twice. The member keeps those `hub-` keys in its data store, so a
+  call it ran just before a restart is answered from the receipt, not run
+  again. A call already sent on a live link is not sent on a second one. If
+  the hub cannot save the mailbox, the call fails with "Nothing was queued".
+  The hub keeps the last 20 deliveries per member with their outcome
+  (ran, or refused and why). Anything else for an offline member fails at
+  once, naming it and when it was last seen.
 - **In the app**, Settings › Machines › *Hub* does the same: a switch makes
   this computer the hub and lists its members (linked or offline, their
   ceiling, calls waiting), and on a member *Link to a hub* picks the paired hub,
   its access and whether to ask, with *Leave* to undo. The app runs these
   commands (`apps/desktop/src-tauri/src/hub.rs`).
 - `rc machines hub status` shows the role and, on the hub, each member
-  with its state, ceiling and waiting calls (`--json` too). `rc machines
+  with its state, ceiling, waiting calls and its last three deliveries, for
+  example `delivered message_session 2026-11-18 21:04 UTC: refused (approval
+  needed and no app is open)` (`--json` has them all). `rc machines
   hub leave` and `rc machines hub off` undo each side; an open link closes
   within a minute.
 

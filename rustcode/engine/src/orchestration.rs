@@ -24,6 +24,7 @@ use rustcode_core::ToolErrorKind;
 use rustcode_tools::ToolExecutionOutput;
 
 pub mod ask_user;
+mod hub_receipts;
 pub mod local;
 mod local_interrupt;
 mod local_merge;

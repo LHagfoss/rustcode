@@ -160,6 +160,18 @@ fn format_status(config: &HubConfig, members: Option<&[HubMember]>) -> String {
                     member.access.label(),
                     if member.ask { ", asks" } else { "" }
                 ));
+                for delivery in member.deliveries.iter().take(3) {
+                    out.push_str(&format!(
+                        "    delivered {} {}: {}\n",
+                        delivery.tool,
+                        delivery.at.format("%Y-%m-%d %H:%M UTC"),
+                        if delivery.success {
+                            "ran".to_owned()
+                        } else {
+                            format!("refused ({})", delivery.outcome)
+                        }
+                    ));
+                }
             }
         }
     }
@@ -189,6 +201,7 @@ mod tests {
                 online: true,
                 last_seen_at: seen,
                 queued: 0,
+                deliveries: Vec::new(),
             },
             HubMember {
                 host_id: "b".into(),
@@ -198,12 +211,24 @@ mod tests {
                 online: false,
                 last_seen_at: seen,
                 queued: 2,
+                deliveries: vec![rustcode::remote_gateway::hub_link::Delivery {
+                    tool: "message_session".into(),
+                    at: seen,
+                    success: false,
+                    outcome: "approval needed and no app is open".into(),
+                }],
             },
         ];
         let text = format_status(&config, Some(&members));
         assert!(text.contains("laptop  linked  Delegate, asks"), "{text}");
         assert!(
             text.contains("desk  offline, last seen 2026-11-18 21:04 UTC  Read-only, 2 waiting"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "delivered message_session 2026-11-18 21:04 UTC: refused (approval needed and no app is open)"
+            ),
             "{text}"
         );
         let member = HubConfig {

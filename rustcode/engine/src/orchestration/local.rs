@@ -111,6 +111,9 @@ pub(crate) async fn answer_json_with_asker(
         .and_then(Value::as_str)
         .filter(|key| !key.is_empty());
     if let Some(key) = key {
+        if let Some(answer) = super::hub_receipts::earlier(session_id, key, name, args) {
+            return answer;
+        }
         match receipts().earlier(session_id, key, name, args) {
             Earlier::Replayed(answer) => return replay(answer),
             Earlier::Conflict => {
@@ -153,6 +156,7 @@ pub(crate) async fn answer_json_with_asker(
         && answer.get("error").is_none()
     {
         receipts().record(session_id, key, name, args, &answer);
+        super::hub_receipts::record(session_id, key, name, args, &answer);
     }
     answer
 }
