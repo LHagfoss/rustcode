@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  capacityRow,
   type FleetEntry,
   fleetNameUpdates,
   fleetSignature,
@@ -182,4 +183,29 @@ describe("when a sync is due", () => {
     expect(fleetSignature(local, [{ ...connected[0]!, state: "offline" as const }])).not.toBe(base);
     expect(fleetSignature(local, [{ ...connected[0]!, state: "connected" as const }])).toBe(base);
   });
+});
+
+test("a machine's capacity travels in a fleet entry and reads with its age", () => {
+  const entry = parseFleetEntry({
+    hostId: "gw-1",
+    name: "Studio",
+    capacity: {
+      cores: 10,
+      load1Hundredths: 125,
+      memoryFreeMb: 8000,
+      runningTurns: 2,
+      at: "2026-11-26T10:00:00Z",
+    },
+  });
+  expect(wireEntry(entry!).capacity).toEqual(entry!.capacity!);
+  const now = Date.parse("2026-11-26T10:01:00Z");
+  expect(capacityRow(entry!.capacity, now)).toMatchObject({
+    load1: 1.25,
+    running_turns: 2,
+    age_secs: 60,
+    stale: false,
+  });
+  expect(capacityRow(entry!.capacity, now + 10 * 60_000)?.stale).toBe(true);
+  expect(parseFleetEntry({ hostId: "gw-2", name: "Old" })?.capacity).toBeUndefined();
+  expect(capacityRow(undefined)).toBeNull();
 });

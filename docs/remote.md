@@ -733,6 +733,15 @@ saved, and is paired on its own (**Pair** in Settings › Machines).
   syncs with either. A computer that was offline keeps its old name until it
   syncs; the first sync after it reconnects brings the newest one. Renaming
   this computer announces it the same way, to every connected machine.
+- **Capacity:** each computer's own entry carries `capacity`
+  (`engine/src/fleet/capacity.rs`): `cores`, `load1Hundredths` (the
+  one-minute load average times 100), `memoryFreeMb`, `onBattery` (Linux
+  power supplies; absent where it cannot tell), `runningTurns` and `at`.
+  Whole numbers only, clamped on receipt; the newer `at` wins in a merge, and
+  an older computer ignores the field. `list_machines` shows it as `capacity`
+  (`load1`, `memory_free_mb`, `on_battery`, `running_turns`, `age_secs`,
+  `stale` past three minutes), measured now for this computer, so an agent
+  placing work can prefer an idle machine on mains power.
 - **Known through another:** a computer this one is not paired with is listed
   read-only, with who told us and when it was last seen. The list is only as
   fresh as that last report, so its row says *last seen*, never *online*.
