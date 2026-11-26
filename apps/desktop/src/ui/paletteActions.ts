@@ -150,7 +150,7 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
   const grouped = readPref(PREF.groupByProject, false);
   const working = readPref(PREF.workingSection, true);
   const only = readPref(PREF.onlyProject, false);
-  const compact = sidebarDensity(readPref(PREF.density, "detailed")) === "compact";
+  const compact = sidebarDensity(readPref(PREF.density, "compact")) === "compact";
   const toolbar = readPref(PREF.toolbar, true);
   const sort = sidebarSort();
   const open = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined;

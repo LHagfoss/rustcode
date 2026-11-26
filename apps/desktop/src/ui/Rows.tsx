@@ -1267,15 +1267,23 @@ export function TurnEndRow({
         )}
       >
         {item.outcome === "cancelled" && !folded && <SquareStop size={12} />}
-        {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
         {traced && trace}
         {changes}
+        {parts.length > 0 && (
+          <span
+            className={cx(
+              "tabular",
+              !latest && item.outcome !== "cancelled" && item.outcome !== "failed" && FADE_UNTIL_HOVER,
+            )}
+          >
+            {parts.join(" · ")}
+          </span>
+        )}
         {(row.copy || row.fork || row.sideChat) && (
           <span
             className={cx(
               "flex items-center gap-2 [&>button]:size-6 [&>button]:rounded-chip [&>button]:text-fg-faint",
-              !latest &&
-                "opacity-0 transition-opacity duration-100 focus-within:opacity-100 group-hover/foot:opacity-100 pointer-coarse:opacity-100",
+              !latest && FADE_UNTIL_HOVER,
             )}
           >
             {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
@@ -1299,6 +1307,10 @@ export function TurnEndRow({
     </div>
   );
 }
+
+/** An older turn's quiet parts: drawn only under the pointer or focus, in room the row keeps. */
+const FADE_UNTIL_HOVER =
+  "opacity-0 transition-opacity duration-100 focus-within:opacity-100 group-hover/foot:opacity-100 pointer-coarse:opacity-100";
 
 /** The live line under a running turn: what it does now and for how long, with a shimmer. */
 /**

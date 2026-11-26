@@ -39,10 +39,13 @@ export function projectTint(name: string): string {
 export function ProjectMark({
   name,
   size = 16,
+  radius = "rounded-xs",
   className,
 }: {
   name: string;
   size?: number;
+  /** The corner class; a small list mark takes a squarer one than the default. */
+  radius?: string;
   className?: string;
 }) {
   return (
@@ -51,7 +54,8 @@ export function ProjectMark({
       title={name}
       style={{ width: size + 2, height: size + 2, fontSize: Math.max(8, Math.round(size * 0.44)) }}
       className={cx(
-        "flex shrink-0 items-center justify-center rounded-xs font-semibold uppercase tracking-tight",
+        "flex shrink-0 items-center justify-center font-semibold uppercase tracking-tight",
+        radius,
         projectTint(name),
         className,
       )}

@@ -590,15 +590,15 @@ const ROW_RIGHT =
   "relative flex flex-none items-center justify-end gap-1 overflow-hidden whitespace-nowrap tabular";
 
 /**
- * The compact row: one line at 28px, so about two and a half rows sit where one detailed row
- * did. It keeps the leading status dot, the harness's mark, the title and the trailing state;
- * the project, computer, branch and model move to the hover card.
+ * The compact row: one line at 32px, so about two rows sit where one detailed row
+ * did. It keeps the project's mark with the status dot on it, the title and the trailing state;
+ * the computer, branch, agent and model move to the hover card and Thread info.
  */
 // A grid, not a flex row: the sections fold inside an `auto` grid column (`Fold`), which grows to
 // its rows' min-content. A flex row's min-content is its whole title, so every row widened to the
 // longest one and pushed the age out of view; the title's `minmax(0,1fr)` track asks for nothing.
 const COMPACT_ROW =
-  "grid h-[28px] grid-cols-[6px_12px_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-lg px-3";
+  "grid h-[32px] grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-2 rounded-lg px-1.5";
 
 /** The compact row's leading dot, in the tone the detailed row's chip takes for the same state. */
 const COMPACT_DOT: Record<CompactMark, string> = {
@@ -608,11 +608,19 @@ const COMPACT_DOT: Record<CompactMark, string> = {
   unread: "bg-success",
 };
 
-/** The dot's slot is always kept, so the titles of a compact list line up whatever they flag. */
-function CompactDot({ mark }: { mark?: CompactMark }) {
+/** The compact row's one leading icon: the project's mark, with the row's status as a dot on it. */
+function RowIcon({ mark, project, className }: { mark?: CompactMark; project: string; className?: string }) {
   return (
-    <span aria-hidden className="relative flex w-1.5 shrink-0 justify-center">
-      {mark && <span className={cx("size-1.5 rounded-full", COMPACT_DOT[mark])} />}
+    <span aria-hidden className="relative flex size-5 items-center justify-center">
+      <ProjectMark name={project} size={16} radius="rounded-inline" className={className} />
+      {mark && (
+        <span
+          className={cx(
+            "-right-0.5 -top-0.5 absolute size-2 rounded-full ring-2 ring-[var(--rc-sidebar-bg)]",
+            COMPACT_DOT[mark],
+          )}
+        />
+      )}
     </span>
   );
 }
@@ -820,7 +828,7 @@ export const ThreadRow = memo(function ThreadRow({
   // Renaming edits the title in place, over the row's first line: the row keeps its height and
   // its other lines, so the list does not jump while you type.
   const renameBox = renaming && (
-    <div className={cx("absolute inset-x-1 z-10", compact ? "top-[2px]" : "top-[5px]")}>
+    <div className={cx("absolute inset-x-1 z-10", compact ? "top-1" : "top-[5px]")}>
       <input
         autoFocus
         value={title}
@@ -849,7 +857,9 @@ export const ThreadRow = memo(function ThreadRow({
     wantsYou ? "opacity-100" : "opacity-60 group-hover:opacity-100",
   );
   // One weight for every title, whatever the thread is doing: the status word says that.
-  const titleTint = "min-w-0 flex-1 truncate text-body font-medium text-fg";
+  const titleTint = compact
+    ? cx("min-w-0 flex-1 truncate text-body", lit ? "font-medium text-fg" : "text-fg-muted")
+    : "min-w-0 flex-1 truncate text-body font-medium text-fg";
   const fromText = from ? originText(from) : undefined;
   // Line 2's end: the harness mark with its model, never cut.
   const modelMark = (model || harnessName) && (
@@ -967,13 +977,7 @@ export const ThreadRow = memo(function ThreadRow({
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
               {compact ? (
                 <>
-                  <CompactDot mark={compactMark(chip)} />
-                  <HarnessIcon
-                    id={session.harness || "rustcode"}
-                    name={harness?.name}
-                    size={12}
-                    className={cx("relative shrink-0", markTint)}
-                  />
+                  <RowIcon mark={compactMark(chip)} project={project} className={markTint} />
                   <span className={ROW_LEFT}>
                     {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                     {branch && (
@@ -997,7 +1001,7 @@ export const ThreadRow = memo(function ThreadRow({
                   </span>
                   <span
                     title={chip?.title}
-                    className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
+                    className={cx(ROW_RIGHT, "text-sub text-fg-faint", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                   >
                     {delegates && (
                       <span className="flex shrink-0 items-center gap-0.5 tabular">
@@ -1055,7 +1059,7 @@ export const ThreadRow = memo(function ThreadRow({
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
             className={cx(
               "invisible absolute right-2 flex items-center opacity-0 transition-[opacity,visibility] duration-150 ease-snappy",
-              compact ? "top-[2px]" : "top-1.5",
+              compact ? "top-1" : "top-1.5",
               !dragging &&
                 !renaming &&
                 "group-hover:visible group-hover:opacity-100 group-has-[:focus-visible]:visible group-has-[:focus-visible]:opacity-100 group-has-[[data-state=open]]:visible group-has-[[data-state=open]]:opacity-100",
@@ -1182,7 +1186,7 @@ export const PendingRow = memo(function PendingRow({
           )}
         </button>
       </Tooltip>
-      <div className={cx("absolute right-2 flex items-center", compact ? "top-[2px]" : "top-1.5")}>
+      <div className={cx("absolute right-2 flex items-center", compact ? "top-1" : "top-1.5")}>
         {failure && (
           <RowAction label="Dismiss" onClick={() => dismissPendingSetup(pending.id)}>
             <X size={12} />

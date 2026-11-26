@@ -69,13 +69,13 @@ export function settleAfterMs(days: number): number {
 export type SidebarDensity = "detailed" | "compact";
 
 export const SIDEBAR_DENSITIES: readonly { id: SidebarDensity; label: string }[] = [
-  { id: "detailed", label: "Detailed" },
   { id: "compact", label: "Compact" },
+  { id: "detailed", label: "Detailed" },
 ];
 
-/** A stored density, read leniently: anything but `compact` is the default, `detailed`. */
+/** A stored density, read leniently: anything but `detailed` is the default, `compact`. */
 export function sidebarDensity(raw: unknown): SidebarDensity {
-  return raw === "compact" ? "compact" : "detailed";
+  return raw === "detailed" ? "detailed" : "compact";
 }
 
 const listeners = new Set<() => void>();
@@ -132,6 +132,6 @@ export function usePref<T>(key: string, initial: T) {
 
 /** The sidebar's row density and its setter, shared by the sidebar, ⌘K and Settings. */
 export function useSidebarDensity() {
-  const [raw, set] = usePref<string>(PREF.density, "detailed");
+  const [raw, set] = usePref<string>(PREF.density, "compact");
   return [sidebarDensity(raw), set as (next: SidebarDensity) => void] as const;
 }
