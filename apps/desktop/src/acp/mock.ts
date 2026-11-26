@@ -14,7 +14,7 @@ import {
   mockSettingsSet,
   withoutSkillContent,
 } from "./mockFixtures";
-import { mockGit, mockQrRows } from "./mockGit";
+import { mockGit, mockGitRun, mockQrRows } from "./mockGit";
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
@@ -1587,43 +1587,8 @@ export class MockEngine {
         };
       case "_rustcode/git/state":
         return mockGit(this.threads, str(params.path) ?? "") as unknown as Json;
-      case "_rustcode/git/run": {
-        const path = str(params.path) ?? "";
-        const git = mockGit(this.threads, path);
-        const action = str(params.action);
-        if (
-          (action === "commit" || action === "commit_push") &&
-          git.onDefault &&
-          !params.newBranch &&
-          !params.allowDefaultBranch
-        )
-          throw Object.assign(new Error("default_branch"), {
-            code: -32602,
-            data: {
-              reason: "default_branch",
-              message: `This commits to ${git.branch}. Confirm it, or commit to a new branch.`,
-            },
-          });
-        if (action === "commit" || action === "commit_push") {
-          const picked = new Set(Array.isArray(params.files) ? params.files : []);
-          if (str(params.newBranch))
-            Object.assign(git, { branch: str(params.newBranch), onDefault: false, upstream: null });
-          git.files = git.files.filter((f) => !picked.has(f.path));
-          git.ahead += 1;
-        }
-        if (action === "push" || action === "commit_push") {
-          git.upstream = `origin/${git.branch}`;
-          git.ahead = 0;
-        }
-        if (action === "pull") git.behind = 0;
-        let url: string | null = null;
-        if (action === "create_pr") {
-          git.upstream = `origin/${git.branch}`;
-          git.ahead = 0;
-          url = "https://github.com/LHagfoss/rustcode/pull/4242";
-        }
-        return { action, output: "", url, state: git } as unknown as Json;
-      }
+      case "_rustcode/git/run":
+        return mockGitRun(this.threads, params);
       case "_rustcode/pulls/branch":
         return {
           branch: {

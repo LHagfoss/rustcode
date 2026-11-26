@@ -13,7 +13,13 @@ export interface GitFile {
   path: string;
   /** `M`, `A`, `D`, `R`, `?` (untracked) or `U` (conflicted). */
   status: string;
+  /** Present in the git index (staged for commit). */
+  staged: boolean;
+  /** Has working-tree changes not yet staged. */
+  unstaged: boolean;
 }
+
+export type StageKind = "staged" | "partial" | "unstaged";
 
 export interface GitState {
   branch?: string;
@@ -37,6 +43,15 @@ export const GIT_ACTION_LABEL: Record<GitAction, string> = {
   create_pr: "Create Pull Request",
 };
 
+/** Display label for a git action, naming the staged file count when committing staged changes. */
+export function gitActionDisplayLabel(action: GitAction, stagedCount: number): string {
+  const base = GIT_ACTION_LABEL[action];
+  if (stagedCount > 0 && (action === "commit" || action === "commit_push")) {
+    return `${base} (${stagedCount} staged)`;
+  }
+  return base;
+}
+
 export function parseGitState(value: Json | undefined): GitState | undefined {
   const o = obj(value);
   if (!o) return undefined;
@@ -52,9 +67,75 @@ export function parseGitState(value: Json | undefined): GitState | undefined {
     files: arr(o.files).flatMap((f) => {
       const file = obj(f);
       const path = str(file?.path);
-      return path ? [{ path, status: str(file?.status) ?? "M" }] : [];
+      if (!path) return [];
+      const staged = bool(file?.staged) ?? false;
+      const unstaged = bool(file?.unstaged) ?? !staged;
+      return [{ path, status: str(file?.status) ?? "M", staged, unstaged }];
     }),
   };
+}
+
+/** Whether a file is fully staged, partially staged (index and worktree), or unstaged. */
+export function stageKindOf(file: Pick<GitFile, "staged" | "unstaged"> | undefined): StageKind {
+  if (!file?.staged) return "unstaged";
+  return file.unstaged ? "partial" : "staged";
+}
+
+export interface StagingPartition<T> {
+  staged: T[];
+  unstaged: T[];
+  hasPartial: boolean;
+}
+
+/** Splits diff rows into staged (including partially staged) and unstaged groups using engine git state. */
+export function partitionByStaging<T extends { path: string }>(
+  files: readonly T[],
+  gitFiles: readonly GitFile[] | undefined,
+): StagingPartition<T> {
+  if (!gitFiles?.length) return { staged: [], unstaged: [...files], hasPartial: false };
+  const byPath = new Map(gitFiles.map((file) => [file.path, file]));
+  const staged: T[] = [];
+  const unstaged: T[] = [];
+  let hasPartial = false;
+  for (const file of files) {
+    const status = byPath.get(file.path);
+    if (status?.staged) {
+      staged.push(file);
+      if (status.unstaged) hasPartial = true;
+    } else {
+      unstaged.push(file);
+    }
+  }
+  return { staged, unstaged, hasPartial };
+}
+
+/** Files pre-selected in the commit sheet: only staged files when any are staged, else every changed file. */
+export function initialCommitSelection(files: readonly GitFile[]): ReadonlySet<string> {
+  const staged = files.filter((file) => file.staged);
+  return new Set((staged.length > 0 ? staged : files).map((file) => file.path));
+}
+
+/** True when the commit sheet selection matches the exact staged index set so git can commit the index directly. */
+export function commitsStagedIndex(picked: ReadonlySet<string>, files: readonly GitFile[]): boolean {
+  const staged = files.filter((file) => file.staged);
+  if (staged.length === 0 || picked.size !== staged.length) return false;
+  return staged.every((file) => picked.has(file.path));
+}
+
+/** Summary line in the commit sheet showing exactly what will be committed. */
+export function commitSummaryLabel(
+  pickedCount: number,
+  totalCount: number,
+  stagedCount: number,
+  usingStagedIndex: boolean,
+): string {
+  const noun = (n: number) => (n === 1 ? "file" : "files");
+  if (usingStagedIndex) {
+    return stagedCount < totalCount
+      ? `${stagedCount} staged ${noun(stagedCount)} (of ${totalCount})`
+      : `${stagedCount} staged ${noun(stagedCount)}`;
+  }
+  return `${pickedCount} of ${totalCount} ${noun(totalCount)}`;
 }
 
 /** What the header's git button offers: its primary action, the rest, or why it can't act. */

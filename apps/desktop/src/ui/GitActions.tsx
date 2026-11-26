@@ -8,6 +8,8 @@ import { openExternal } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
 import {
   acceptsGeneratedDraft,
+  commitSummaryLabel,
+  commitsStagedIndex,
   draftCommitMessage,
   draftPull,
   GIT_ACTION_LABEL,
@@ -16,9 +18,11 @@ import {
   GitMethod,
   type GitRead,
   type GitState,
+  gitActionDisplayLabel,
   gitErrorOf,
   gitReadFor,
   gitReads,
+  initialCommitSelection,
   parseGitState,
   planGitActions,
   pullFromUrl,
@@ -27,7 +31,6 @@ import {
 import { readPullList, usePullList } from "../state/pullQueries";
 import { request, toast } from "../state/store";
 import type { ThreadState } from "../state/thread";
-import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "./icons";
 import {
@@ -48,7 +51,10 @@ import {
  * The folder's git state, read again when a turn ends and when the window comes back. Only the
  * newest read's answer lands, and only for the folder it was read for (issue 3744).
  */
-function useGitState(cwd: string | undefined, running: boolean): [GitRead, () => Promise<void>] {
+export function useGitState(
+  cwd: string | undefined,
+  running: boolean,
+): [GitRead, () => Promise<void>, (state: GitState) => void] {
   const [read, setRead] = useState<GitRead>({});
   const [reads] = useState(gitReads);
   const refresh = useCallback(async () => {
@@ -62,6 +68,15 @@ function useGitState(cwd: string | undefined, running: boolean): [GitRead, () =>
     }
     if (answer) setRead(answer);
   }, [cwd, reads]);
+  const apply = useCallback(
+    (state: GitState) => {
+      if (!cwd) return;
+      const land = reads.begin(cwd);
+      const answer = land({ state });
+      if (answer) setRead(answer);
+    },
+    [cwd, reads],
+  );
   useEffect(() => {
     if (!running) void refresh();
   }, [refresh, running]);
@@ -70,7 +85,7 @@ function useGitState(cwd: string | undefined, running: boolean): [GitRead, () =>
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
-  return [gitReadFor(read, cwd), refresh];
+  return [gitReadFor(read, cwd), refresh, apply];
 }
 
 /** After a pull request is opened, the open list is read again so the button and the panel show it. */
@@ -87,17 +102,45 @@ const ICON: Record<GitAction, typeof GitBranch> = {
 };
 
 /** Keyed by the thread, so a thread switch never carries the last thread's sheet or action over. */
-export function GitActionsButton({ thread }: { thread?: ThreadState }) {
-  return <GitButton key={thread?.id ?? ""} thread={thread} />;
+export function GitActionsButton({
+  thread,
+  gitRead,
+  onRefresh,
+  onMutated,
+}: {
+  thread?: ThreadState;
+  gitRead: GitRead;
+  onRefresh: () => Promise<void>;
+  onMutated?: () => void;
+}) {
+  return (
+    <GitButton
+      key={thread?.id ?? ""}
+      thread={thread}
+      read={gitRead}
+      refresh={onRefresh}
+      onMutated={onMutated}
+    />
+  );
 }
 
-function GitButton({ thread }: { thread?: ThreadState }) {
+function GitButton({
+  thread,
+  read,
+  refresh,
+  onMutated,
+}: {
+  thread?: ThreadState;
+  read: GitRead;
+  refresh: () => Promise<void>;
+  onMutated?: () => void;
+}) {
   const cwd = thread?.cwd;
-  const [read, refresh] = useGitState(cwd, isRunning(thread));
   const [busy, setBusy] = useState<GitAction | null>(null);
   const [sheet, setSheet] = useState<GitAction | null>(null);
   const state = read.state;
   const branch = state?.branch;
+  const stagedCount = useMemo(() => (state?.files ?? []).filter((f) => f.staged).length, [state]);
   const pulls = usePullList(cwd, "open", { enabled: !!state?.hasRemote && !state.onDefault && !!branch });
   const { presence, pull: openPull } = pullPresence(branch, pulls.data);
   const plan = useMemo(() => (state ? planGitActions(state, presence) : undefined), [state, presence]);
@@ -141,6 +184,7 @@ function GitButton({ thread }: { thread?: ThreadState }) {
       toast(pull ? `Opened pull request #${pull.number}` : `${GIT_ACTION_LABEL[action]} done`, "success", {
         id,
       });
+      onMutated?.();
     } catch (error) {
       toast(gitErrorOf(error).message, "error", { id, persist: true });
     } finally {
@@ -150,7 +194,7 @@ function GitButton({ thread }: { thread?: ThreadState }) {
   };
 
   const primary = plan.primary;
-  const label = primary ? GIT_ACTION_LABEL[primary] : plan.note;
+  const label = primary ? gitActionDisplayLabel(primary, stagedCount) : plan.note;
   const PrimaryIcon = primary ? ICON[primary] : GitBranch;
   return (
     <>
@@ -187,7 +231,7 @@ function GitButton({ thread }: { thread?: ThreadState }) {
                   const Icon = ICON[action];
                   return <Icon size={13} className="text-fg-muted" />;
                 })()}
-                {GIT_ACTION_LABEL[action]}
+                {gitActionDisplayLabel(action, stagedCount)}
                 {action === "commit" || action === "commit_push" ? "…" : ""}
               </DropdownMenu.Item>
             ) : (
@@ -226,7 +270,10 @@ function GitButton({ thread }: { thread?: ThreadState }) {
           state={state}
           push={sheet === "commit_push"}
           onClose={() => setSheet(null)}
-          onDone={() => void refresh()}
+          onDone={() => {
+            void refresh();
+            onMutated?.();
+          }}
         />
       )}
     </>
@@ -248,14 +295,19 @@ function CommitSheet({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [message, setMessage] = useState(() => draftCommitMessage(title, state.files));
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => initialCommitSelection(state.files));
+  const [message, setMessage] = useState(() => {
+    const staged = state.files.filter((file) => file.staged);
+    return draftCommitMessage(title, staged.length > 0 ? staged : state.files);
+  });
   const edited = useRef(false);
   const [generationNote, setGenerationNote] = useState("");
-  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set(state.files.map((f) => f.path)));
   const [newBranch, setNewBranch] = useState("");
   const [committing, runCommit] = useOp();
   const running = opRunning(committing);
   const failure = opError(committing);
+  const stagedCount = state.files.filter((file) => file.staged).length;
+  const usingStagedIndex = commitsStagedIndex(picked, state.files);
   const files = state.files.filter((f) => picked.has(f.path)).map((f) => f.path);
   const fileKey = JSON.stringify(files);
   useEffect(() => {
@@ -289,6 +341,7 @@ function CommitSheet({
             action: push ? "commit_push" : "commit",
             message: message.trim(),
             files,
+            stagedOnly: usingStagedIndex,
             newBranch: toDefault ? null : newBranch.trim() || null,
             allowDefaultBranch: toDefault,
           },
@@ -360,6 +413,11 @@ function CommitSheet({
                   />
                   <span className="w-3 shrink-0 font-mono text-caption text-fg-faint">{file.status}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-caption">{file.path}</span>
+                  {file.staged && (
+                    <span className="shrink-0 rounded-sm bg-success/15 px-1.5 py-0.5 text-caption text-success">
+                      {file.unstaged ? "partial" : "staged"}
+                    </span>
+                  )}
                 </label>
               ))}
             </div>
@@ -386,7 +444,8 @@ function CommitSheet({
             )}
             <div className="flex items-center gap-2">
               <span className="flex-1 text-caption text-fg-muted">
-                {files.length} of {state.files.length} files · hooks run as in your terminal
+                {commitSummaryLabel(files.length, state.files.length, stagedCount, usingStagedIndex)} · hooks
+                run as in your terminal
               </span>
               <Pill disabled={running} onClick={onClose}>
                 Cancel
