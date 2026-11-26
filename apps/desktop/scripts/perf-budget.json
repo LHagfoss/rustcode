@@ -1,0 +1,10 @@
+{
+  "idle.commitsPer5s": 30,
+  "stream.commitsPerSec": 75,
+  "reopen2000.commits": 15,
+  "open2000.commits": 90,
+  "stream.backlogAfterEndMs": 5000,
+  "startup.heapMb": 150,
+  "stream.heapMb": 180,
+  "open2000.toContentMs": 20000
+}

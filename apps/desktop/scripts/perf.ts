@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { overBudget } from "./perfBudget";
 
 const args = process.argv.slice(2);
 const mode = args.find((a) => a === "dev" || a === "prod") ?? "prod";
@@ -23,6 +24,7 @@ const REPLAY =
     ? args[args.indexOf("--replay") + 1]
     : undefined;
 const JSON_OUT = args.includes("--json");
+const BUDGET = args.includes("--budget") ? args[args.indexOf("--budget") + 1] : undefined;
 
 const root = join(import.meta.dir, "..");
 const children: { kill(): void }[] = [];
@@ -83,14 +85,23 @@ const base = `http://localhost:${PORT}`;
 await waitFor(base);
 
 // ---------------------------------------------------------------- browser
-const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-if (!existsSync(chromePath)) throw new Error("Google Chrome is needed for bun run perf.");
+const CHROME_PATHS = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+];
+const chromePath = process.env.CHROME_PATH || CHROME_PATHS.find((path) => existsSync(path));
+if (!chromePath)
+  throw new Error("Google Chrome or Chromium is needed for bun run perf (or set CHROME_PATH).");
 const profile = join(tmpdir(), `rustcode-perf-chrome-${CDP_PORT}`);
 children.push(
   Bun.spawn(
     [
       chromePath,
       "--headless=new",
+      ...(process.platform === "linux" ? ["--no-sandbox"] : []),
       `--remote-debugging-port=${CDP_PORT}`,
       `--user-data-dir=${profile}`,
       "--no-first-run",
@@ -344,14 +355,14 @@ async function openThread(id: string, label: string) {
     window.__rustcode.selectThread(${JSON.stringify(id)});
     await window.__perf.until(() => {
       const t = window.__rustcode.useApp.getState().threads[${JSON.stringify(id)}];
-      return t?.loaded && document.querySelectorAll('[role=log] [data-index]').length > 3;
+      return t?.load?.phase === "loaded" && document.querySelectorAll('[role=log] [data-index]').length > 3;
     }, ${OPEN_TIMEOUT_MS}).catch(() => -1);
     await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
     return performance.now() - t0;
   })()`),
   ).then((ms) => ms);
   const timedOut = await evaluate<boolean>(
-    `!window.__rustcode.useApp.getState().threads[${JSON.stringify(id)}]?.loaded`,
+    `window.__rustcode.useApp.getState().threads[${JSON.stringify(id)}]?.load?.phase !== "loaded"`,
   );
   await Bun.sleep(1000);
   const p = await probe();
@@ -396,7 +407,7 @@ await evaluate("window.__perf.reset()");
 // ---------------------------------------------------------------- streaming + typing
 await evaluate(`window.__rustcode.selectThread("perf-stream")`);
 await evaluate(
-  `window.__perf.until(() => window.__rustcode.useApp.getState().threads["perf-stream"]?.loaded)`,
+  `window.__perf.until(() => window.__rustcode.useApp.getState().threads["perf-stream"]?.load?.phase === "loaded")`,
 );
 await Bun.sleep(500);
 await evaluate("window.__perf.reset()");
@@ -490,4 +501,9 @@ await Bun.sleep(1500);
 
 if (JSON_OUT) console.log(JSON.stringify({ mode, ...results }));
 ws.close();
+if (BUDGET) {
+  const breaches = overBudget(results, await Bun.file(BUDGET).json());
+  for (const line of breaches) console.error(line);
+  process.exit(breaches.length ? 1 : 0);
+}
 process.exit(0);
