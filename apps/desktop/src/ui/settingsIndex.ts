@@ -97,6 +97,21 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Notification sound",
+    keywords: "notify notification sound audio chime ping alert mute bell finished approval",
+  },
+  {
+    section: "general",
+    title: "Sound tone",
+    keywords: "notify notification sound tone chime glass soft double preview audio",
+  },
+  {
+    section: "general",
+    title: "Sound volume",
+    keywords: "notify notification sound volume loud quiet level mute audio",
+  },
+  {
+    section: "general",
     title: "Chat recaps",
     keywords: "recap summary summaries away while you were away idle returned chat thread dismissed",
   },

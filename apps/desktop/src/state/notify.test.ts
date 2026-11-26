@@ -5,8 +5,10 @@ import {
   createNotifyGate,
   finishIsNews,
   firstLine,
+  type NoticeState,
   type NotifyContext,
   type NotifyEvent,
+  soundContextOf,
   WARMUP_MS,
   wakeEvent,
   warmingUp,
@@ -257,5 +259,63 @@ describe("which finishes are news", () => {
         away,
       ),
     ).not.toBeNull();
+  });
+});
+
+describe("notification sounds", () => {
+  const noticeState = (over: Partial<NoticeState> = {}): NoticeState => ({
+    systemNotifications: true,
+    notificationsBackgroundOnly: false,
+    notificationSound: true,
+    notificationSoundTone: "chime",
+    notificationSoundVolume: 45,
+    selectedId: "a",
+    ...over,
+  });
+
+  test("stays silent when disabled or muted to zero volume", () => {
+    const gate = createNotifyGate();
+    expect(
+      gate.take(event({ threadId: "b" }), soundContextOf(noticeState({ notificationSound: false }), false)),
+    ).toBeNull();
+    expect(
+      gate.take(event({ threadId: "b" }), soundContextOf(noticeState({ notificationSoundVolume: 0 }), false)),
+    ).toBeNull();
+  });
+
+  test("chimes for background threads needing input or finishing, and stays silent for active or snoozed threads", () => {
+    const gate = createNotifyGate();
+    const activeFocused = soundContextOf(noticeState({ selectedId: "a" }), true);
+    expect(gate.take(event({ threadId: "a", kind: "approval" }), activeFocused)).toBeNull();
+    expect(gate.take(event({ threadId: "a", kind: "finished", key: "t1" }), activeFocused)).toBeNull();
+
+    expect(gate.take(event({ threadId: "b", kind: "question", key: "q1" }), activeFocused)?.kind).toBe(
+      "question",
+    );
+    expect(gate.take(event({ threadId: "b", kind: "finished", key: "t2" }), activeFocused)?.kind).toBe(
+      "finished",
+    );
+
+    const snoozed = soundContextOf(noticeState({ snoozed: { c: 5_000 } }), false);
+    expect(gate.take(event({ threadId: "c", kind: "finished", key: "t3" }), snoozed)).toBeNull();
+    expect(
+      gate.take(event({ threadId: "c", kind: "finished", key: "t3" }), soundContextOf(noticeState(), false))
+        ?.kind,
+    ).toBe("finished");
+  });
+
+  test("honors background-only suppression and works even when OS banners are off", () => {
+    const gate = createNotifyGate();
+    const frontBgOnly = soundContextOf(
+      noticeState({ systemNotifications: false, notificationsBackgroundOnly: true }),
+      true,
+    );
+    expect(gate.take(event({ threadId: "b" }), frontBgOnly)).toBeNull();
+    const unfocused = soundContextOf(
+      noticeState({ systemNotifications: false, notificationsBackgroundOnly: true }),
+      false,
+    );
+    expect(gate.take(event({ threadId: "b" }), unfocused)?.kind).toBe("approval");
+    expect(gate.take(event({ threadId: "b" }), unfocused)).toBeNull();
   });
 });

@@ -7,6 +7,12 @@ import type { AgentInfo, HarnessSnapshot, SessionSummary, SlashCommand } from ".
 import type { Checkpoint, ThreadStatus } from "../acp/v2";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth } from "../lib/chatWidth";
 import { SHORTCUTS_KEY } from "../lib/keys";
+import {
+  DEFAULT_NOTIFY_SOUND_ENABLED,
+  DEFAULT_NOTIFY_SOUND_TONE,
+  DEFAULT_NOTIFY_SOUND_VOLUME,
+  type NotifySoundTone,
+} from "../lib/notifySound";
 import { readStorage, writeStorage } from "../lib/storage";
 import type { ThemesSnapshot } from "../lib/themes";
 import type { ResolvedApproval } from "./approvals";
@@ -297,6 +303,12 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
+  /** An optional audio cue when a background thread needs you or finishes (Settings › General). */
+  notificationSound: boolean;
+  /** The synthesized tone played for notification audio cues. */
+  notificationSoundTone: NotifySoundTone;
+  /** Volume percentage (0–100) for notification audio cues. */
+  notificationSoundVolume: number;
   /** A recap at the top of a chat the user comes back to after a while (Settings › General). */
   chatRecaps: boolean;
   /** How long a chat goes unseen before that recap is due, in minutes. */
@@ -466,6 +478,9 @@ export const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
+  notificationSound: "rustcode.notificationSound",
+  notificationSoundTone: "rustcode.notificationSoundTone",
+  notificationSoundVolume: "rustcode.notificationSoundVolume",
   /** Kept from the while-you-were-away recap, so turning that off also turns chat recaps off. */
   chatRecaps: "rustcode.recapWhileAway",
   recapMinutes: "rustcode.recapMinutes",
@@ -538,6 +553,9 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
+  notificationSound: DEFAULT_NOTIFY_SOUND_ENABLED,
+  notificationSoundTone: DEFAULT_NOTIFY_SOUND_TONE,
+  notificationSoundVolume: DEFAULT_NOTIFY_SOUND_VOLUME,
   chatRecaps: true,
   recapMinutes: RECAP_MINUTES_DEFAULT,
   continueAfterLimit: true,

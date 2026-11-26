@@ -29,6 +29,7 @@ import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/hapt
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { pickFolder } from "../lib/native";
 import { NEXT_PROMPT_DEFAULT, nextPromptEnabled, setNextPrompt } from "../lib/nextPrompt";
+import { NOTIFY_SOUND_TONES, type NotifySoundTone, playNotificationSound } from "../lib/notifySound";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
 import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
@@ -54,6 +55,9 @@ import {
   setChatRecaps,
   setChatWidth,
   setDefaultCwd,
+  setNotificationSound,
+  setNotificationSoundTone,
+  setNotificationSoundVolume,
   setNotificationsBackgroundOnly,
   setRecapMinutes,
   setShowToolCalls,
@@ -134,6 +138,7 @@ import {
   Loading,
   Row,
   RowResets,
+  Select,
   SettingsHeaderActions,
   SettingsHeaderProvider,
   type SettingsPageMeta,
@@ -299,6 +304,9 @@ function GeneralPage() {
   const autoCompactThresholdValue = Number(autoCompactThreshold.value ?? AUTO_COMPACT_DEFAULT_THRESHOLD);
   const notifications = useApp((s) => s.systemNotifications);
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
+  const notificationSound = useApp((s) => s.notificationSound);
+  const soundTone = useApp((s) => s.notificationSoundTone);
+  const soundVolume = useApp((s) => s.notificationSoundVolume);
   const recap = useApp((s) => s.chatRecaps);
   const recapMinutes = useApp((s) => s.recapMinutes);
   const [tabFocus, setTabFocus] = useState(tabMovesFocus);
@@ -453,6 +461,70 @@ function GeneralPage() {
             onChange={setNotificationsBackgroundOnly}
           />
         </Row>
+        <Row
+          title="Notification sound"
+          reset={
+            notificationSound !== SETTINGS_DEFAULTS.notificationSound
+              ? () => setNotificationSound(SETTINGS_DEFAULTS.notificationSound)
+              : undefined
+          }
+          subtitle="Play a quiet tone when a background thread needs you or finishes."
+          hint="Follows the same focus and snooze rules as system notifications. An active thread on screen never chimes."
+        >
+          <Switch label="Notification sound" checked={notificationSound} onChange={setNotificationSound} />
+        </Row>
+        {notificationSound && (
+          <>
+            <Row
+              title="Sound tone"
+              reset={
+                soundTone !== SETTINGS_DEFAULTS.notificationSoundTone
+                  ? () => setNotificationSoundTone(SETTINGS_DEFAULTS.notificationSoundTone)
+                  : undefined
+              }
+              subtitle="A rising tone when a thread needs input, a softer cadence when a turn finishes."
+            >
+              <Select
+                label="Sound tone"
+                value={soundTone}
+                options={NOTIFY_SOUND_TONES.map((option) => ({ value: option.value, label: option.label }))}
+                onChange={(value) => {
+                  const next = value as NotifySoundTone;
+                  setNotificationSoundTone(next);
+                  void playNotificationSound(next, soundVolume, "attention");
+                }}
+              />
+              <Action
+                disabled={soundVolume === 0}
+                onClick={() => void playNotificationSound(soundTone, soundVolume, "attention")}
+              >
+                Preview
+              </Action>
+            </Row>
+            <Row
+              title="Sound volume"
+              reset={
+                soundVolume !== SETTINGS_DEFAULTS.notificationSoundVolume
+                  ? () => setNotificationSoundVolume(SETTINGS_DEFAULTS.notificationSoundVolume)
+                  : undefined
+              }
+              subtitle="Zero mutes notification sounds without changing your tone."
+            >
+              <Slider
+                label="Sound volume"
+                value={soundVolume}
+                min={0}
+                max={100}
+                step={5}
+                onCommit={(value) => {
+                  setNotificationSoundVolume(value);
+                  void playNotificationSound(soundTone, value, "finished");
+                }}
+                unit="%"
+              />
+            </Row>
+          </>
+        )}
         <Row
           title="Chat recaps"
           reset={recap ? undefined : () => setChatRecaps(SETTINGS_DEFAULTS.chatRecaps)}

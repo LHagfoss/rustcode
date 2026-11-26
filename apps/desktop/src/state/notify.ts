@@ -7,6 +7,13 @@
 // belongs to the app, not to the page.
 
 import { isTauri } from "../acp/transport";
+import {
+  cueForNotifyKind,
+  DEFAULT_NOTIFY_SOUND_TONE,
+  DEFAULT_NOTIFY_SOUND_VOLUME,
+  type NotifySoundTone,
+  playNotificationSound,
+} from "../lib/notifySound";
 import { shellCall } from "../lib/shell";
 
 /** What a thread has to tell the user about. */
@@ -119,6 +126,9 @@ export function createNotifyGate() {
 export interface NoticeState {
   systemNotifications: boolean;
   notificationsBackgroundOnly: boolean;
+  notificationSound?: boolean;
+  notificationSoundTone?: NotifySoundTone;
+  notificationSoundVolume?: number;
   selectedId: string | null;
   /** Threads asleep until a time; a caller reading only part of the state may leave it out. */
   snoozed?: Readonly<Record<string, number>>;
@@ -128,6 +138,18 @@ export interface NoticeState {
 export function contextOf(state: NoticeState, focused = windowFocused()): NotifyContext {
   return {
     enabled: state.systemNotifications,
+    backgroundOnly: state.notificationsBackgroundOnly,
+    windowFocused: focused,
+    onScreen: state.selectedId,
+    snoozed: state.snoozed,
+  };
+}
+
+/** The context for optional audio cues, sharing focus and snooze suppression with OS banners. */
+export function soundContextOf(state: NoticeState, focused = windowFocused()): NotifyContext {
+  const volume = state.notificationSoundVolume ?? DEFAULT_NOTIFY_SOUND_VOLUME;
+  return {
+    enabled: Boolean(state.notificationSound) && volume > 0,
     backgroundOnly: state.notificationsBackgroundOnly,
     windowFocused: focused,
     onScreen: state.selectedId,
@@ -189,6 +211,7 @@ export function windowFocused(): boolean {
 }
 
 const gate = createNotifyGate();
+const soundGate = createNotifyGate();
 
 /** The app's first moments replay what was already true: nothing there is news. */
 export const WARMUP_MS = 3_000;
@@ -206,13 +229,23 @@ export function warmingUp(now = Date.now(), since = startedAt): boolean {
  */
 export function notifyThread(event: NotifyEvent, state: NoticeState): void {
   if (warmingUp()) return;
-  const allowed = gate.take(event, contextOf(state));
+  const focused = windowFocused();
+  const allowed = gate.take(event, contextOf(state, focused));
   if (allowed) void show(allowed);
+  const audible = soundGate.take(event, soundContextOf(state, focused));
+  if (audible) {
+    void playNotificationSound(
+      state.notificationSoundTone ?? DEFAULT_NOTIFY_SOUND_TONE,
+      state.notificationSoundVolume ?? DEFAULT_NOTIFY_SOUND_VOLUME,
+      cueForNotifyKind(audible.kind),
+    );
+  }
 }
 
 /** Drops what threads the app no longer lists have already had said about them. */
 export function forgetThreads(threadIds: ReadonlySet<string>): void {
   gate.retain(threadIds);
+  soundGate.retain(threadIds);
 }
 
 /** Settings › Notifications asks whether the system takes these; asked once, on the first one. */
