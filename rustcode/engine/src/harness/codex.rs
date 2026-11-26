@@ -18,6 +18,9 @@
 //! | `collabAgentToolCall` | one subagent row per agent it starts (`collab_updates`) |
 //! | `mcpServer/elicitation/request` | MCP tool approval: accepted for `rustcode`, else `session/request_permission`; forms with fields declined |
 
+#[path = "codex_mcp.rs"]
+mod mcp;
+
 use super::rpc::{Incoming, RpcError, RpcPeer};
 use super::session::{Output, OutputSender, StartOptions};
 use super::{HarnessModel, ResolvedHarness, process::HarnessProcess};
@@ -189,13 +192,27 @@ fn access_policy(full_access: bool) -> (Value, &'static str) {
 /// The `config` overrides for `thread/start` and `thread/resume`: the orchestrator when the thread
 /// has one, and the workspace's own MCP servers, so a Codex thread runs the servers Settings · MCP
 /// shows. Codex takes a stdio server as `command`/`args`/`env` and a remote one as
-/// `url`/`http_headers` (docs/configuration.md).
-fn codex_config(options: &StartOptions) -> Option<Value> {
+/// `url`/`http_headers` (docs/configuration.md). A server Codex's own config defines with the
+/// other transport is left to Codex (`mcp`).
+fn codex_config(
+    options: &StartOptions,
+    own_servers: &HashMap<String, mcp::Transport>,
+) -> Option<Value> {
     let mut config = match &options.orchestrator {
         Some(launch) => launch.codex_config(),
         None => serde_json::Map::new().into(),
     };
     for server in &options.mcp {
+        if own_servers
+            .get(&server.name)
+            .is_some_and(|own| *own != mcp::Transport::of(server))
+        {
+            crate::dbg_log!(
+                "harness MCP: Codex defines '{}' with another transport; using Codex's own",
+                server.name
+            );
+            continue;
+        }
         let entry = match &server.url {
             Some(url) => serde_json::json!({ "url": url, "http_headers": server.headers }),
             None => serde_json::json!({
@@ -288,6 +305,14 @@ impl CodexAdapter {
         }
 
         let cwd_text = cwd.to_string_lossy().into_owned();
+        let own_servers = mcp::own_servers(
+            options
+                .account
+                .as_ref()
+                .map(super::config::HarnessAccount::resolved_dir)
+                .as_deref(),
+            &cwd,
+        );
         // Where it runs and how replies are formatted for RustCode's chat
         // (docs/output-style.md), where the skills are, and what Codex's own
         // sandbox denies on this platform: Codex appends it to its own
@@ -312,7 +337,7 @@ impl CodexAdapter {
             if let Some(model) = &options.model {
                 params["model"] = json!(model);
             }
-            if let Some(config) = codex_config(&options) {
+            if let Some(config) = codex_config(&options, &own_servers) {
                 params["config"] = config;
             }
             match peer
@@ -335,7 +360,7 @@ impl CodexAdapter {
                 if let Some(model) = &options.model {
                     params["model"] = json!(model);
                 }
-                if let Some(config) = codex_config(&options) {
+                if let Some(config) = codex_config(&options, &own_servers) {
                     params["config"] = config;
                 }
                 peer.request_within("thread/start", params, HANDSHAKE_TIMEOUT)
