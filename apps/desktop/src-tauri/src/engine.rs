@@ -11,8 +11,10 @@
 //! often it came back after a crash) is kept for Settings › Diagnostics
 //! (`diagnostics.rs`).
 
+use crate::engine_mux::{InboundDecision, OutboundDecision, RpcMux};
 use serde::Serialize;
-use std::collections::VecDeque;
+use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
@@ -122,7 +124,9 @@ const QUIT_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct Engine {
-    channel: Mutex<Option<Channel<EngineEvent>>>,
+    channels: Mutex<Vec<(String, Channel<EngineEvent>)>>,
+    mux: Mutex<RpcMux>,
+    open_engine: Mutex<Option<String>>,
     stdin: Mutex<Option<ChildStdin>>,
     child: Mutex<Option<Child>>,
     supervising: AtomicBool,
@@ -260,15 +264,33 @@ pub fn resolve_engine() -> PathBuf {
 
 impl Engine {
     fn emit(&self, event: EngineEvent) {
-        let guard = self.channel.lock().unwrap();
-        if let Some(channel) = guard.as_ref() {
-            let _ = channel.send(event);
+        let guard = self.channels.lock().unwrap();
+        if !guard.is_empty() {
+            for (_, channel) in guard.iter() {
+                let _ = channel.send(event.clone());
+            }
         } else if self.prestarted.load(Ordering::SeqCst) {
             let mut early = self.early.lock().unwrap();
             if early.len() < EARLY_MAX {
                 early.push(event);
             }
         }
+    }
+
+    fn emit_to(&self, window: &str, event: EngineEvent) {
+        let guard = self.channels.lock().unwrap();
+        if let Some((_, channel)) = guard.iter().find(|(label, _)| label == window) {
+            let _ = channel.send(event);
+        }
+    }
+
+    /// Selects the primary attached window, preferring `"main"` when attached.
+    pub fn primary_window(&self) -> Option<String> {
+        let guard = self.channels.lock().unwrap();
+        if guard.iter().any(|(label, _)| label == "main") {
+            return Some("main".to_owned());
+        }
+        guard.first().map(|(label, _)| label.clone())
     }
 
     /// Start the engine as the app launches, while the webview still loads, so
@@ -282,37 +304,69 @@ impl Engine {
         thread::spawn(move || engine.supervise());
     }
 
-    /// Attach the webview's channel and make sure an engine runs. A webview
-    /// reload attaches a new channel; the running engine gets a fresh `open`.
-    pub fn start(self: &Arc<Self>, channel: Channel<EngineEvent>) {
-        {
-            // Under the channel lock, so nothing the engine says slips between the early events and the channel.
-            let mut guard = self.channel.lock().unwrap();
+    /// Attach a window's channel and make sure an engine runs. A second window
+    /// attaches to the running engine without restarting it; a reload of the sole
+    /// window restarts the engine as before. Returns the current primary window label.
+    pub fn start(self: &Arc<Self>, window: &str, channel: Channel<EngineEvent>) -> Option<String> {
+        let (was_present, total_windows) = {
+            let mut guard = self.channels.lock().unwrap();
             for event in self.early.lock().unwrap().drain(..) {
                 let _ = channel.send(event);
             }
-            *guard = Some(channel);
-        }
+            let was_present =
+                if let Some(slot) = guard.iter_mut().find(|(label, _)| label == window) {
+                    slot.1 = channel;
+                    true
+                } else {
+                    guard.push((window.to_owned(), channel));
+                    false
+                };
+            (was_present, guard.len())
+        };
+        let primary = self.primary_window();
         self.stopping.store(false, Ordering::SeqCst);
         if self.prestarted.swap(false, Ordering::SeqCst) {
-            // The first page adopts the engine started at launch; its `open` was in the early events
-            // or is still to come.
-            return;
+            return primary;
         }
         if self.supervising.swap(true, Ordering::SeqCst) {
-            // Already running: hand the new page a clean engine (a reload: the web process may have died).
-            crate::update_log::record_webview(
-                "webview.reloaded",
-                "the page loaded again; the engine restarts for it",
-            );
-            self.restart();
-            return;
+            if was_present && total_windows == 1 {
+                crate::update_log::record_webview(
+                    "webview.reloaded",
+                    "the page loaded again; the engine restarts for it",
+                );
+                self.restart();
+                return primary;
+            }
+            if was_present {
+                self.mux.lock().unwrap().detach_window(window);
+            }
+            let open_path = self.open_engine.lock().unwrap().clone();
+            if let Some(engine_path) = open_path {
+                self.emit_to(
+                    window,
+                    EngineEvent::Open {
+                        engine: engine_path,
+                    },
+                );
+            }
+            return primary;
         }
         let engine = Arc::clone(self);
         thread::spawn(move || engine.supervise());
+        primary
     }
 
-    pub fn send(&self, line: &str) -> Result<(), String> {
+    /// Detaches a closed window from engine broadcasts and returns the new primary window.
+    pub fn detach(&self, window: &str) -> Option<String> {
+        self.channels
+            .lock()
+            .unwrap()
+            .retain(|(label, _)| label != window);
+        self.mux.lock().unwrap().detach_window(window);
+        self.primary_window()
+    }
+
+    fn write_stdin(&self, line: &str) -> Result<(), String> {
         let mut guard = self.stdin.lock().unwrap();
         let stdin = guard.as_mut().ok_or("The server is not running.")?;
         stdin
@@ -320,6 +374,93 @@ impl Engine {
             .and_then(|_| stdin.write_all(b"\n"))
             .and_then(|_| stdin.flush())
             .map_err(|e| format!("Could not write to the server: {e}"))
+    }
+
+    /// Routes one JSON-RPC line from `window` through the multiplexer to the engine.
+    /// Returns the resolved permission `rpc_id` when a window answered an approval prompt.
+    pub fn send(&self, window: &str, line: &str) -> Result<Option<Value>, String> {
+        let decision = self.mux.lock().unwrap().outbound(window, line);
+        match decision {
+            OutboundDecision::Forward(out) => {
+                self.write_stdin(&out)?;
+                Ok(None)
+            }
+            OutboundDecision::ReplyLocal { window, line } => {
+                self.emit_to(&window, EngineEvent::Line { line });
+                Ok(None)
+            }
+            OutboundDecision::QueueInit | OutboundDecision::Drop => Ok(None),
+            OutboundDecision::ForwardAndNotifyPermissionResolved { line, rpc_id } => {
+                self.write_stdin(&line)?;
+                Ok(Some(rpc_id))
+            }
+        }
+    }
+
+    fn emit_stdout_batch(&self, lines: Vec<String>) {
+        let primary = self.primary_window();
+        let targets: Vec<String> = self
+            .channels
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(label, _)| label.clone())
+            .collect();
+        if targets.is_empty() {
+            if self.prestarted.load(Ordering::SeqCst) {
+                let mut early = self.early.lock().unwrap();
+                if early.len() < EARLY_MAX {
+                    let event = if lines.len() == 1 {
+                        EngineEvent::Line {
+                            line: lines.into_iter().next().unwrap_or_default(),
+                        }
+                    } else {
+                        EngineEvent::Lines { lines }
+                    };
+                    early.push(event);
+                }
+            }
+            return;
+        }
+
+        let mut per_window: HashMap<String, Vec<String>> = HashMap::new();
+        {
+            let mut mux = self.mux.lock().unwrap();
+            for line in lines {
+                match mux.inbound(&line, primary.as_deref()) {
+                    InboundDecision::Broadcast(frame) => {
+                        for label in &targets {
+                            per_window
+                                .entry(label.clone())
+                                .or_default()
+                                .push(frame.clone());
+                        }
+                    }
+                    InboundDecision::Deliver(deliveries) => {
+                        for (label, frame) in deliveries {
+                            per_window.entry(label).or_default().push(frame);
+                        }
+                    }
+                }
+            }
+        }
+
+        let guard = self.channels.lock().unwrap();
+        for (label, mut batch) in per_window {
+            if batch.is_empty() {
+                continue;
+            }
+            let event = if batch.len() == 1 {
+                EngineEvent::Line {
+                    line: batch.pop().unwrap_or_default(),
+                }
+            } else {
+                EngineEvent::Lines { lines: batch }
+            };
+            if let Some((_, channel)) = guard.iter().find(|(name, _)| name == &label) {
+                let _ = channel.send(event);
+            }
+        }
     }
 
     /// The current process and the last exit, for Settings › Diagnostics.
@@ -454,6 +595,9 @@ impl Engine {
             run.recent_stderr.clear();
         }
         *self.child.lock().unwrap() = Some(child);
+        self.mux.lock().unwrap().reset();
+        let engine_path = path.display().to_string();
+        *self.open_engine.lock().unwrap() = Some(engine_path.clone());
         self.emit(EngineEvent::Log {
             line: format!(
                 "desktop: started {} {} (pid {pid})",
@@ -462,21 +606,14 @@ impl Engine {
             ),
         });
         self.emit(EngineEvent::Open {
-            engine: path.display().to_string(),
+            engine: engine_path,
         });
 
-        // The readers look the channel up per message: the engine may start before the page attaches.
         let engine = Arc::clone(self);
         let out = thread::spawn(move || {
             let mut reader = BufReader::with_capacity(256 * 1024, stdout);
-            while let Ok(Some(mut lines)) = read_batch(&mut reader) {
-                engine.emit(if lines.len() == 1 {
-                    EngineEvent::Line {
-                        line: lines.pop().unwrap_or_default(),
-                    }
-                } else {
-                    EngineEvent::Lines { lines }
-                });
+            while let Ok(Some(lines)) = read_batch(&mut reader) {
+                engine.emit_stdout_batch(lines);
             }
         });
         let engine = Arc::clone(self);
@@ -518,6 +655,8 @@ impl Engine {
         let _ = err.join();
         if self.generation.load(Ordering::SeqCst) == generation {
             self.stdin.lock().unwrap().take();
+            *self.open_engine.lock().unwrap() = None;
+            self.mux.lock().unwrap().reset();
         }
         Ok(Exit::of(status))
     }

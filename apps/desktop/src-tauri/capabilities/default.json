@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core APIs, the title row's drag and Windows' own window controls, the window's title a screen reader reads, text zoom, and the folder picker only.",
+  "description": "App windows: core APIs, the title row's drag and Windows' own window controls, the window's title a screen reader reads, text zoom, and the folder picker only.",
   "windows": [
-    "main"
+    "main",
+    "window-*"
   ],
   "permissions": [
     "core:default",

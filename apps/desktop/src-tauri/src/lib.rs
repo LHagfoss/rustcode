@@ -7,6 +7,7 @@ mod banner;
 mod crash_report;
 mod diagnostics;
 mod engine;
+mod engine_mux;
 mod git_review;
 mod hub;
 mod issue_report;
@@ -29,19 +30,37 @@ mod webview_watch;
 use engine::{Engine, EngineEvent};
 use std::sync::Arc;
 use tauri::ipc::Channel;
-use tauri::{Manager, RunEvent, State};
+use tauri::{Emitter, Manager, RunEvent, State};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 type EngineState = Arc<Engine>;
 
+/// Event emitted when any window answers an in-flight permission prompt.
+const PERMISSION_RESOLVED_EVENT: &str = "rustcode:permission-resolved";
+
 #[tauri::command(async)]
-fn engine_start(engine: State<'_, EngineState>, on_event: Channel<EngineEvent>) {
-    engine.start(on_event);
+fn engine_start(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    engine: State<'_, EngineState>,
+    on_event: Channel<EngineEvent>,
+) {
+    if let Some(primary) = engine.start(window.label(), on_event) {
+        let _ = app.emit(webview::PRIMARY_WINDOW_EVENT, primary);
+    }
 }
 
 #[tauri::command(async)]
-fn engine_send(engine: State<'_, EngineState>, line: String) -> Result<(), String> {
-    engine.send(&line)
+fn engine_send(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    engine: State<'_, EngineState>,
+    line: String,
+) -> Result<(), String> {
+    if let Some(rpc_id) = engine.send(window.label(), &line)? {
+        let _ = app.emit(PERMISSION_RESOLVED_EVENT, rpc_id);
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -159,6 +178,8 @@ pub fn run() {
             webview::display_info,
             webview::webview_blur,
             webview::window_theme,
+            webview::open_new_window,
+            webview::primary_window_label,
             crash_report::crash_report_status,
             crash_report::crash_report_set_enabled,
             crash_report::crash_report_send,
@@ -173,13 +194,21 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
                 const MINIMIZE_ID: &str = "minimize-window";
+                const NEW_WINDOW_ID: &str = "new-window";
                 let menu = Menu::default(app.handle())?;
                 let close_text = PredefinedMenuItem::close_window(app, None)?.text()?;
                 let minimize_text = PredefinedMenuItem::minimize(app, None)?.text()?;
                 let minimize =
                     MenuItem::with_id(app, MINIMIZE_ID, &minimize_text, true, None::<&str>)?;
+                let new_window =
+                    MenuItem::with_id(app, NEW_WINDOW_ID, "New Window", true, None::<&str>)?;
+                let mut added_new_window = false;
                 for item in menu.items()? {
                     if let Some(submenu) = item.as_submenu() {
+                        if submenu.text().ok().as_deref() == Some("File") {
+                            submenu.insert(&new_window, 0)?;
+                            added_new_window = true;
+                        }
                         for (position, child) in submenu.items()?.into_iter().enumerate().rev() {
                             if let Some(predefined) = child.as_predefined_menuitem() {
                                 let text = predefined.text()?;
@@ -193,12 +222,27 @@ pub fn run() {
                         }
                     }
                 }
+                if !added_new_window {
+                    for item in menu.items()? {
+                        let Some(submenu) = item.as_submenu() else {
+                            continue;
+                        };
+                        if submenu.text().ok().as_deref() == Some("Window") {
+                            submenu.insert(&new_window, 0)?;
+                            break;
+                        }
+                    }
+                }
                 app.set_menu(menu)?;
                 app.on_menu_event(|app, event| {
+                    if event.id() == NEW_WINDOW_ID {
+                        let _ = webview::create_window(app);
+                        return;
+                    }
                     if event.id() != MINIMIZE_ID {
                         return;
                     }
-                    if let Some(window) = app.get_webview_window("main") {
+                    if let Some(window) = webview::primary_window(app) {
                         let _ = window.minimize();
                     }
                 });

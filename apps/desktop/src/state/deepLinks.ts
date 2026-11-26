@@ -16,6 +16,7 @@ import {
   toast,
   useApp,
 } from "./store";
+import { isPrimaryWindow } from "./windowSync";
 
 export function openDeepLink(raw: string): void {
   const link = parseDeepLink(raw);
@@ -103,7 +104,7 @@ export function startDeepLinks(): () => void {
   const unsubscribe = useApp.subscribe(drain);
   void (async () => {
     stop = await listen<string[]>("deep-link://new-url", (event) => {
-      receive(event.payload);
+      if (document.hasFocus() || isPrimaryWindow()) receive(event.payload);
     });
     if (!live) {
       stop();

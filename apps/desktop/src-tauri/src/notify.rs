@@ -3,7 +3,7 @@
 //! the app, not the webview, owns the permission the system asks for.
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 /// What a click on one of those notifications emits, with the thread's id: the
@@ -70,12 +70,11 @@ pub fn register(handle: &AppHandle) {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-        if !thread.is_empty() {
+        if let Some(window) = crate::webview::focus_any_window(&app) {
+            if !thread.is_empty() {
+                let _ = window.emit(OPEN_EVENT, thread);
+            }
+        } else if !thread.is_empty() {
             let _ = app.emit(OPEN_EVENT, thread);
         }
     };

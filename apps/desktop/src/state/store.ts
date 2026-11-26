@@ -318,6 +318,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { noticeOnlyHistory } from "./topLevel";
+import { isPrimaryWindow } from "./windowSync";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
 
 export {
@@ -921,18 +922,14 @@ async function handshake(): Promise<void> {
     restoreQueuedThreads();
     void subscribePullWatches(conn).catch(() => {});
     void subscribeWorkflows(conn).catch(() => {});
-    // Messages written now and sent later come back the same way; one whose time passed while the
-    // app was closed goes out once its thread is open.
-    restoreScheduled();
-    // The link book now lives in the data store; local storage is the first paint only. Once the
-    // store's copy is in, a child result nobody was told about (a window closed with its wake still
-    // queued) is due: the queue is memory, the book is not, so the wake is read back from it here.
-    void syncLinkBook().then(() => wakeTick());
+    if (isPrimaryWindow()) {
+      restoreScheduled();
+      void syncLinkBook().then(() => wakeTick());
+    }
     const selected = get().selectedId;
     if (selected) void openThread(selected);
-    if (connection === conn) void resumeInterrupted(interrupted);
-    // Waits survive a restart, and one may have come due while the app was closed.
-    if (connection === conn) {
+    if (connection === conn && isPrimaryWindow()) void resumeInterrupted(interrupted);
+    if (connection === conn && isPrimaryWindow()) {
       syncWaitTimers();
       void continueDueThreads();
       void continueInternetThreads();

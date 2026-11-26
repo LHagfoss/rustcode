@@ -100,6 +100,7 @@ import { sessionById } from "./threadStatus";
 import { userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
 import { advertisedCommands, harnessOf } from "./viewActions";
+import { broadcastTurnFinished, broadcastTurnStarted } from "./windowSync";
 
 // Sending a prompt and stopping a turn (runPrompt, cancel, stopNow), the session config options,
 // and moving a thread to another harness when it hits a limit. Split out of store.ts, which
@@ -248,6 +249,7 @@ export async function runPrompt(
   // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
   // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
   // follows it, which on a fast harness is the whole rest of the turn's first frame.
+  const startedAt = Date.now();
   updateThread(id, (t) =>
     options.autoCompact
       ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
@@ -316,6 +318,7 @@ export async function runPrompt(
         ...(options.autoCompact ? { autoCompact: true } : {}),
       },
     };
+    if (!options.autoCompact) broadcastTurnStarted(id, shown, startedAt);
     const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
     const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;
@@ -347,11 +350,13 @@ export async function runPrompt(
     failure = readableTurnError(failure, contextPercent(useApp.getState().threads[id]?.usage));
   // A Stop in flight ends with the turn it stopped, and says how it ended.
   settleStop(id, "ended", outcome);
+  const finishedAt = Date.now();
   updateThread(id, (t) => ({
-    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...requeueSteers(finishTurn(t, outcome, finishedAt, failure, options.autoCompact), unused),
     ...(options.requestedCompaction && previousQueueHold ? { queueHeld: true } : {}),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
+  if (!options.autoCompact) broadcastTurnFinished(id, outcome, finishedAt, failure);
   if (options.requestedCompaction) {
     updateThread(id, (t) => settleCompaction(t, null));
     requestedCompactionEnded(id);

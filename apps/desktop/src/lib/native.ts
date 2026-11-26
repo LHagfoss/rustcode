@@ -15,6 +15,16 @@ export function openExternal(url: string): void {
   else window.open(url, "_blank", "noopener");
 }
 
+/** Opens an additional RustCode window connected to the same local engine. */
+export async function openNewWindow(): Promise<string | null> {
+  if (isTauri()) return invoke<string>("open_new_window");
+  if (typeof window !== "undefined") {
+    window.open(window.location.href, "_blank", "noopener");
+    return "browser";
+  }
+  return null;
+}
+
 /** A folder picker; in the browser, a prompt for a path. */
 export async function pickFolder(start?: string): Promise<string | null> {
   if (isTauri()) {

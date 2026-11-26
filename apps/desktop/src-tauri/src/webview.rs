@@ -22,7 +22,61 @@
 //! a system that rewrites the words is noise.
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
+
+/// Event emitted when the primary app window changes after an attach or close.
+pub const PRIMARY_WINDOW_EVENT: &str = "window:primary";
+
+/// Logical offset applied to newly opened secondary windows so they cascade visibly.
+const CASCADE_OFFSET: f64 = 28.0;
+
+static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(2);
+
+/// What closing a window should do given the OS and how many windows are visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseAction {
+    Hide,
+    Close,
+}
+
+/// Generates a stable label for an additional app window.
+pub(crate) fn next_window_label(counter: u64) -> String {
+    format!("window-{counter}")
+}
+
+/// Decides whether closing a window should hide it (macOS last visible window) or close it.
+pub(crate) fn close_action(is_macos: bool, visible_windows: usize) -> CloseAction {
+    if is_macos && visible_windows <= 1 {
+        CloseAction::Hide
+    } else {
+        CloseAction::Close
+    }
+}
+
+/// Offsets a secondary window from the currently active window's outer position.
+pub(crate) fn cascade_position(x: f64, y: f64) -> (f64, f64) {
+    (x + CASCADE_OFFSET, y + CASCADE_OFFSET)
+}
+
+/// File name under app config dir where a window's last logical size is stored.
+pub(crate) fn window_size_file_name(label: &str) -> String {
+    if label == "main" {
+        return "window.json".to_owned();
+    }
+    let safe: String = label
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .collect();
+    if safe.is_empty() {
+        "window.json".to_owned()
+    } else if safe.starts_with("window-") {
+        format!("{safe}.json")
+    } else {
+        format!("window-{safe}.json")
+    }
+}
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -49,11 +103,11 @@ const MIN_SIZE: (f64, f64) = (640.0, 480.0);
 /// A window larger than any display is as wrong as one too small to use.
 const MAX_SIZE: (f64, f64) = (8192.0, 8192.0);
 
-fn size_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+fn size_file_for(app: &tauri::AppHandle, label: &str) -> Option<std::path::PathBuf> {
     app.path()
         .app_config_dir()
         .ok()
-        .map(|dir| dir.join("window.json"))
+        .map(|dir| dir.join(window_size_file_name(label)))
 }
 
 fn clamped(width: f64, height: f64) -> (f64, f64) {
@@ -77,26 +131,23 @@ fn read_size(path: &std::path::Path) -> Option<(f64, f64)> {
     Some(clamped(saved.width, saved.height))
 }
 
-fn saved_size(app: &tauri::AppHandle) -> Option<(f64, f64)> {
-    read_size(&size_file(app)?)
+fn saved_size_for(app: &tauri::AppHandle, label: &str) -> Option<(f64, f64)> {
+    size_file_for(app, label)
+        .and_then(|path| read_size(&path))
+        .or_else(|| size_file_for(app, "main").and_then(|path| read_size(&path)))
 }
 
-/// Remember the window's size for the next launch.
-pub fn remember_size(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
+fn write_window_size(app: &tauri::AppHandle, file_label: &str, window: &tauri::WebviewWindow) {
     let Ok(size) = window.inner_size() else {
         return;
     };
-    // Logical points, so a window moved between displays with different scales keeps its shape.
     let scale = window.scale_factor().unwrap_or(1.0);
     let (width, height) = clamped(
         f64::from(size.width) / scale,
         f64::from(size.height) / scale,
     );
     let (Some(path), Ok(text)) = (
-        size_file(app),
+        size_file_for(app, file_label),
         serde_json::to_string(&WindowSize { width, height }),
     ) else {
         return;
@@ -104,14 +155,60 @@ pub fn remember_size(app: &tauri::AppHandle) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    // A failed write only loses the remembered size.
     let _ = std::fs::write(path, text);
 }
 
-/// Builds the main window from its tauri.conf.json entry, on a web view
-/// configuration that renders at the display's full rate, at the size it last had.
-pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
-    let config = app
+/// Remember a specific window's size for the next launch.
+pub fn remember_size_for(app: &tauri::AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    write_window_size(app, label, &window);
+    if label != "main" && app.get_webview_window("main").is_none() {
+        write_window_size(app, "main", &window);
+    }
+}
+
+fn visible_window_count(app: &tauri::AppHandle) -> usize {
+    app.webview_windows()
+        .values()
+        .filter(|window| window.is_visible().unwrap_or(true))
+        .count()
+}
+
+fn any_other_window_focused(app: &tauri::AppHandle, except: &str) -> bool {
+    app.webview_windows()
+        .iter()
+        .any(|(label, window)| label != except && window.is_focused().unwrap_or(false))
+}
+
+/// Returns the focused window if any, else `"main"`, else any open app window.
+pub fn primary_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let windows = app.webview_windows();
+    if let Some(focused) = windows
+        .values()
+        .find(|window| window.is_focused().unwrap_or(false))
+    {
+        return Some(focused.clone());
+    }
+    if let Some(main) = windows.get("main") {
+        return Some(main.clone());
+    }
+    windows.into_values().next()
+}
+
+/// Shows, unminimizes and focuses the best target window, returning it when one exists.
+pub fn focus_any_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let window = primary_window(app)?;
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    Some(window)
+}
+
+/// Builds an app window from the main window's tauri.conf.json template with full refresh rate.
+pub fn build_window(app: &tauri::AppHandle, label: &str) -> tauri::Result<tauri::WebviewWindow> {
+    let mut config = app
         .config()
         .app
         .windows
@@ -119,11 +216,19 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         .find(|w| w.label == "main")
         .cloned()
         .unwrap_or_default();
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
-    if let Some((width, height)) = saved_size(app.handle()) {
+    config.label = label.to_owned();
+    config.create = false;
+    let anchor = (label != "main").then(|| primary_window(app)).flatten();
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app, &config)?;
+    if let Some((width, height)) = saved_size_for(app, label) {
         builder = builder.inner_size(width, height);
     }
-    // Before the web view exists: WebKit reads the system's text helpers when it creates an editor.
+    if let Some((anchor_window, pos)) = anchor.and_then(|w| w.outer_position().ok().map(|p| (w, p)))
+    {
+        let scale = anchor_window.scale_factor().unwrap_or(1.0);
+        let (x, y) = cascade_position(f64::from(pos.x) / scale, f64::from(pos.y) / scale);
+        builder = builder.position(x, y);
+    }
     #[cfg(target_os = "macos")]
     macos::quiet_text_helpers();
     #[cfg(target_os = "macos")]
@@ -132,38 +237,72 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         None => builder,
     };
     let window = builder.build()?;
-    // Closing the window is the last chance to remember its size. On macOS it only hides the
-    // window: the app stays in the Dock with its turns running, and `show_main_window` brings it
-    // back. Cmd+Q does not pass through here (it ends the app directly), so it still quits.
-    let handle = app.handle().clone();
+    let handle = app.clone();
+    let window_label = label.to_owned();
     window.on_window_event(move |event| {
-        // Paired machines retry sooner while someone is looking at the window.
         if let tauri::WindowEvent::Focused(focused) = event {
-            if let Some(machines) = handle.try_state::<std::sync::Arc<crate::machines::Machines>>()
-            {
-                machines.set_foreground(*focused);
+            if let Some(machines) = handle.try_state::<Arc<crate::machines::Machines>>() {
+                let foreground = *focused || any_other_window_focused(&handle, &window_label);
+                machines.set_foreground(foreground);
             }
         }
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            remember_size(&handle);
-            if cfg!(target_os = "macos") {
+            remember_size_for(&handle, &window_label);
+            let visible = visible_window_count(&handle);
+            if close_action(cfg!(target_os = "macos"), visible) == CloseAction::Hide {
                 api.prevent_close();
-                if let Some(window) = handle.get_webview_window("main") {
+                if let Some(window) = handle.get_webview_window(&window_label) {
                     let _ = window.hide();
                 }
+            }
+        }
+        if let tauri::WindowEvent::Destroyed = event {
+            let next_primary = handle
+                .try_state::<Arc<crate::engine::Engine>>()
+                .and_then(|engine| engine.detach(&window_label));
+            if let Some(primary) = next_primary {
+                let _ = handle.emit(PRIMARY_WINDOW_EVENT, primary);
             }
         }
     });
     Ok(window)
 }
 
-/// Shows the main window again and focuses it: the Dock icon was clicked, a second launch or a
-/// `rustcode://` link arrived. Closing only hides it on macOS, so there it always still exists.
+/// Builds the initial main window at startup.
+pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    build_window(app.handle(), "main")
+}
+
+/// Opens a new additional window connected to the same local engine and focuses it.
+pub fn create_window(app: &tauri::AppHandle) -> Result<String, String> {
+    let mut label = next_window_label(NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed));
+    while app.get_webview_window(&label).is_some() {
+        label = next_window_label(NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed));
+    }
+    let window = build_window(app, &label).map_err(|error| error.to_string())?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(label)
+}
+
+/// Command to open an additional RustCode app window.
+#[tauri::command]
+pub fn open_new_window(app: tauri::AppHandle) -> Result<String, String> {
+    create_window(&app)
+}
+
+/// Returns the label of the current primary window attached to the local engine.
+#[tauri::command]
+pub fn primary_window_label(
+    engine: tauri::State<'_, Arc<crate::engine::Engine>>,
+) -> Option<String> {
+    engine.primary_window()
+}
+
+/// Shows an existing window (preferring focused or main) or recreates main when none exist.
 pub fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+    if focus_any_window(app).is_none() {
+        let _ = build_window(app, "main");
     }
 }
 
@@ -214,7 +353,11 @@ pub fn window_theme(window: tauri::WebviewWindow, mode: Option<String>) {
 
 /// Save the window's size on quit too, for a quit that does not come from closing the window.
 pub fn remember_size_on_exit(handle: &tauri::AppHandle) {
-    remember_size(handle);
+    if handle.get_webview_window("main").is_some() {
+        remember_size_for(handle, "main");
+    } else if let Some(window) = primary_window(handle) {
+        write_window_size(handle, "main", &window);
+    }
 }
 
 /// The display's refresh rate, Low Power Mode and the web view's frame-rate preference.
@@ -497,5 +640,22 @@ mod tests {
         assert!(blurs(|key| {
             (key == "WEBKIT_DISABLE_DMABUF_RENDERER").then(|| "1".to_string())
         }));
+    }
+
+    #[test]
+    fn closing_last_macos_window_hides_while_extra_windows_close() {
+        assert_eq!(close_action(true, 1), CloseAction::Hide);
+        assert_eq!(close_action(true, 0), CloseAction::Hide);
+        assert_eq!(close_action(true, 2), CloseAction::Close);
+        assert_eq!(close_action(false, 1), CloseAction::Close);
+        assert_eq!(close_action(false, 2), CloseAction::Close);
+    }
+
+    #[test]
+    fn secondary_window_labels_sizes_and_cascade_positions_are_stable() {
+        assert_eq!(next_window_label(2), "window-2");
+        assert_eq!(window_size_file_name("main"), "window.json");
+        assert_eq!(window_size_file_name("window-2"), "window-2.json");
+        assert_eq!(cascade_position(100.0, 80.0), (128.0, 108.0));
     }
 }

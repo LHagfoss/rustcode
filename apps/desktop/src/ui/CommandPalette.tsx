@@ -8,6 +8,7 @@
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { modelName, projectName } from "../acp/types";
+import { openNewWindow } from "../lib/native";
 import { copyPromptLink, copyThreadLink } from "../state/deepLinks";
 import { PREF, usePref, useSidebarSort } from "../state/sidebarPrefs";
 import {
@@ -39,6 +40,7 @@ import {
   CircleDashed,
   Columns3,
   CornerDownLeft,
+  ExternalLink,
   Eye,
   FileDiff,
   Settings as Gear,
@@ -127,6 +129,15 @@ export function baseActions(): PaletteAction[] {
       icon: SquarePen,
       keys: shortcutHint("new-thread"),
       run: () => startNewThreadFromContext(),
+    },
+    {
+      id: "new-window",
+      label: "New window",
+      detail: "Open another RustCode window",
+      icon: ExternalLink,
+      keys: shortcutHint("new-window") || undefined,
+      words: "open window multi monitor side by side",
+      run: () => void openNewWindow(),
     },
     ...harnesses
       .filter((h) => h.id !== (s.harnesses?.default.harness ?? "rustcode"))

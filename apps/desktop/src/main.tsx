@@ -18,6 +18,7 @@ import {
 import { startFleetSync } from "./state/fleet";
 import { startMachines } from "./state/machines";
 import * as store from "./state/store";
+import { startWindowSync } from "./state/windowSync";
 import { Recoverable } from "./ui/Recover";
 
 // The OS look (fonts, glass, motion; docs/design.md › Platforms), before the first render.
@@ -76,7 +77,8 @@ if (catalog) {
 if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("transport") === "perf")
   Object.assign(window, { __rustcode: store });
 
-if (!catalog)
+if (!catalog) {
+  startWindowSync();
   void defaultTransport().then(async (transport) => {
     await store.connect(transport);
     // The other computers this app is paired with (Settings › Machines): their own supervisors.
@@ -84,6 +86,7 @@ if (!catalog)
     // Names, versions and last-seen times of every computer the pairings reach (state/fleet.ts).
     startFleetSync();
   });
+}
 
 // `?queuePreview` in a dev browser with the mock: a thread's queue, for screenshots (state/queuePreview.ts).
 if (import.meta.env.DEV) void import("./state/queuePreview").then((m) => m.installQueuePreview());

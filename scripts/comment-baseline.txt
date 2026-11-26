@@ -14,7 +14,7 @@
 10 apps/desktop/scripts/release-assets.ts
 2 apps/desktop/scripts/settings-perf.ts
 2 apps/desktop/src-tauri/src/diagnostics.rs
-9 apps/desktop/src-tauri/src/engine.rs
+4 apps/desktop/src-tauri/src/engine.rs
 1 apps/desktop/src-tauri/src/hub.rs
 16 apps/desktop/src-tauri/src/lib.rs
 9 apps/desktop/src-tauri/src/links.rs
@@ -29,7 +29,7 @@
 1 apps/desktop/src-tauri/src/threads.rs
 65 apps/desktop/src-tauri/src/updater.rs
 3 apps/desktop/src-tauri/src/url_scheme.rs
-16 apps/desktop/src-tauri/src/webview.rs
+9 apps/desktop/src-tauri/src/webview.rs
 20 apps/desktop/src/App.tsx
 2 apps/desktop/src/acp/jsonrpc.ts
 12 apps/desktop/src/acp/mock.machines.test.ts
@@ -410,7 +410,7 @@
 8 apps/desktop/src/state/stopTrace.store.test.ts
 7 apps/desktop/src/state/stopTrace.ts
 387 apps/desktop/src/state/store.test.ts
-105 apps/desktop/src/state/store.ts
+99 apps/desktop/src/state/store.ts
 13 apps/desktop/src/state/streamRenders.test.ts
 4 apps/desktop/src/state/themeActions.ts
 41 apps/desktop/src/state/thread.test.ts
