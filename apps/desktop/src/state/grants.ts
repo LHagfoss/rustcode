@@ -30,6 +30,36 @@ export function parseGrants(value: unknown): TimedGrant[] {
   });
 }
 
+/** The sites each thread holds a browser grant for, by thread id: "staging.example.com". */
+export type BrowserGrants = Record<string, string[]>;
+
+/** The id a revoke names to drop a thread's browser grants and close its browser. */
+export function browserGrantId(threadId: string): string {
+  return `browser:${threadId}`;
+}
+
+/** `_rustcode/permissions`' `browser` list, by thread. An engine without it lists none. */
+export function parseBrowserGrants(value: unknown): BrowserGrants {
+  const grants: BrowserGrants = {};
+  for (const item of arr(obj(value)?.browser)) {
+    const row = obj(item);
+    const threadId = str(row?.sessionId);
+    const hosts = arr(row?.hosts).flatMap((host) => {
+      const text = str(host);
+      return text ? [text] : [];
+    });
+    if (threadId && hosts.length) grants[threadId] = hosts;
+  }
+  return grants;
+}
+
+/** What a thread's chip says while it holds a grant: "Browser: staging.example.com", "+1" for more. */
+export function browserChipLabel(hosts: readonly string[] | undefined): string | null {
+  if (!hosts?.length) return null;
+  const more = hosts.length > 1 ? ` +${hosts.length - 1}` : "";
+  return `Browser: ${hosts[0]}${more}`;
+}
+
 /** How long a grant still allows: "42m", "58s", "1h 5m" once it runs longer than an hour (never). */
 export function grantRemaining(grant: TimedGrant, now = Date.now()): string {
   const seconds = Math.max(0, grant.expiresAt - Math.floor(now / 1000));
