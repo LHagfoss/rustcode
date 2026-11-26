@@ -23,6 +23,7 @@ mod memory;
 mod mirror;
 pub(crate) mod outside;
 mod permissions;
+mod ports;
 mod presence;
 mod preview;
 mod project_relocate;

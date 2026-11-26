@@ -61,6 +61,7 @@ import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { useThreadStatus } from "./Status";
+import { ThreadPortsChip } from "./ThreadPorts";
 import { ThreadTitle } from "./ThreadTitle";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 
@@ -224,6 +225,7 @@ function Header({
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
           <RemoteThreadIndicator sessionId={thread?.id} />
           {thread && <BrowserGrantChip threadId={thread.id} />}
+          {thread && !machineHost && <ThreadPortsChip cwd={thread.cwd} />}
         </>
       }
       right={right.length ? right : undefined}

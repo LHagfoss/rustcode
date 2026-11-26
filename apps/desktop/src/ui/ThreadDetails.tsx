@@ -41,6 +41,7 @@ import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
 import { useStoredTurns, withStoredTurns } from "./storedTurns";
+import { ThreadPortsSection } from "./ThreadPorts";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
 import { contextTone, costTotal, threadBilling, threadTotals, turnCost } from "./threadTotals";
@@ -221,6 +222,7 @@ export function ThreadDetails() {
         )}
       </div>
       <WorktreeScriptsSection cwd={host ? undefined : thread.cwd} />
+      <ThreadPortsSection cwd={host ? undefined : thread.cwd} />
       {pullsOn && (
         <PullsSection
           cwd={worktree?.repo || thread.cwd}
