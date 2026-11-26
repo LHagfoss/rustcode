@@ -51,38 +51,6 @@ pub const LOOP_TIMEOUT: Duration = Duration::from_secs(25 * 60);
 /// is the run's output (`{"thread_id": …}`), so the app links each run to it.
 /// A run the closed app could not take is cancelled, not failed: it says why
 /// and does not count toward pausing the Loop.
-/// A `workflow` job run's outcome: the workflow run's own status, its thread
-/// and run id in the output so the run row links both.
-pub(crate) fn workflow_outcome(
-    end: crate::orchestration::local_threads::job_workflow::WorkflowRunEnd,
-) -> RunOutcome {
-    use crate::orchestration::local_threads::job_workflow::WorkflowRunEnd;
-    let (thread_id, run_id, status, error) = match end {
-        WorkflowRunEnd::NotRun(end) => return loop_outcome(end),
-        WorkflowRunEnd::Settled {
-            thread_id,
-            run_id,
-            status,
-            error,
-        } => (thread_id, run_id, status, error),
-    };
-    let output = Some(
-        serde_json::json!({ "thread_id": thread_id, "run_id": run_id, "status": status })
-            .to_string(),
-    );
-    match status.as_str() {
-        "done" => RunOutcome::Succeeded {
-            summary: "The workflow run finished".into(),
-            output,
-        },
-        "cancelled" => RunOutcome::Cancelled { output },
-        _ => bounded(RunOutcome::Permanent {
-            error: error.unwrap_or_else(|| format!("the workflow run ended as {status}")),
-            output,
-        }),
-    }
-}
-
 pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd) -> RunOutcome {
     use crate::orchestration::local_threads::LoopRunEnd;
     let thread =
@@ -137,6 +105,38 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
         LoopRunEnd::Cancelled { thread_id } => RunOutcome::Cancelled {
             output: thread(thread_id),
         },
+    }
+}
+
+/// A `workflow` job run's outcome: the workflow run's own status, its thread
+/// and run id in the output so the run row links both.
+pub(crate) fn workflow_outcome(
+    end: crate::orchestration::local_threads::job_workflow::WorkflowRunEnd,
+) -> RunOutcome {
+    use crate::orchestration::local_threads::job_workflow::WorkflowRunEnd;
+    let (thread_id, run_id, status, error) = match end {
+        WorkflowRunEnd::NotRun(end) => return loop_outcome(end),
+        WorkflowRunEnd::Settled {
+            thread_id,
+            run_id,
+            status,
+            error,
+        } => (thread_id, run_id, status, error),
+    };
+    let output = Some(
+        serde_json::json!({ "thread_id": thread_id, "run_id": run_id, "status": status })
+            .to_string(),
+    );
+    match status.as_str() {
+        "done" => RunOutcome::Succeeded {
+            summary: "The workflow run finished".into(),
+            output,
+        },
+        "cancelled" => RunOutcome::Cancelled { output },
+        _ => bounded(RunOutcome::Permanent {
+            error: error.unwrap_or_else(|| format!("the workflow run ended as {status}")),
+            output,
+        }),
     }
 }
 
@@ -247,10 +247,11 @@ impl JobExecutor for ActionExecutor {
                         (&mut action, context.run.input.as_deref())
                     {
                         let started = super::webhook::Delivery::from_input(input);
-                        *args = crate::orchestration::local_threads::job_workflow::args_with_delivery(
-                            args,
-                            Some(&started),
-                        );
+                        *args =
+                            crate::orchestration::local_threads::job_workflow::args_with_delivery(
+                                args,
+                                Some(&started),
+                            );
                     }
                     (action, Duration::ZERO, 1, LOOP_TIMEOUT, false)
                 }

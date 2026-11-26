@@ -46,8 +46,10 @@ import { matchProject, projectsOn } from "../state/projects";
 import { harnessesOn, loadMachineHarnesses, useApp } from "../state/store";
 import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import { openSettings } from "../state/viewActions";
+import { workflowArgsProblem } from "../state/workflowJobs";
 import { ChevronDown, ChevronRight, Trash2, Webhook } from "./icons";
 import { RunList } from "./JobRuns";
+import { LoopWorkflowFields } from "./LoopWorkflowFields";
 import { MachineFolderBrowser } from "./MachineFolderBrowser";
 import { CopyButton } from "./Markdown";
 import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
@@ -146,6 +148,8 @@ function draftOf(loop: Loop | null, project: string, duplicate = false): LoopDra
     webhook: duplicate ? false : loop.webhook,
     webhookEvents: loop.webhookEvents?.join(", "),
     machine: loop.machine,
+    workflow: loop.workflow,
+    args: loop.workflow && loop.args && Object.keys(loop.args).length ? JSON.stringify(loop.args) : undefined,
   };
 }
 
@@ -201,6 +205,11 @@ function onceInWords(at: Date, now = new Date()): string {
   if (at.toDateString() === tomorrow.toDateString()) return `Once, tomorrow at ${clock}`;
   return `Once, ${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} at ${clock}`;
 }
+
+const KINDS = [
+  { value: "prompt", label: "Prompt" },
+  { value: "workflow", label: "Workflow" },
+] as const;
 
 const TARGETS = [
   { value: "fresh", label: "New thread" },
@@ -550,13 +559,14 @@ export function LoopDialog({
   if (runEffort && !effortValues.includes(runEffort)) {
     effortOptions.push({ value: runEffort, label: effortLabel(runEffort) });
   }
+  const isWorkflow = draft.workflow !== undefined && !isHubDispatch;
   const ready =
     draft.name.trim() &&
-    draft.prompt.trim() &&
+    (isWorkflow ? draft.workflow?.trim() && !workflowArgsProblem(draft.args) : draft.prompt.trim()) &&
     draft.workspace &&
     (!isHubDispatch && !isRemoteHost ? true : absoluteOnAnyMachine(draft.workspace)) &&
     !cronError &&
-    (target === "fresh" || threadId);
+    (isWorkflow || target === "fresh" || threadId);
 
   const save = async (runAfter = false) => {
     if (!ready || saving) return;
@@ -566,13 +576,18 @@ export function LoopDialog({
       if (daemonRunningByHost?.[schedulerHost] === false) {
         await startScheduler(schedulerHost);
       }
-      const agent = threadId
-        ? {}
-        : { harness: runHarnessId, model: runModel ?? draft.model, effort: runEffort ?? undefined };
+      const agent =
+        threadId && !isWorkflow
+          ? {}
+          : { harness: runHarnessId, model: runModel ?? draft.model, effort: runEffort ?? undefined };
       const movedHost = Boolean(isEditing && loop && schedulerHost !== loop.host);
       const saved = await saveLoopResult(
         {
-          ...withRunAccount({ ...draft, ...agent, threadId }, runHarness?.id, runAccount),
+          ...withRunAccount(
+            { ...draft, ...agent, threadId: isWorkflow ? undefined : threadId },
+            runHarness?.id,
+            runAccount,
+          ),
           ...(movedHost ? { id: undefined } : {}),
           cron,
           once: once ?? undefined,
@@ -751,18 +766,40 @@ export function LoopDialog({
                           )}
                         </Field>
                       </div>
-                      <Field label="Prompt">
-                        <textarea
-                          value={draft.prompt}
-                          onChange={(e) => patch({ prompt: e.target.value })}
-                          placeholder="Check CI on main and tell me only if something broke."
-                          aria-label="Prompt"
-                          rows={3}
-                          {...noTextHelpers}
-                          className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
-                        />
-                      </Field>
                       {!isHubDispatch && (
+                        <Field label="Runs">
+                          <Segments
+                            label="Runs"
+                            value={isWorkflow ? "workflow" : "prompt"}
+                            options={[...KINDS]}
+                            onChange={(kind) =>
+                              patch({ workflow: kind === "workflow" ? (draft.workflow ?? "") : undefined })
+                            }
+                          />
+                        </Field>
+                      )}
+                      {isWorkflow ? (
+                        <LoopWorkflowFields
+                          workspace={draft.workspace}
+                          host={schedulerHost}
+                          workflow={draft.workflow ?? ""}
+                          args={draft.args}
+                          onChange={patch}
+                        />
+                      ) : (
+                        <Field label="Prompt">
+                          <textarea
+                            value={draft.prompt}
+                            onChange={(e) => patch({ prompt: e.target.value })}
+                            placeholder="Check CI on main and tell me only if something broke."
+                            aria-label="Prompt"
+                            rows={3}
+                            {...noTextHelpers}
+                            className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                          />
+                        </Field>
+                      )}
+                      {!isHubDispatch && !isWorkflow && (
                         <div className="flex flex-col gap-1">
                           <button
                             type="button"
@@ -973,7 +1010,7 @@ export function LoopDialog({
                       )}
                     </Section>
                     <Section title="How it runs">
-                      {!isHubDispatch && (
+                      {!isHubDispatch && !isWorkflow && (
                         <Field label="Each run">
                           <Segments
                             label="Each run"
@@ -1000,7 +1037,7 @@ export function LoopDialog({
                           </p>
                         </Field>
                       )}
-                      {target === "fresh" && (
+                      {(target === "fresh" || isWorkflow) && (
                         <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
                           <Field label="Harness">
                             <Select
@@ -1021,26 +1058,28 @@ export function LoopDialog({
                               />
                             </Field>
                           )}
-                          <Field label="Model">
-                            {models.length ? (
-                              <Select
-                                label="Model"
-                                value={runModel ?? ""}
-                                options={modelOptions}
-                                onChange={(model) => patch({ model, effort: "" })}
-                              />
-                            ) : (
-                              <input
-                                value={draft.model ?? ""}
-                                onChange={(e) => patch({ model: e.target.value, effort: "" })}
-                                placeholder="Model ID"
-                                aria-label="Model"
-                                {...noTextHelpers}
-                                className={cx(inputClass, "h-[26px] min-w-0")}
-                              />
-                            )}
-                          </Field>
-                          {effortOptions.length > 0 && (
+                          {!isWorkflow && (
+                            <Field label="Model">
+                              {models.length ? (
+                                <Select
+                                  label="Model"
+                                  value={runModel ?? ""}
+                                  options={modelOptions}
+                                  onChange={(model) => patch({ model, effort: "" })}
+                                />
+                              ) : (
+                                <input
+                                  value={draft.model ?? ""}
+                                  onChange={(e) => patch({ model: e.target.value, effort: "" })}
+                                  placeholder="Model ID"
+                                  aria-label="Model"
+                                  {...noTextHelpers}
+                                  className={cx(inputClass, "h-[26px] min-w-0")}
+                                />
+                              )}
+                            </Field>
+                          )}
+                          {!isWorkflow && effortOptions.length > 0 && (
                             <Field label="Effort">
                               <Select
                                 label="Effort"

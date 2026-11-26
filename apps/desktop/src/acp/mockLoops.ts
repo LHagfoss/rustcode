@@ -140,6 +140,10 @@ function seed(): JsonObject[] {
   ];
 }
 
+/** What `MockLoops` answers: the Jobs page's methods and its workflow picker's. */
+export const isLoopMethod = (method: string) =>
+  method.startsWith("_rustcode/loops/") || method === "_rustcode/workflows/saved";
+
 export class MockLoops {
   private loops: JsonObject[];
   private counter = 0;
@@ -178,6 +182,8 @@ export class MockLoops {
         return this.forget(str(params.id) ?? "");
       case "_rustcode/loops/start_daemon":
         return { daemonRunning: true, pid: 4242 };
+      case "_rustcode/workflows/saved":
+        return { names: ["nightly-triage", "release-check"] };
       default:
         return {};
     }
@@ -250,6 +256,8 @@ export class MockLoops {
       webhookEvents:
         params.webhook === true && Array.isArray(params.webhookEvents) ? params.webhookEvents : [],
       machine: str(params.machine) ?? null,
+      workflow: str(params.workflow) ?? null,
+      args: params.workflow ? (params.args ?? {}) : null,
       nextDueAt: (schedule as JsonObject).kind === "manual" ? null : ahead(4),
     };
     this.loops = existing

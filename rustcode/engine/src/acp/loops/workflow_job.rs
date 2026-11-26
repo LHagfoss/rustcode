@@ -116,7 +116,7 @@ pub(crate) fn saved(workspace: &str) -> Vec<String> {
             let name = path.file_stem()?.to_str()?.to_owned();
             (path.extension().and_then(|ext| ext.to_str()) == Some("js")
                 && crate::workflow::valid_name(&name).is_ok())
-                .then_some(name)
+            .then_some(name)
         })
         .collect();
     names.sort();
@@ -145,7 +145,13 @@ mod tests {
         let workspace = dir.path().to_str().unwrap();
         let job = super::super::job_from(request(workspace), "job-1", None).unwrap();
         assert_eq!(job.name, "Nightly triage");
-        let JobAction::Workflow { name, args, harness, .. } = &job.action else {
+        let JobAction::Workflow {
+            name,
+            args,
+            harness,
+            ..
+        } = &job.action
+        else {
             panic!("expected a workflow job, got {:?}", job.action);
         };
         assert_eq!(name, "triage");
@@ -166,7 +172,11 @@ mod tests {
         assert!(job_from(bad, "job-1", None).is_err());
         let mut bad = request(workspace);
         bad.args = json!([1]);
-        assert!(job_from(bad, "job-1", None).unwrap_err().contains("JSON object"));
+        assert!(
+            job_from(bad, "job-1", None)
+                .unwrap_err()
+                .contains("JSON object")
+        );
         let mut bad = request(workspace);
         bad.machine = Some("studio".into());
         assert!(job_from(bad, "job-1", None).unwrap_err().contains("studio"));

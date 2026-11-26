@@ -120,7 +120,10 @@ pub(crate) async fn run_workflow_thread(
             _ = tokio::time::sleep(POLL) => {}
         }
         let Some(summary) = crate::workflow::run_summary(&thread_id, &run_id) else {
-            return failed(Some(thread_id), format!("the workflow run {run_id} is gone"));
+            return failed(
+                Some(thread_id),
+                format!("the workflow run {run_id} is gone"),
+            );
         };
         if let Some(end) = settled(&summary) {
             let (status, error) = end;

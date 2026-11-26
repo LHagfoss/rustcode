@@ -1152,3 +1152,87 @@ fn a_delivery_prompt_names_its_event_before_the_fenced_body() {
         webhook_prompt("Fix CI", "plain")
     );
 }
+
+fn workflow_action() -> JobAction {
+    JobAction::Workflow {
+        name: "triage".into(),
+        workspace: "/recorded/project".into(),
+        args: json!({"label": "bug"}),
+        harness: Some("codex".into()),
+        account: None,
+        webhook: None,
+        webhook_events: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_webhook_workflow_run_gets_the_delivery_in_its_args() {
+    let (executor, backend) = executor(vec![success(json!({"run_id": "wf-1"}))]);
+    let mut ctx = context(workflow_action());
+    ctx.run.input = Some(
+        crate::daemon::webhook::Delivery::new(
+            Some("check_suite"),
+            Some("d-9"),
+            "{\"action\":\"completed\"}".into(),
+        )
+        .to_input(),
+    );
+    assert!(matches!(
+        executor.execute(ctx).await,
+        RunOutcome::Succeeded { .. }
+    ));
+    let calls = backend.calls.lock().unwrap();
+    let (JobAction::Workflow { args, name, .. }, session, _) = &calls[0] else {
+        panic!("expected a workflow action, got {:?}", calls[0].0);
+    };
+    assert_eq!(name, "triage");
+    assert_eq!(session, "test");
+    assert_eq!(args["label"], "bug");
+    assert_eq!(args["webhook"]["event"], "check_suite");
+    assert_eq!(args["webhook"]["delivery"], "d-9");
+    assert_eq!(args["webhook"]["body"]["action"], "completed");
+}
+
+#[tokio::test]
+async fn a_scheduled_workflow_run_keeps_its_args() {
+    let (executor, backend) = executor(vec![success(json!({"run_id": "wf-1"}))]);
+    executor.execute(context(workflow_action())).await;
+    assert_eq!(backend.calls.lock().unwrap()[0].0, workflow_action());
+}
+
+#[test]
+fn a_workflow_job_run_ends_with_the_workflow_run() {
+    use crate::orchestration::local_threads::{LoopRunEnd, job_workflow::WorkflowRunEnd};
+    let settled = |status: &str| WorkflowRunEnd::Settled {
+        thread_id: "t-1".into(),
+        run_id: "wf-1".into(),
+        status: status.into(),
+        error: None,
+    };
+    match workflow_outcome(settled("done")) {
+        RunOutcome::Succeeded { output, .. } => {
+            let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
+            assert_eq!(
+                output,
+                json!({"thread_id": "t-1", "run_id": "wf-1", "status": "done"})
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        workflow_outcome(settled("timed_out")),
+        RunOutcome::Permanent { error, .. } if error.contains("timed_out")
+    ));
+    assert!(matches!(
+        workflow_outcome(settled("cancelled")),
+        RunOutcome::Cancelled { .. }
+    ));
+    let missing = "no workflow named triage at /p/.rustcode/workflows/triage.js";
+    assert!(matches!(
+        workflow_outcome(WorkflowRunEnd::NotRun(LoopRunEnd::Failed {
+            thread_id: None,
+            error: missing.into(),
+        })),
+        RunOutcome::Permanent { error, .. } if error.contains("/p/.rustcode/workflows/triage.js")
+    ));
+}
