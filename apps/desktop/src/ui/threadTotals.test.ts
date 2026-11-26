@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { Harness } from "../acp/types";
 import type { TurnEntry } from "./overview";
-import { contextTone, threadTotals } from "./threadTotals";
+import { contextTone, costTotal, threadBilling, threadTotals } from "./threadTotals";
 
 const turn = (over: Partial<TurnEntry>): TurnEntry => ({
   id: "t",
@@ -37,5 +38,44 @@ describe("threadTotals", () => {
 
   test("warms the context meter as it fills", () => {
     expect([contextTone(10), contextTone(75), contextTone(95)]).toEqual(["accent", "warning", "danger"]);
+  });
+});
+
+describe("billing", () => {
+  const harness = {
+    id: "claude-code",
+    billing: "subscription",
+    accounts: [{ id: "work", name: "Work", config_dir: "~/.claude-work", auth: "ok", billing: "api" }],
+  } as unknown as Harness;
+  const usd = (n: number) => `$${n.toFixed(2)}`;
+
+  test("a thread takes its account's billing, else the default login's", () => {
+    expect(threadBilling(harness, "work")).toBe("api");
+    expect(threadBilling(harness, undefined)).toBe("subscription");
+    expect(threadBilling(harness, "gone")).toBe("unknown");
+    expect(threadBilling(undefined, undefined)).toBe("unknown");
+  });
+
+  test("a subscription thread shows API value, never Cost", () => {
+    const reported = costTotal({ usd: 3, estimated: false }, "subscription", usd);
+    expect(reported.label).toBe("API value");
+    expect(reported.value).toBe("$3.00");
+    expect(reported.tip).toContain("billed separately");
+    const estimated = costTotal({ usd: 1, estimated: true }, "subscription", usd);
+    expect(estimated.label).toBe("API value");
+    expect(estimated.value).toBe("~$1.00");
+    expect(estimated.tip).toContain("list price");
+  });
+
+  test("API and unknown billing keep Cost", () => {
+    expect(costTotal({ usd: 2, estimated: false }, "api", usd)).toEqual({
+      label: "Cost",
+      value: "$2.00",
+      tip: "As the harness reported it",
+    });
+    expect(costTotal({ usd: 2, estimated: true }, "unknown", usd).tip).toBe(
+      "Partly estimated from tokens at list price",
+    );
+    expect(costTotal({ estimated: false }, "subscription", usd).value).toBe("–");
   });
 });

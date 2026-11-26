@@ -877,11 +877,11 @@ fn snapshot_entry(
         "installed": detection.installed,
         "version": detection.version,
         "auth": detection.auth,
+        "billing": detect::billing::of_default(&harness.id),
         "login_command": harness.known.and_then(|known| known.login_command),
         "install_hint": harness.known.and_then(|known| known.install_hint),
         "capabilities": capabilities(harness),
         "models": models,
-        // The model and effort last chosen for a new thread on it.
         "last": last,
         "accounts": accounts,
         // How a named login is run, for a client that offers one: the variable
@@ -1042,13 +1042,13 @@ async fn account_rows(
         // whatever path it was written as: the app must set no
         // `CLAUDE_CONFIG_DIR`/`CODEX_HOME` for it.
         let own_dir = config::is_default_dir(&account.harness, &account.resolved_dir());
-        let name = account.display_name().to_owned();
         rows.entry(harness).or_default().push(json!({
             "id": account.id,
-            "name": name,
+            "name": account.display_name(),
             "config_dir": account.config_dir,
             "own_dir": own_dir,
             "auth": auth,
+            "billing": detect::billing::of(&account.harness, &account.resolved_dir(), own_dir),
         }));
     }
     rows

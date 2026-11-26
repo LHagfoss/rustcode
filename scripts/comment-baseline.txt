@@ -821,7 +821,7 @@
 17 rustcode/engine/src/harness/config.rs
 50 rustcode/engine/src/harness/detect.rs
 6 rustcode/engine/src/harness/handoff.rs
-80 rustcode/engine/src/harness/mod.rs
+79 rustcode/engine/src/harness/mod.rs
 8 rustcode/engine/src/harness/pi_extension.ts
 3 rustcode/engine/src/harness/pi_mcp.rs
 1 rustcode/engine/src/harness/pressure.rs

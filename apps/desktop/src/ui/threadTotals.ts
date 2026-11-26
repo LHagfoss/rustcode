@@ -1,4 +1,4 @@
-import type { SessionUsage } from "../acp/types";
+import type { Billing, Harness, SessionUsage } from "../acp/types";
 import { estimateUsd } from "../state/pricing";
 import { logTotals, type TurnEntry } from "./overview";
 
@@ -52,6 +52,38 @@ export function threadTotals(
     estimated ||= cost.estimated;
   }
   return { usd, estimated, workedMs, tokens };
+}
+
+/** How a thread's login is billed: its named account's, else the harness's default login's. */
+export function threadBilling(harness: Harness | undefined, account: string | undefined): Billing {
+  if (!harness) return "unknown";
+  if (account) return harness.accounts?.find((a) => a.id === account)?.billing ?? "unknown";
+  return harness.billing ?? "unknown";
+}
+
+/** The Cost total's label, value and tip. On a subscription the money is what the tokens would cost at API prices, not a bill. */
+export function costTotal(
+  totals: Pick<ThreadTotals, "usd" | "estimated">,
+  billing: Billing,
+  format: (usd: number) => string,
+): { label: string; value: string; tip: string } {
+  const subscription = billing === "subscription";
+  const label = subscription ? "API value" : "Cost";
+  if (totals.usd === undefined) return { label, value: "–", tip: "No cost reported or priced yet" };
+  const value = `${totals.estimated ? "~" : ""}${format(totals.usd)}`;
+  if (subscription) {
+    const tip = "What these tokens would cost at API prices. Your subscription is billed separately.";
+    return {
+      label,
+      value,
+      tip: totals.estimated ? `${tip} Partly estimated from tokens at list price.` : tip,
+    };
+  }
+  return {
+    label,
+    value,
+    tip: totals.estimated ? "Partly estimated from tokens at list price" : "As the harness reported it",
+  };
 }
 
 /** How full the context window is, as the meter's colour: calm, then a warning, then danger. */
