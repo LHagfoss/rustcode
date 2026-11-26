@@ -3,6 +3,7 @@
 // started it; the app lists a thread's runs, hears each change as a notification carrying the run's
 // summary, stops a run, and claims the one wake that tells the starting thread the run ended.
 
+import { parseRunUsage, type RunUsage } from "../state/workflowBudgets";
 import { arr, type Json, num, obj, str } from "./jsonrpc";
 
 export const WorkflowMethod = {
@@ -66,6 +67,8 @@ export interface WorkflowRun {
   woken: boolean;
   /** False for a run a restart left running that nothing drives yet. */
   driven: boolean;
+  /** What its workers spent so far, and which budget it reached. */
+  usage?: RunUsage;
 }
 
 const STATUSES: readonly WorkflowStatus[] = ["running", "done", "failed", "timed_out", "cancelled"];
@@ -147,6 +150,7 @@ export function parseWorkflowRun(value: Json | undefined): WorkflowRun | undefin
     hasResult: o.has_result === true,
     woken: o.woken === true,
     driven: o.driven === true,
+    usage: parseRunUsage(o.usage, o.budget) ?? undefined,
   };
 }
 

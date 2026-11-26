@@ -234,6 +234,8 @@ function localValues(): Record<ServerSettingKey, Json> {
     "workflow-call-budget": serverSetting("workflow-call-budget").default,
     "workflow-timeout-minutes": serverSetting("workflow-timeout-minutes").default,
     "workflow-kept-runs": serverSetting("workflow-kept-runs").default,
+    "workflow-token-budget": 0,
+    "workflow-cost-budget-usd": 0,
   };
 }
 

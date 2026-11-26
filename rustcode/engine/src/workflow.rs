@@ -17,6 +17,7 @@
 //! app reads a run's summary ([`run_summary`]), stops it and claims the one
 //! wake that tells the starting thread it ended ([`claim_wake`]).
 
+mod budget;
 mod driver;
 mod reply;
 mod run;
@@ -130,7 +131,7 @@ fn lowered(configured: Limits, args: &Value) -> Limits {
 }
 
 pub(crate) fn run_schema() -> Value {
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "script": {"type": "string", "minLength": 1, "maxLength": MAX_SCRIPT_BYTES, "description": "The workflow's JavaScript, run as the body of an async function: it may await and return a JSON value. Give this or name."},
@@ -142,7 +143,11 @@ pub(crate) fn run_schema() -> Value {
             "retry_run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Retry this thread's failed, timed-out or stopped run instead of starting one: finished calls are answered from the run, only failed or missing calls start workers. Give this instead of script or name"}
         },
         "additionalProperties": false
-    })
+    });
+    for (key, property) in budget::schema_properties() {
+        schema["properties"][key] = property;
+    }
+    schema
 }
 
 pub(crate) fn status_schema() -> Value {
@@ -177,6 +182,8 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             "concurrency",
             "call_budget",
             "timeout_minutes",
+            "token_budget",
+            "cost_budget_usd",
             "retry_run_id",
         ],
         STATUS_TOOL_NAME => &["run_id", "wait_ms"],
@@ -215,6 +222,7 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
     number("concurrency", MAX_CONCURRENCY)?;
     number("call_budget", MAX_CALL_BUDGET)?;
     number("timeout_minutes", MAX_TIMEOUT_MINUTES)?;
+    budget::validate(map)?;
     let text = |key: &str| match map.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.as_str())),
@@ -463,6 +471,7 @@ pub(crate) async fn answer(
 }
 
 /// Create a run in `store` and start it. The run id.
+#[cfg(test)]
 fn launch(
     store: Store,
     runner: Arc<dyn AgentRunner>,
@@ -472,7 +481,21 @@ fn launch(
     args: Value,
     limits: Limits,
 ) -> Result<String, String> {
-    let record = new_record(thread, name, args, limits);
+    launch_record(
+        store,
+        runner,
+        new_record(thread, name, args, limits),
+        source,
+    )
+}
+
+/// Create `record`'s run in `store` and start it. The run id.
+fn launch_record(
+    store: Store,
+    runner: Arc<dyn AgentRunner>,
+    record: RunRecord,
+    source: String,
+) -> Result<String, String> {
     store.create(&record, &source)?;
     store.prune(configured_kept_runs(setting_u64));
     let id = record.id.clone();
@@ -516,8 +539,11 @@ pub(crate) fn start(
     let store = Store::for_thread(thread)
         .ok_or_else(|| "this thread has no folder to keep a run in".to_owned())?;
     let limits = lowered(settings_limits(), args);
+    let budget = budget::lowered(budget::configured(crate::acp::settings::value), args);
     let script_args = args.get("args").cloned().unwrap_or(Value::Null);
-    let id = launch(store, runner, thread, name, source, script_args, limits)?;
+    let mut record = new_record(thread, name, script_args, limits);
+    record.budget = budget;
+    let id = launch_record(store, runner, record, source)?;
     announce(thread, &id);
     Ok(json!({
         "run_id": id,
@@ -526,6 +552,8 @@ pub(crate) fn start(
             "concurrency": limits.concurrency,
             "call_budget": limits.call_budget,
             "timeout_minutes": limits.timeout_secs / 60,
+            "token_budget": budget.tokens,
+            "cost_budget_usd": budget.cost_usd,
         },
         "note": "Read it with workflow_status (wait_ms waits for the end), stop it with stop_workflow. Its workers are threads nested under this one."
     })
@@ -984,6 +1012,11 @@ fn report(store: &Store, record: &RunRecord) -> Value {
         .skip(record.logs.len().saturating_sub(STATUS_LOG_LINES))
         .collect();
     let end = record.finished_at.unwrap_or_else(now_ms);
+    let worker_threads: Vec<String> = calls
+        .iter()
+        .filter_map(|call| call.session_id.clone())
+        .collect();
+    let (budget, usage) = budget::report(record.budget, &worker_threads);
     let mut answer = json!({
         "run_id": record.id,
         "status": record.status,
@@ -1003,6 +1036,8 @@ fn report(store: &Store, record: &RunRecord) -> Value {
             "done": count(CallState::Done),
             "failed": count(CallState::Failed),
         },
+        "budget": budget,
+        "usage": usage,
         "phases": phases,
         "workers": workers,
         "logs": logs,

@@ -237,7 +237,7 @@ orchestration, and then only a thread at Full access starts workers.
 
 ## Limits
 
-Four settings, read when a run starts (server settings, `settings.json`, with
+Six settings, read when a run starts (server settings, `settings.json`, with
 the usual defaults when unset):
 
 | Setting | Default | Most | What it limits |
@@ -246,9 +246,16 @@ the usual defaults when unset):
 | `workflow-call-budget` | 40 | 500 | Distinct `agent()` calls in a run's whole life. A replayed call is not charged again. The call that goes over rejects in the script. |
 | `workflow-timeout-minutes` | 60 | 1440 | How long a run may take, counted from each (re)start. When it passes, the run is `timed_out`, its waits stop and its unfinished workers are interrupted. |
 | `workflow-kept-runs` | 20 | 200 | Settled runs a thread keeps. When a run starts, older settled runs past this count are deleted; running runs are always kept. A listing names the newest 20. |
+| `workflow-token-budget` | 0 (none) | 10,000,000,000 | Input plus output tokens the run's workers' harnesses reported (the data store's `turns`). Once reached, the next fresh `agent()` call rejects with "the run reached its token budget"; running workers finish, nothing is interrupted. |
+| `workflow-cost-budget-usd` | 0 (none) | 100,000 | The same for the USD the workers' harnesses reported. Nothing prices a turn: a harness that reports no cost adds nothing. |
 
-`run_workflow`'s `concurrency`, `call_budget` and `timeout_minutes` can lower a
-run's limits, never raise them past the settings.
+`run_workflow`'s `concurrency`, `call_budget`, `timeout_minutes`,
+`token_budget` and `cost_budget_usd` can lower a run's limits, never raise
+them past the settings; a budget the user left unset can be set by the call.
+Every `workflow_status` answer has `usage` (`tokens`, `cost_usd` when any
+worker reported one, `cost_reported_by` such as "1 of 3 workers") and
+`budget` (`tokens`, `cost_usd` and `reached`: `"tokens"`, `"cost"` or null);
+the run card shows the usage line.
 
 ## The app
 

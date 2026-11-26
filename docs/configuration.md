@@ -623,7 +623,7 @@ see › Switching a delegate at a limit) and `wake-batch-seconds` (default 60;
 how long an orchestrator waits to merge its delegates' finishes and stalls into
 one wake turn, 0 turns it off, see › Waking a parent thread), and the
 workflow limits `workflow-concurrency` (3), `workflow-call-budget` (40),
-`workflow-timeout-minutes` (60) and `workflow-kept-runs` (20)
+`workflow-timeout-minutes` (60), `workflow-kept-runs` (20), `workflow-token-budget` and `workflow-cost-budget-usd` (0, no limit)
 ([workflows.md](workflows.md)), and `orchestration-all-tools` (off by default;
 lists the project, loop management, workflow and worktree handoff tools to
 threads, see [orchestrator.md](orchestrator.md) › External harnesses as orchestrators). A client

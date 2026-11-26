@@ -127,7 +127,9 @@ export type ServerSettingKey =
   | "workflow-concurrency"
   | "workflow-call-budget"
   | "workflow-timeout-minutes"
-  | "workflow-kept-runs";
+  | "workflow-kept-runs"
+  | "workflow-token-budget"
+  | "workflow-cost-budget-usd";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
@@ -190,6 +192,8 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
   { key: "workflow-call-budget", label: "Workflow agent calls per run", type: "number", default: 40 },
   { key: "workflow-timeout-minutes", label: "Workflow run time limit", type: "number", default: 60 },
   { key: "workflow-kept-runs", label: "Finished workflow runs kept", type: "number", default: 20 },
+  { key: "workflow-token-budget", label: "Workflow run token budget", type: "number", default: 0 },
+  { key: "workflow-cost-budget-usd", label: "Workflow run cost budget", type: "number", default: 0 },
 ];
 
 /** The most each workflow limit may be set to (`rustcode/engine/src/workflow.rs`): the engine clamps to these. */

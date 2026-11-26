@@ -19,6 +19,7 @@ import { Switch } from "./primitives";
 import { RestartToApply } from "./RestartToApply";
 import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
 import { boolLabel, Group, Row, Slider } from "./settingsKit";
+import { WorkflowBudgetRows } from "./WorkflowBudgets";
 
 // A grouped nav on the left searches every row's title and keywords
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
@@ -105,6 +106,7 @@ function WorkflowsGroup() {
         hint="Counted from each start. When it passes, the run ends as timed out and its running workers are stopped."
         unit="minutes"
       />
+      <WorkflowBudgetRows />
       <WorkflowLimitRow
         setting="workflow-kept-runs"
         title="Finished workflow runs kept"
