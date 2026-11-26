@@ -71,27 +71,40 @@ export class MockTransport implements Transport {
 
   async start(onEvent: (event: TransportEvent) => void): Promise<void> {
     this.onEvent = onEvent;
+    const previous = this.crashedEngine;
+    this.crashedEngine = null;
     this.engine = new MockEngine(
       (line) => queueMicrotask(() => onEvent({ type: "line", line })),
       this.options,
     );
+    if (previous) this.engine.adoptThreads(previous);
     if (this.options.bootMs) await new Promise((r) => setTimeout(r, this.options.bootMs));
     this.startedAt = Date.now();
     for (const line of MOCK_SERVER_LOG) onEvent({ type: "log", line });
     onEvent({ type: "open", engine: "mock" });
+    Object.assign(globalThis, { __mockEngine: { crash: () => this.crash() } });
     const crash = this.options.crashAfterMs;
     if (crash && !this.crashed) {
       this.crashed = true;
-      setTimeout(() => {
-        const reason = "The server was stopped by signal 9.";
-        this.lastExit = { code: null, signal: 9, atMs: Date.now(), reason, expected: false };
-        this.crashRestarts += 1;
-        onEvent({ type: "closed", reason });
-        void this.start(onEvent);
-      }, crash);
+      setTimeout(() => this.crash(), crash);
     }
   }
   private crashed = false;
+
+  /** The engine dies as if killed, and the shell starts it again, as `src-tauri/src/engine.rs` does. */
+  private crash(): void {
+    const onEvent = this.onEvent;
+    if (!onEvent) return;
+    const reason = "The server was stopped by signal 9.";
+    this.lastExit = { code: null, signal: 9, atMs: Date.now(), reason, expected: false };
+    this.crashRestarts += 1;
+    this.crashedEngine = this.engine;
+    onEvent({ type: "closed", reason });
+    void this.start(onEvent);
+  }
+
+  /** The engine that crashed, whose saved threads the next one starts with. */
+  private crashedEngine: MockEngine | null = null;
   /** What Settings › Diagnostics reads of the process (`server_status`). */
   private startedAt = Date.now();
   private crashRestarts = 0;

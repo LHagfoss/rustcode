@@ -138,7 +138,8 @@ pub(crate) fn run_schema() -> Value {
             "args": {"description": "Any JSON; the script reads it as the global `args`"},
             "concurrency": {"type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "How many workers may run at once; the user's setting is the most"},
             "call_budget": {"type": "integer", "minimum": 1, "maximum": MAX_CALL_BUDGET, "description": "How many agent() calls the run may make in all; the user's setting is the most"},
-            "timeout_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MINUTES, "description": "How long the run may take; the user's setting is the most"}
+            "timeout_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MINUTES, "description": "How long the run may take; the user's setting is the most"},
+            "retry_run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Retry this thread's failed, timed-out or stopped run instead of starting one: finished calls are answered from the run, only failed or missing calls start workers. Give this instead of script or name"}
         },
         "additionalProperties": false
     })
@@ -176,6 +177,7 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             "concurrency",
             "call_budget",
             "timeout_minutes",
+            "retry_run_id",
         ],
         STATUS_TOOL_NAME => &["run_id", "wait_ms"],
         STOP_TOOL_NAME => &["run_id"],
@@ -218,6 +220,20 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
         Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.as_str())),
         Some(_) => Err(format!("{key} must be a non-empty string")),
     };
+    if let Some(retry) = map.get("retry_run_id").filter(|value| !value.is_null()) {
+        if text("script")?.is_some() || text("name")?.is_some() || map.contains_key("args") {
+            return Err(
+                "retry_run_id retries a run as it was started: give no script, name or args"
+                    .to_owned(),
+            );
+        }
+        return match retry {
+            Value::String(id) if store::valid_run_id(id) => Ok(()),
+            _ => {
+                Err("retry_run_id must be a run id from run_workflow or workflow_status".to_owned())
+            }
+        };
+    }
     match (text("script")?, text("name")?) {
         (Some(_), Some(_)) => Err("give a script or a name, not both".to_owned()),
         (None, None) => Err("give a script, or the name of one in .rustcode/workflows/".to_owned()),
@@ -337,12 +353,11 @@ fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: 
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(&id);
-        if store
-            .load(&id)
-            .is_some_and(|record| record.status.settled())
-            && let Some(index) = driver::index()
-        {
-            driver::unmark(&index, &id);
+        if let Some(record) = store.load(&id).filter(|record| record.status.settled()) {
+            if let Some(index) = driver::index() {
+                driver::unmark(&index, &id);
+            }
+            crate::orchestration::local_wake::run_ended(&record.thread, &id);
         }
     });
 }
@@ -472,6 +487,22 @@ pub(crate) fn start(
     args: &Value,
 ) -> Result<String, String> {
     validate(RUN_TOOL_NAME, args)?;
+    if let Some(run_id) = args.get("retry_run_id").and_then(Value::as_str) {
+        let store = Store::for_thread(thread)
+            .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+        let run = retry_in(&store, run_id, runner, args)?;
+        announce(thread, run_id);
+        let mut answer = json!({
+            "run_id": run_id,
+            "status": "running",
+            "retried": true,
+            "note": "Finished calls are answered from the run; failed or missing calls start workers again. Read it with workflow_status, stop it with stop_workflow."
+        });
+        if let Some(limits) = run.get("limits") {
+            answer["limits"] = limits.clone();
+        }
+        return Ok(answer.to_string());
+    }
     let (name, source) = match args.get("name").and_then(Value::as_str) {
         Some(name) => (Some(name.to_owned()), named_script(thread, name)?),
         None => (
@@ -578,6 +609,75 @@ fn resume_run_in(
     run_id: &str,
     runner: Arc<dyn AgentRunner>,
 ) -> Result<Value, String> {
+    resume_one(store, run_id, runner)?;
+    store
+        .load(run_id)
+        .map(|record| summary(store, &record))
+        .ok_or_else(|| format!("no run {run_id} in this thread"))
+}
+
+/// Retry `run_id` for a client that asked (the app's Retry button), with its
+/// workers routed like [`resume_run`]'s.
+pub(crate) fn retry_run(
+    thread: &str,
+    run_id: &str,
+    client: Option<Arc<dyn crate::preview::PreviewClient>>,
+    version: u8,
+) -> Result<Value, String> {
+    validate(STOP_TOOL_NAME, &json!({ "run_id": run_id }))?;
+    let store = Store::for_thread(thread)
+        .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+    let version = resume_version(client.is_some(), version);
+    let run = retry_in(
+        &store,
+        run_id,
+        ThreadRunner::new(thread, client, version),
+        &Value::Null,
+    )?;
+    announce(thread, run_id);
+    Ok(run)
+}
+
+/// Put a settled run that did not finish back to `running` and drive it again
+/// from its saved script (#4383). Its finished calls are answered from
+/// `calls.jsonl` and failed ones run anew, as on a resume; `args` may lower its
+/// limits like a start. The run's summary.
+fn retry_in(
+    store: &Store,
+    run_id: &str,
+    runner: Arc<dyn AgentRunner>,
+    args: &Value,
+) -> Result<Value, String> {
+    {
+        let _transition = DRIVER_TRANSITION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut record = store
+            .load(run_id)
+            .ok_or_else(|| format!("no run {run_id} in this thread"))?;
+        match record.status {
+            RunStatus::Running => {
+                return Err(format!(
+                    "run {run_id} is still running; resume it instead of retrying"
+                ));
+            }
+            RunStatus::Done => {
+                return Err(format!("run {run_id} finished; there is nothing to retry"));
+            }
+            RunStatus::Failed | RunStatus::TimedOut | RunStatus::Cancelled => {}
+        }
+        if store.script(run_id).is_none() {
+            return Err(format!("no saved script for run {run_id}"));
+        }
+        record.status = RunStatus::Running;
+        record.error = None;
+        record.result = None;
+        record.finished_at = None;
+        record.woken = false;
+        record.limits = lowered(record.limits, args);
+        record.updated_at = now_ms();
+        store.save(&record)?;
+    }
     resume_one(store, run_id, runner)?;
     store
         .load(run_id)
@@ -1268,6 +1368,115 @@ mod tests {
         let refused = resume_one(&store, &record.id, runner).unwrap_err();
         assert!(refused.contains("another RustCode process"), "{refused}");
         assert_eq!(echo.started.load(Ordering::SeqCst), 0);
+    }
+
+    fn finished_call(prompt: &str, result: Value) -> store::CallRecord {
+        store::CallRecord {
+            key: format!("{}#0", run::call_hash(prompt, &json!({}))),
+            seq: 0,
+            phase: None,
+            prompt: prompt.to_owned(),
+            harness: None,
+            model: None,
+            state: CallState::Done,
+            attempt: 0,
+            session_id: Some("old-session".to_owned()),
+            link_id: Some("old-link".to_owned()),
+            started_at: 1,
+            finished_at: Some(2),
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retry_answers_finished_calls_from_the_run_and_starts_only_the_failed_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let mut record = new_record(
+            "1784626803679",
+            None,
+            Value::Null,
+            Limits {
+                concurrency: 2,
+                call_budget: 2,
+                timeout_secs: 30,
+            },
+        );
+        record.status = RunStatus::Failed;
+        record.error = Some("the worker thread s-2 ended as failed".to_owned());
+        record.finished_at = Some(3);
+        record.woken = true;
+        store
+            .create(
+                &record,
+                r#"return [await agent("one"), await agent("two")];"#,
+            )
+            .unwrap();
+        store
+            .append_call(&record.id, &finished_call("one", json!("cached answer")))
+            .unwrap();
+
+        let summary = retry_in(&store, &record.id, runner, &json!({"concurrency": 1})).unwrap();
+        assert_eq!(summary["status"], json!("running"));
+        let finished = settled(&store, &record.id).await;
+        assert_eq!(finished.status, RunStatus::Done, "{:?}", finished.error);
+        assert_eq!(
+            finished.result,
+            Some(json!(["cached answer", "done by session-1"]))
+        );
+        assert_eq!(echo.started.load(Ordering::SeqCst), 1);
+        assert_eq!(finished.limits.concurrency, 1);
+        assert_eq!(finished.resumes, 1);
+        assert!(!finished.woken);
+    }
+
+    #[tokio::test]
+    async fn only_a_run_that_ended_without_finishing_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let (echo, runner) = echo();
+        let limits = Limits {
+            concurrency: 1,
+            call_budget: 5,
+            timeout_secs: 30,
+        };
+        let running = new_record("1784626803679", None, Value::Null, limits);
+        store.create(&running, "return 1;").unwrap();
+        let mut done = new_record("1784626803679", None, Value::Null, limits);
+        done.status = RunStatus::Done;
+        store.create(&done, "return 1;").unwrap();
+
+        let refused = retry_in(&store, &running.id, runner.clone(), &Value::Null).unwrap_err();
+        assert!(refused.contains("still running"), "{refused}");
+        let refused = retry_in(&store, &done.id, runner.clone(), &Value::Null).unwrap_err();
+        assert!(refused.contains("nothing to retry"), "{refused}");
+        let refused = retry_in(&store, "wf-0-00000000", runner, &Value::Null).unwrap_err();
+        assert!(refused.contains("no run"), "{refused}");
+        assert_eq!(echo.started.load(Ordering::SeqCst), 0);
+        assert_eq!(store.load(&done.id).unwrap().status, RunStatus::Done);
+    }
+
+    #[test]
+    fn a_retry_takes_a_run_id_and_nothing_that_would_change_the_script() {
+        assert!(validate(RUN_TOOL_NAME, &json!({"retry_run_id": "wf-1-2"})).is_ok());
+        assert!(
+            validate(
+                RUN_TOOL_NAME,
+                &json!({"retry_run_id": "wf-1-2", "timeout_minutes": 5})
+            )
+            .is_ok()
+        );
+        for bad in [
+            json!({"retry_run_id": "wf-1-2", "script": "return 1;"}),
+            json!({"retry_run_id": "wf-1-2", "name": "review"}),
+            json!({"retry_run_id": "wf-1-2", "args": {}}),
+            json!({"retry_run_id": "../x"}),
+            json!({"retry_run_id": 3}),
+        ] {
+            assert!(validate(RUN_TOOL_NAME, &bad).is_err(), "{bad}");
+        }
     }
 
     #[tokio::test]

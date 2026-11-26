@@ -71,16 +71,33 @@ pub(crate) fn tool_scope_root() -> Option<PathBuf> {
     )
 }
 
+/// How a repository is named in a memory identity: its canonical
+/// `git rev-parse --git-common-dir`, which every worktree of it shares.
+const REPOSITORY_PREFIX: &str = "git_common=";
+
+fn memory_dir() -> PathBuf {
+    crate::config::get_config_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("rustcode"))
+        .join("project-memory")
+}
+
+/// Where project memory lives: one file per git repository, shared by all of
+/// its worktrees, so a fact saved while working in one task's worktree is
+/// there in the next one. A directory outside git gets a file of its own.
 pub fn location(root: Option<&Path>) -> MemoryLocation {
     let root = repository_root(root);
-    let common = git_value(&root, &["rev-parse", "--git-common-dir"])
+    let identity = match git_value(&root, &["rev-parse", "--git-common-dir"])
         .and_then(|path| fs::canonicalize(root.join(path)).ok())
-        .unwrap_or_else(|| root.join(".git"));
-    let identity = format!("root={}\ngit_common={}", root.display(), common.display());
+    {
+        Some(common) => format!("{REPOSITORY_PREFIX}{}", common.display()),
+        None => format!(
+            "root={}\n{REPOSITORY_PREFIX}{}",
+            root.display(),
+            root.join(".git").display()
+        ),
+    };
     let file_key = stable_key(&identity);
-    let base = crate::config::get_config_dir()
-        .unwrap_or_else(|| std::env::temp_dir().join("rustcode"))
-        .join("project-memory");
+    let base = memory_dir();
     MemoryLocation {
         root,
         identity,
@@ -99,11 +116,12 @@ pub fn load(root: Option<&Path>) -> Result<ProjectMemory, String> {
     let raw = match fs::read_to_string(&location.path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ProjectMemory {
+            let memory = ProjectMemory {
                 version: MEMORY_VERSION,
-                identity: location.identity,
+                identity: location.identity.clone(),
                 facts: Vec::new(),
-            });
+            };
+            return Ok(adopt_worktree_files(&location, memory));
         }
         Err(error) => return Err(format!("could not read project memory: {error}")),
     };
@@ -124,6 +142,69 @@ pub fn load(root: Option<&Path>) -> Result<ProjectMemory, String> {
     Ok(memory)
 }
 
+/// Facts saved before memory was kept per repository sit in one file per
+/// worktree, whose identity is `root=<worktree>` then this repository's
+/// `git_common=` line. The first load of the repository's file merges them,
+/// newest first per `category/key`, keeps the limits by dropping the weakest
+/// and oldest facts, saves the result and removes the merged files.
+fn adopt_worktree_files(location: &MemoryLocation, mut memory: ProjectMemory) -> ProjectMemory {
+    if !location.identity.starts_with(REPOSITORY_PREFIX) {
+        return memory;
+    }
+    let Ok(entries) = fs::read_dir(location.path.parent().unwrap_or(Path::new("."))) else {
+        return memory;
+    };
+    let mut adopted = Vec::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if path == location.path || path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Some(old) = fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<ProjectMemory>(&raw).ok())
+        else {
+            continue;
+        };
+        if old.identity.lines().nth(1) == Some(location.identity.as_str()) {
+            adopted.push(path);
+            memory
+                .facts
+                .extend(old.facts.into_iter().filter(valid_fact));
+        }
+    }
+    if adopted.is_empty() {
+        return memory;
+    }
+    memory.facts = merged_facts(std::mem::take(&mut memory.facts));
+    if save_to(location, &memory).is_ok() {
+        for path in adopted {
+            let _ = fs::remove_file(path);
+        }
+    }
+    memory
+}
+
+/// One fact per `category/key` (the newest), within [`MAX_FACTS`] and
+/// [`MAX_MEMORY_BYTES`], sorted as [`upsert`] keeps them.
+fn merged_facts(mut facts: Vec<MemoryFact>) -> Vec<MemoryFact> {
+    facts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut seen = HashSet::new();
+    facts.retain(|fact| seen.insert((fact.category.clone(), fact.key.clone())));
+    facts.sort_by(|a, b| {
+        b.confidence
+            .cmp(&a.confidence)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
+    facts.truncate(MAX_FACTS);
+    let bytes =
+        |facts: &[MemoryFact]| serde_json::to_vec_pretty(facts).map_or(0, |json| json.len());
+    while !facts.is_empty() && bytes(&facts) + 1024 > MAX_MEMORY_BYTES {
+        facts.pop();
+    }
+    facts.sort_by(|a, b| a.category.cmp(&b.category).then_with(|| a.key.cmp(&b.key)));
+    facts
+}
+
 #[cfg(test)]
 pub fn save(root: Option<&Path>, memory: &ProjectMemory) -> Result<(), String> {
     let _guard = memory_write_lock()
@@ -133,7 +214,10 @@ pub fn save(root: Option<&Path>, memory: &ProjectMemory) -> Result<(), String> {
 }
 
 fn save_unlocked(root: Option<&Path>, memory: &ProjectMemory) -> Result<(), String> {
-    let location = location(root);
+    save_to(&location(root), memory)
+}
+
+fn save_to(location: &MemoryLocation, memory: &ProjectMemory) -> Result<(), String> {
     if memory.version != MEMORY_VERSION || memory.identity != location.identity {
         return Err("project memory identity/version mismatch".to_string());
     }
@@ -232,10 +316,7 @@ pub fn reset_all() -> Result<usize, String> {
 }
 
 fn reset_all_unlocked() -> Result<usize, String> {
-    let base = crate::config::get_config_dir()
-        .unwrap_or_else(|| std::env::temp_dir().join("rustcode"))
-        .join("project-memory");
-    let Ok(entries) = fs::read_dir(&base) else {
+    let Ok(entries) = fs::read_dir(memory_dir()) else {
         return Ok(0);
     };
     let mut removed = 0;
@@ -1182,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_memory_identity_is_worktree_and_symlink_safe() {
+    fn every_worktree_of_a_repository_shares_one_memory_file() {
         let temp = tempfile::tempdir().unwrap();
         let repo = temp.path().join("repo");
         let worktree_a = temp.path().join("worktree-a");
@@ -1240,13 +1321,10 @@ mod tests {
         let a_location = location(Some(&worktree_a));
         let b_location = location(Some(&worktree_b));
         assert_eq!(main_location.root, repository_root(Some(&repo)));
-        assert_ne!(a_location.identity, b_location.identity);
-        assert!(a_location.identity.contains(worktree_a.to_str().unwrap()));
-        assert!(b_location.identity.contains(worktree_b.to_str().unwrap()));
-        assert_eq!(
-            a_location.identity.lines().nth(1),
-            b_location.identity.lines().nth(1)
-        );
+        assert_eq!(a_location.identity, b_location.identity);
+        assert_eq!(a_location.path, b_location.path);
+        assert_eq!(main_location.path, a_location.path);
+        assert!(a_location.identity.starts_with(REPOSITORY_PREFIX));
 
         #[cfg(unix)]
         {
@@ -1262,6 +1340,79 @@ mod tests {
             fs::canonicalize(&non_git).unwrap()
         );
         assert_ne!(location(Some(&non_git)).identity, main_location.identity);
+    }
+
+    #[test]
+    fn facts_saved_per_worktree_are_merged_into_the_repository_file_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let status = crate::platform::command("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let current = location(Some(&repo));
+        let legacy = |worktree: &str, facts: Vec<MemoryFact>| {
+            let identity = format!("root={worktree}\n{}", current.identity);
+            let path = memory_dir().join(format!("{}.json", stable_key(&identity)));
+            let memory = ProjectMemory {
+                version: MEMORY_VERSION,
+                identity,
+                facts,
+            };
+            fs::create_dir_all(memory_dir()).unwrap();
+            fs::write(&path, serde_json::to_vec(&memory).unwrap()).unwrap();
+            path
+        };
+        let stamped = |key: &str, value: &str, at: u64| MemoryFact {
+            updated_at: at,
+            ..fact("build", key, value, "test")
+        };
+        let first = legacy(
+            "/work/a",
+            vec![stamped("check", "old way", 10), stamped("lint", "ruff", 10)],
+        );
+        let second = legacy("/work/b", vec![stamped("check", "bun run check", 20)]);
+        let unrelated = legacy("/elsewhere", Vec::new());
+        let unrelated_text = fs::read_to_string(&unrelated)
+            .unwrap()
+            .replace(&current.identity, "git_common=/another/repo/.git");
+        fs::write(&unrelated, unrelated_text).unwrap();
+
+        let memory = load(Some(&repo)).unwrap();
+        let value = |key: &str| {
+            memory
+                .facts
+                .iter()
+                .find(|fact| fact.key == key)
+                .map(|fact| fact.value.clone())
+        };
+        assert_eq!(value("check").as_deref(), Some("bun run check"));
+        assert_eq!(value("lint").as_deref(), Some("ruff"));
+        assert_eq!(memory.facts.len(), 2);
+        assert!(current.path.exists());
+        assert!(!first.exists() && !second.exists());
+        assert!(unrelated.exists());
+
+        reset(Some(&repo)).unwrap();
+        assert!(load(Some(&repo)).unwrap().facts.is_empty());
+        let _ = fs::remove_file(unrelated);
+    }
+
+    #[test]
+    fn merging_keeps_the_newest_fact_and_the_limits() {
+        let facts: Vec<MemoryFact> = (0..(MAX_FACTS as u64 + 10))
+            .map(|i| MemoryFact {
+                updated_at: i,
+                confidence: 50,
+                ..fact("note", &format!("k{i}"), "v", "test")
+            })
+            .collect();
+        let merged = merged_facts(facts);
+        assert_eq!(merged.len(), MAX_FACTS);
+        assert!(merged.iter().all(|fact| fact.updated_at >= 10));
     }
 
     #[test]

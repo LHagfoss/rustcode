@@ -25,8 +25,10 @@ use rustcode_tools::ToolExecutionOutput;
 
 pub mod ask_user;
 pub mod local;
+mod local_interrupt;
 mod local_merge;
 pub(crate) mod local_threads;
+pub(crate) mod local_wake;
 mod mcp_names;
 pub mod mcp_server;
 pub mod outside;

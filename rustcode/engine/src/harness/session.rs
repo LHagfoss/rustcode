@@ -1103,6 +1103,7 @@ impl ExternalSession {
                 let mut in_prompt_turn = false;
                 let mut last_activity_running = false;
                 let mut woken_turn: Option<crate::thread_status::TurnGuard> = None;
+                let mut checkpoints = checkpoint::Checkpoints::default();
                 while let Some(output) = outputs.recv().await {
                     // Anything the thread does renews the idle timer: an update,
                     // a question, a heartbeat (`reap_once`).
@@ -1118,6 +1119,12 @@ impl ExternalSession {
                                 let mut transcript =
                                     transcript.lock().unwrap_or_else(|error| error.into_inner());
                                 transcript.observe(&update);
+                                if persist
+                                    && (transcript.is_live() || woken_turn.is_some())
+                                    && checkpoints.due(&update, std::time::Instant::now())
+                                {
+                                    checkpoint::save(&thread_id, &transcript);
+                                }
                                 transcript.turn_is_compact_command()
                             };
                             if let Some(row) = Self::harness_compaction(
@@ -1222,6 +1229,7 @@ impl ExternalSession {
                         }
                         Output::TurnEnded => {
                             in_prompt_turn = false;
+                            checkpoints.reset();
                             sink.turn_ended();
                             if last_activity_running && woken_turn.is_none() {
                                 woken_turn = Some(crate::thread_status::turn(&thread_id));
@@ -3051,6 +3059,9 @@ mod removed_account_tests {
         );
     }
 }
+
+#[path = "checkpoint.rs"]
+mod checkpoint;
 
 #[cfg(test)]
 #[path = "reap_tests.rs"]

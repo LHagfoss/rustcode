@@ -7,6 +7,9 @@ between) lives only in the orchestrating agent's context, and is lost to a
 restart or a compaction. A workflow run holds that plan in a script and in a
 folder instead (#3394).
 
+How an objective is run as a workflow, and who owns a run, is decided in
+[ADR 0009](adr/0009-objectives-and-coordination.md).
+
 An agent starts a run with `run_workflow`, reads it with `workflow_status` and
 ends it with `stop_workflow`. The desktop app shows it as a card in the chat, a
 row above the composer with Stop, and a list of its worker threads
@@ -43,11 +46,31 @@ return { reviews, verdict };
 
 | Global | What it does |
 | --- | --- |
-| `agent(prompt, options?)` | Starts a normal delegate thread with `prompt` and resolves to its reply. Options: `schema` (a JSON Schema: the worker is asked for JSON, and the reply is parsed and checked against it), `harness`, `model`, `effort`, `title`. Rejects when the worker fails or its reply breaks the schema, so a script can `try`/`catch` it. |
+| `agent(prompt, options?)` | Starts a normal delegate thread with `prompt` and resolves to its reply. Options: `schema` (a JSON Schema: the worker is asked for JSON, and the reply is parsed and checked against it), `harness`, `model`, `effort`, `title`, and what `start_session` takes for a delegate: `preset` (a saved delegate preset), `access` (`ask`, `edits` or `full`; it only lowers), `account`, `project` and `worktree`. Rejects when the worker fails or its reply breaks the schema, so a script can `try`/`catch` it. |
 | `parallel(items)` | `Promise.all` over an array of functions (called in order) or promises. Results come back in the array's order. The run's concurrency limit, not `parallel`, decides how many workers run at once. |
 | `phase(title)` | Names the step the next calls belong to. Phases and the workers in them are what the run reports. |
 | `log(...parts)` | Adds a line to the run's log (at most 200 are kept). |
 | `args` | The JSON the run was started with. |
+
+### Roles
+
+A role is a delegate preset (Settings › Delegation › Delegate presets): its
+harness, model, effort, account, access, worktree and instructions. `agent()`
+expands `preset` the way `start_session` does, on the app's path and with no
+app, and an unknown name rejects the call with the saved names (#4384). A
+reviewer or verifier that must not edit runs at `access: "ask"`:
+
+```js
+const plan = await agent(args.goal, { preset: "planner", schema: PLAN });
+const done = await parallel(
+  plan.tasks.map((task) => () => agent(task.prompt, { preset: "implementer" })),
+);
+const review = await agent("Review these branches: " + JSON.stringify(done), {
+  preset: "reviewer",
+  access: "ask",
+  schema: VERDICT,
+});
+```
 
 Without a `schema` the resolved value is the worker's reply text. A worker's
 reply reaches the script cut at 8 KiB, like a `wait_session` answer, so ask for
@@ -139,6 +162,16 @@ they **nest under it**, count against its delegate slots (`delegates-per-thread`
 `delegates-total`), and use the same approvals and access rules as a delegate
 the agent starts by hand. When every slot is taken, the run waits and tries
 again rather than failing.
+
+**Retrying a run.** A run that ended `failed`, `timed_out` or `cancelled` can
+be retried (#4383): `run_workflow` with `retry_run_id` (and no `script`, `name`
+or `args`), or **Retry** on the run's card in the app
+(`_rustcode/workflows/retry`). The run goes back to `running` under the same id
+with its saved script; its finished calls are answered from `calls.jsonl` with
+no thread started and no budget spent, and only failed or missing calls start
+workers. `concurrency`, `call_budget` and `timeout_minutes` may lower its
+limits, the timeout counts from the retry, and the thread is told once when it
+ends. A `done` or still `running` run is refused.
 
 ## Durability
 
@@ -239,8 +272,11 @@ whose agent already read the end (`workflow_status` on a settled run, or its
 own `stop_workflow`) is not woken for it. The app announces only a run that
 ended within the hour before it first saw it, so opening an old thread does not
 wake it for a run from last week; the agent can always read the run with
-`workflow_status`. With no app open nothing wakes the thread: the agent reads
-the run with `workflow_status` and `wait_ms`.
+`workflow_status`. With no app connected to the engine, the engine tells the thread itself
+(#4382): it claims the same `woken` mark, and runs the same note as the
+thread's next turn once its current turn ends, unless the thread is at Ask
+access, where nobody could approve that turn; then the agent reads the run
+with `workflow_status` and `wait_ms`.
 
 **Limits in Settings.** A Workflows group under Orchestration in Settings has
 the four settings in *Limits*, per machine like the delegate limits. A run

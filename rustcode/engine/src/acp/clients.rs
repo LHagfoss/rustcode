@@ -488,6 +488,30 @@ impl Registry {
     }
 }
 
+/// How many connected clients in this process host orchestration (an app):
+/// while none does, the engine wakes a parent thread itself (#4382).
+static HOSTING_APPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn count_hosting(before: bool, after: bool) {
+    use std::sync::atomic::Ordering;
+    match (before, after) {
+        (false, true) => {
+            HOSTING_APPS.fetch_add(1, Ordering::SeqCst);
+        }
+        (true, false) => {
+            let _ = HOSTING_APPS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                Some(n.saturating_sub(1))
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Whether an app that hosts orchestration is connected to this engine.
+pub(crate) fn app_hosts_orchestration() -> bool {
+    HOSTING_APPS.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
 /// Every connected client. Cheap to clone; all clones are the same registry.
 #[derive(Clone, Default)]
 pub(crate) struct Clients(Arc<Mutex<Registry>>);
@@ -525,13 +549,17 @@ impl Clients {
         let mut registry = self.registry();
         let since = registry.tick();
         let entry = registry.entry(id, connection);
+        let was_hosting = entry.info.orchestration >= 1;
         entry.info = info;
         entry.since = since;
+        count_hosting(was_hosting, info.orchestration >= 1);
     }
 
     /// The connection ended. Its sessions keep running for the others.
     pub(crate) fn disconnect(&self, id: ClientId) {
-        self.registry().entries.remove(&id);
+        if let Some(entry) = self.registry().entries.remove(&id) {
+            count_hosting(entry.info.orchestration >= 1, false);
+        }
     }
 
     /// What `id` advertised; nothing for one that never initialized.

@@ -846,7 +846,7 @@
 2 rustcode/engine/src/mcp/oauth_tests.rs
 44 rustcode/engine/src/mcp_tests.rs
 13 rustcode/engine/src/memory.rs
-37 rustcode/engine/src/memory_eval.rs
+36 rustcode/engine/src/memory_eval.rs
 14 rustcode/engine/src/message_origin.rs
 1 rustcode/engine/src/model_defaults.rs
 164 rustcode/engine/src/network.rs
@@ -899,7 +899,7 @@
 2 rustcode/engine/src/orchestration/ask_user.rs
 33 rustcode/engine/src/orchestration/local.rs
 2 rustcode/engine/src/orchestration/local_merge.rs
-81 rustcode/engine/src/orchestration/local_threads.rs
+80 rustcode/engine/src/orchestration/local_threads.rs
 3 rustcode/engine/src/orchestration/mcp_names.rs
 80 rustcode/engine/src/orchestration/mcp_server.rs
 33 rustcode/engine/src/orchestration/outside.rs
@@ -1029,7 +1029,7 @@
 14 rustcode/engine/src/workflow/run.rs
 2 rustcode/engine/src/workflow/sandbox.rs
 3 rustcode/engine/src/workflow/store.rs
-4 rustcode/engine/src/workflow/threads.rs
+3 rustcode/engine/src/workflow/threads.rs
 29 rustcode/engine/src/workspace_intelligence.rs
 158 rustcode/engine/src/worktrees.rs
 3 rustcode/engine/tests/storage_migrations_fresh_profile.rs

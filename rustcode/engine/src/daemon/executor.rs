@@ -168,6 +168,7 @@ impl JobExecutor for ActionExecutor {
                     .unwrap_or_else(|| format!("daemon-{}", context.job.id)),
             };
             let cancellation = context.cancellation;
+            let mut delivery = None;
             let (action, interval, max_runs, deadline, stop_on_change) = match context.job.action {
                 JobAction::Poll {
                     action,
@@ -203,7 +204,9 @@ impl JobExecutor for ActionExecutor {
                     if let (JobAction::Loop { prompt, .. }, Some(input)) =
                         (&mut action, context.run.input.as_deref())
                     {
-                        *prompt = webhook_prompt(prompt, input);
+                        let started = super::webhook::Delivery::from_input(input);
+                        *prompt = delivery_prompt(prompt, &started);
+                        delivery = Some(started);
                     }
                     (action, Duration::ZERO, 1, LOOP_TIMEOUT, false)
                 }
@@ -211,6 +214,15 @@ impl JobExecutor for ActionExecutor {
             };
             let Some(deadline) = tokio::time::Instant::now().checked_add(deadline) else {
                 return permanent("execution deadline is out of range");
+            };
+            let body_file = delivery.as_ref().and_then(|delivery| {
+                let mut file = tempfile::NamedTempFile::new().ok()?;
+                std::io::Write::write_all(&mut file, delivery.body.as_bytes()).ok()?;
+                Some(file)
+            });
+            let script_env = match (&delivery, &body_file) {
+                (Some(delivery), Some(file)) => delivery.script_env(file.path()),
+                _ => Vec::new(),
             };
             let mut previous_hash = None;
             let mut last = RunOutcome::Cancelled { output: None };
@@ -226,11 +238,14 @@ impl JobExecutor for ActionExecutor {
                 let child = cancellation.child_token();
                 // Dropping a future must also request cancellation of blocking adapters.
                 let _cancel_on_drop = child.clone().drop_guard();
-                let future = backend.run_job(
-                    action.clone(),
-                    session.clone(),
-                    job_id.clone(),
-                    child.clone(),
+                let future = WEBHOOK_SCRIPT_ENV.scope(
+                    script_env.clone(),
+                    backend.run_job(
+                        action.clone(),
+                        session.clone(),
+                        job_id.clone(),
+                        child.clone(),
+                    ),
                 );
                 tokio::pin!(future);
                 let result = tokio::select! {
@@ -498,6 +513,7 @@ impl ActionBackend for ProductionActions {
                     thread_id,
                     script,
                     webhook: _,
+                    webhook_events: _,
                     machine,
                 } => {
                     // A hub Loop runs on a member; the hub only sends it.
@@ -606,6 +622,9 @@ async fn run_shell(run: ShellRun, cancellation: CancellationToken) -> ShellEnd {
     if timeout_seconds == 0 {
         return ShellEnd::Outcome(permanent("shell timeout must be positive"));
     }
+    let script_env = WEBHOOK_SCRIPT_ENV
+        .try_with(Clone::clone)
+        .unwrap_or_default();
     if !matches!(
         crate::tools::authorize_tool_with_args(
             "run_command",
@@ -670,7 +689,10 @@ async fn run_shell(run: ShellRun, cancellation: CancellationToken) -> ShellEnd {
             status_command: None,
             sandboxed_shell: true,
             cwd: Some(cwd),
-            env: vec![],
+            env: script_env
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
             timeout: Duration::from_secs(timeout_seconds),
             process_group: true,
             inherited_fds: sandboxed_command.inherited_fds,
@@ -722,6 +744,23 @@ pub(crate) fn script_prompt(prompt: &str, stdout: &str) -> Option<String> {
     let printed = stdout.trim();
     (!printed.is_empty())
         .then(|| format!("{prompt}\n\nThe loop's script printed:\n\n```\n{printed}\n```"))
+}
+
+tokio::task_local! {
+    /// What a webhook run's pre-check script gets in its environment (#4386):
+    /// the event, the delivery id and the file holding the body. Set only
+    /// around a Loop run that a webhook started; every other shell run sees
+    /// none.
+    static WEBHOOK_SCRIPT_ENV: Vec<(String, String)>;
+}
+
+/// [`webhook_prompt`] for a delivery, with the event and delivery it came
+/// as named before the body.
+pub(crate) fn delivery_prompt(prompt: &str, delivery: &super::webhook::Delivery) -> String {
+    match delivery.heading() {
+        Some(heading) => webhook_prompt(&format!("{prompt}\n\n{heading}"), &delivery.body),
+        None => webhook_prompt(prompt, &delivery.body),
+    }
 }
 
 /// What a Loop's agent is asked when its webhook started the run: the

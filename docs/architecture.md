@@ -151,7 +151,7 @@ shared target directory.
 ## Thread state
 
 Which process owns each file in a thread's folder, when it is on disk and
-what a restart rebuilds it from: [ADR 0009](adr/0009-thread-state-ownership.md).
+what a restart rebuilds it from: [ADR 0009](adr/0010-thread-state-ownership.md).
 
 ## Thread index
 

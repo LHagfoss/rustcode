@@ -71,6 +71,8 @@ export interface Loop {
   script?: string;
   /** Calling the loop's webhook URL starts a run (its URL is shown once, when made). */
   webhook: boolean;
+  /** The webhook events it takes (`check_suite`, `pull_request.opened`); none takes every delivery. */
+  webhookEvents?: string[];
   /** A hub Loop: each run goes to this member of the hub, and `workspace` is a folder there. */
   machine?: string;
   nextDueAt?: number;
@@ -176,6 +178,7 @@ function loopOf(value: Json, host = LOCAL_HOST): Loop | null {
     threadId: str(raw.threadId),
     script: str(raw.script),
     webhook: bool(raw.webhook) ?? false,
+    webhookEvents: arr(raw.webhookEvents).flatMap((event) => str(event) ?? []),
     machine: str(raw.machine),
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
@@ -732,6 +735,8 @@ export interface LoopDraft {
   webhook?: boolean;
   /** Replace the webhook's secret, so the old URL stops working. */
   rotateWebhook?: boolean;
+  /** The webhook events to take, as typed: separated by commas or spaces. */
+  webhookEvents?: string;
   /** On the hub: run each turn on this member instead of this computer. */
   machine?: string;
 }
@@ -791,6 +796,7 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
   if (draft.id) params.id = draft.id;
   if (draft.webhook) params.webhook = true;
   if (draft.webhook && draft.rotateWebhook) params.rotateWebhook = true;
+  if (draft.webhook) params.webhookEvents = webhookEventList(draft.webhookEvents);
   const machine = draft.machine?.trim();
   if (machine) params.machine = machine;
   // A script runs on this computer, so a Loop for another machine takes none.
@@ -803,6 +809,12 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
     if (value) params[key] = value;
   }
   return params;
+}
+
+/** The events a typed filter names, without blanks or repeats (issue 4386). */
+export function webhookEventList(text: string | undefined): string[] {
+  const events = (text ?? "").split(/[\s,]+/).filter(Boolean);
+  return [...new Set(events)];
 }
 
 /** The webhook a save answered with, when it made a new secret. */

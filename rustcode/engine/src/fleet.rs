@@ -36,6 +36,15 @@ const MAX_FIELD_CHARS: usize = 64;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// A computer nobody has seen for this long is forgotten.
 const FORGET_AFTER_DAYS: i64 = 90;
+/// How far ahead of this computer's clock a rename time may be. A later one
+/// (a clock that is ahead) is taken as this far ahead, so it cannot outrank
+/// every rename after it for as long as that clock is wrong.
+pub(crate) const MAX_CLOCK_SKEW_MINUTES: i64 = 5;
+
+/// `stamp`, no later than [`MAX_CLOCK_SKEW_MINUTES`] after `now`.
+pub(crate) fn bounded_stamp(stamp: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    stamp.min(now + Duration::minutes(MAX_CLOCK_SKEW_MINUTES))
+}
 
 const OWN_NAME_FILE: &str = "machine.json";
 /// Where versions before the rename to "machine" kept this computer's name.
@@ -172,8 +181,14 @@ impl Fleet {
         now: DateTime<Utc>,
     ) -> bool {
         let mut changed = false;
+        for known in &mut self.entries {
+            let bounded = known.name_updated_at.map(|stamp| bounded_stamp(stamp, now));
+            changed |= bounded != known.name_updated_at;
+            known.name_updated_at = bounded;
+        }
         for entry in incoming {
             let mut entry = entry.cleaned();
+            entry.name_updated_at = entry.name_updated_at.map(|stamp| bounded_stamp(stamp, now));
             if entry.host_id.is_empty() || entry.host_id == own_id {
                 continue;
             }
@@ -380,11 +395,17 @@ pub(crate) fn sync(
     now: DateTime<Utc>,
 ) -> anyhow::Result<FleetView> {
     let me = own_id(dir);
+    if let Some(own) = own_name(dir)
+        && bounded_stamp(own.updated_at, now) != own.updated_at
+    {
+        let updated_at = bounded_stamp(own.updated_at, now);
+        publish_private_json(&dir.join(OWN_NAME_FILE), &OwnName { updated_at, ..own })?;
+    }
     // A report about this computer is a rename if it is newer than ours.
     for entry in incoming {
         let about_us = !me.is_empty() && entry.host_id == me;
         if about_us && let Some(stamp) = entry.name_updated_at {
-            apply_own_name(dir, &entry.name, stamp)?;
+            apply_own_name(dir, &entry.name, bounded_stamp(stamp, now))?;
         }
     }
     let mut fleet = Fleet::load(dir);
@@ -395,7 +416,10 @@ pub(crate) fn sync(
     // own rename of one of them (its stamp is in `machines.json`) takes part
     // in the same last-writer-wins as any other.
     let mut combined = fleet;
-    let direct = paired_entries(dir);
+    let mut direct = paired_entries(dir);
+    for entry in &mut direct {
+        entry.name_updated_at = entry.name_updated_at.map(|stamp| bounded_stamp(stamp, now));
+    }
     for entry in &direct {
         match combined
             .entries
@@ -653,6 +677,73 @@ mod tests {
         assert_eq!(c.via, None, "paired here, so first-hand");
         // The cached report about C is stored for when C is later unpaired.
         assert!(Fleet::load(dir.path()).get("c").is_some());
+    }
+
+    const TEN_YEARS: i64 = 10 * 365 * 24 * 60;
+
+    #[test]
+    fn a_rename_from_a_clock_that_is_ahead_cannot_outrank_the_next_one() {
+        let mut fleet = Fleet::default();
+        let skewed = [entry("c", "Wrong", Some(TEN_YEARS), Some(1))];
+        assert!(fleet.merge("b", &skewed, "a", at(10)));
+        assert_eq!(
+            fleet.get("c").unwrap().name_updated_at,
+            Some(at(10 + MAX_CLOCK_SKEW_MINUTES))
+        );
+        let right = [entry("c", "Right", Some(20), Some(2))];
+        assert!(fleet.merge("c", &right, "a", at(20)));
+        assert_eq!(fleet.get("c").unwrap().name, "Right");
+    }
+
+    #[test]
+    fn a_future_stamp_already_stored_is_bounded_on_the_next_merge() {
+        let mut fleet = Fleet {
+            entries: vec![entry("c", "Wrong", Some(TEN_YEARS), Some(1))],
+        };
+        assert!(fleet.merge("b", &[], "a", at(10)));
+        assert_eq!(
+            fleet.get("c").unwrap().name_updated_at,
+            Some(at(10 + MAX_CLOCK_SKEW_MINUTES))
+        );
+        assert!(!fleet.merge("b", &[], "a", at(10)));
+    }
+
+    #[test]
+    fn this_computers_own_name_is_bounded_too() {
+        let dir = tempfile::tempdir().unwrap();
+        write_identity(dir.path(), "b");
+        let view = sync(
+            dir.path(),
+            "a",
+            &[entry("b", "Wrong", Some(TEN_YEARS), Some(5))],
+            at(6),
+        )
+        .unwrap();
+        assert_eq!(view.host.name, "Wrong");
+        assert_eq!(
+            view.host.name_updated_at,
+            Some(at(6 + MAX_CLOCK_SKEW_MINUTES))
+        );
+        let view = sync(
+            dir.path(),
+            "a",
+            &[entry("b", "Right", Some(30), Some(30))],
+            at(30),
+        )
+        .unwrap();
+        assert_eq!(view.host.name, "Right");
+    }
+
+    #[test]
+    fn a_future_own_name_on_disk_is_bounded_at_the_next_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        write_identity(dir.path(), "b");
+        apply_own_name(dir.path(), "Wrong", at(TEN_YEARS)).unwrap();
+        sync(dir.path(), "a", &[], at(6)).unwrap();
+        assert_eq!(
+            own_name(dir.path()).unwrap().updated_at,
+            at(6 + MAX_CLOCK_SKEW_MINUTES)
+        );
     }
 
     #[test]

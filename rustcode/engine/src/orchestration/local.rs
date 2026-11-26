@@ -141,6 +141,7 @@ pub(crate) async fn answer_json_with_asker(
         }
         super::UPDATE_SESSION => update_own_session(session_id, args),
         super::CONFIGURE_SESSION => super::local_threads::configure(session_id, args).await,
+        super::INTERRUPT_SESSION => super::local_interrupt::answer(session_id, args).await,
         super::THREAD_USAGE => thread_usage(session_id, args),
         super::QUERY_DATA => query_data(args),
         super::MERGE_WHEN_GREEN => {
@@ -1597,7 +1598,7 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
                 "status": "timeout",
                 "waited_until": waited_until(wait),
                 "links": current,
-                "note": "Still running. The RustCode app is not attached, so these are the link states it last recorded; open the app to keep them current. Anything that settles arrives as a wake while it is open; do not poll with sleeps.",
+                "note": "Still running. The RustCode app is not attached, so these are the link states it last recorded; open the app to keep them current. A link this engine runs wakes this thread when it settles; do not poll with sleeps.",
             });
         }
         tokio::select! {

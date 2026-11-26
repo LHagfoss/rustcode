@@ -606,6 +606,12 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for workflows::WorkflowResumeRequest"
     );
     assert!(
+        <workflows::WorkflowRetryRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/workflows/retry"
+        ),
+        "method mismatch for workflows::WorkflowRetryRequest"
+    );
+    assert!(
         <workflows::WorkflowWakeRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/workflows/wake"
         ),

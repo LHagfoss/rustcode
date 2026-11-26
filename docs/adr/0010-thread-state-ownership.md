@@ -1,4 +1,4 @@
-# 0009: Who owns each piece of thread state, and how it comes back
+# 0010: Who owns each piece of thread state, and how it comes back
 
 Status: accepted, 2026-11-26. Code: `rustcode/core/rustcode-session/src/`,
 `rustcode/engine/src/{sessions,harness,thread_status.rs,thread_index.rs,data_store.rs,worktrees.rs}`,

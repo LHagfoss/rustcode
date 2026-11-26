@@ -315,6 +315,11 @@ export class MockEngine {
     };
   }
 
+  /** A restarted engine reads the threads the one before it saved, as the real one reads its folders. */
+  adoptThreads(previous: MockEngine): void {
+    this.threads = previous.threads;
+  }
+
   constructor(
     private readonly emit: (line: string) => void,
     private readonly options: MockOptions = {},
@@ -1388,6 +1393,10 @@ export class MockEngine {
       case "_rustcode/workflows/list":
         return { runs: [] };
       case "_rustcode/workflows/resume":
+        return {
+          run: { run_id: str(obj(params)?.runId) ?? "", status: "running", driven: true },
+        };
+      case "_rustcode/workflows/retry":
         return {
           run: { run_id: str(obj(params)?.runId) ?? "", status: "running", driven: true },
         };

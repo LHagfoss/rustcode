@@ -98,6 +98,11 @@ pub enum JobAction {
         /// never shows a secret that starts a run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         webhook: Option<String>,
+        /// The webhook events this Loop takes (#4386): an event
+        /// (`check_suite`) or an event and its action
+        /// (`pull_request.review_requested`). Empty takes every delivery.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        webhook_events: Vec<String>,
         /// Hub Loops (#3957): run each turn on this member of the hub, by
         /// its name or host id, instead of on this computer. `workspace` is
         /// then a folder on that machine.

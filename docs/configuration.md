@@ -368,6 +368,17 @@ lower-precedence layer.
 Legacy `[laya]` config tables are ignored and can be removed from user or
 project config files.
 
+## Project memory
+
+Facts an agent saves with `remember` (or you with `/memory add`) are kept per
+git repository in `project-memory/<key>.json` in the config directory, one
+file shared by every worktree of the repository, so a fact saved while working
+in one task's worktree is there in the next. A directory outside git has a
+file of its own. `/memory path` prints the file. Files that older versions
+kept per worktree are merged into the repository's file the first time it is
+read (the newest value of each `category/key` wins, within the 64-fact and
+32 KiB limits) and then removed.
+
 ## Skills
 Skills are plain Markdown: `<root>/<name>/SKILL.md`, scanned exactly one level
 deep. RustCode reads them from these roots, highest precedence first, and the
