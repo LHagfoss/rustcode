@@ -128,6 +128,7 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
             .chain(std::iter::once(super::secret::TOOL_NAME))
+            .chain(super::memory_tools::TOOL_NAMES)
             // Managing RustCode itself (#3821): answered by the engine, which
             // asks the user before a write through the thread's own card.
             .chain(crate::manage::TOOL_NAMES)
@@ -220,6 +221,9 @@ const LISTING: &[(&str, &str, Effect)] = &[
         "Run a command on a machine",
         Effect::Adds,
     ),
+    ("recall_memory", "Recall project memory", Effect::Reads),
+    ("remember", "Remember a project fact", Effect::Sets),
+    ("forget_memory", "Forget a project fact", Effect::Removes),
     (super::LIST_PROJECTS, "List projects", Effect::Reads),
     (super::READ_PROJECT, "Read a project", Effect::Reads),
     (super::LIST_WORKTREES, "List worktrees", Effect::Reads),
@@ -779,6 +783,9 @@ async fn call_inside(
     // checks read, so the server answers it here instead of asking the client:
     // no approval is needed to watch a pull request, and an engine that is not
     // running the app's window still links one.
+    if super::memory_tools::is_tool(tool) {
+        return super::memory_tools::answer(tool, &args, &identity.session_id);
+    }
     if tool == crate::pull_watch::LINK_TOOL_NAME {
         let cwd = crate::checkpoints::thread_cwd(&identity.session_id)
             .filter(|cwd| cwd.is_dir())
@@ -1694,6 +1701,7 @@ mod tests {
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
         expected.push(super::super::secret::TOOL_NAME.to_owned());
+        expected.extend(super::super::memory_tools::TOOL_NAMES.map(str::to_owned));
         expected.extend(crate::manage::TOOL_NAMES.map(str::to_owned));
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));

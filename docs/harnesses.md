@@ -909,6 +909,11 @@ its own `.claude/skills` roots with its own Skill tool, so those are never
 named to it, but a skill of those roots that is turned off in RustCode is named
 as turned off, and with nothing to name it gets no note at all.
 
+When the thread's project has saved memory facts, the note ends with one more
+line (at most 240 bytes): how many facts there are and that `recall_memory`,
+`remember` and `forget_memory` on the `rustcode` MCP server read and change
+them ([orchestrator.md](orchestrator.md)). Fact bodies are never put there.
+
 How the note reaches each harness:
 
 | Harness | Where the note goes |
