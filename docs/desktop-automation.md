@@ -1,4 +1,11 @@
-# Desktop automation (experimental)
+# Desktop automation (not available)
+
+> **Status:** not available in the current app. This feature lived in the
+> SwiftUI macOS app, which was removed in #2820; the Tauri desktop app has no
+> Desktop automation setting and does not advertise `_meta.rustcode.desktop`.
+> The engine's bridge (`rustcode/engine/src/desktop_control.rs`) stays until
+> the OS computer-use decision (#4369) settles whether to reuse or delete it.
+> This page remains as protocol background.
 
 The macOS app can let the agent inspect and operate native applications through
 [agent-desktop](https://github.com/vercel-labs/agent-desktop). This is separate

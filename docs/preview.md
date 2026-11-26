@@ -1,4 +1,13 @@
-# Localhost preview
+# Localhost preview (not available)
+
+> **Status:** no current client shows the preview or advertises
+> `_meta.rustcode.preview`, so no session gets the `localhost_preview` tool.
+> The panel below belonged to the SwiftUI macOS app, removed in #2820. The
+> engine side (`rustcode/engine/src/preview.rs`, `acp/preview.rs`) is kept
+> until the embedded browser decision (#4370) settles whether to reuse or
+> delete it; the protocol and measurements here are reference for that work.
+> For browser work today, see the engine's headless `browser_*` tools and
+> [computer use](computer-use.md).
 
 The macOS app shows a running dev server in a panel beside the chat (⇧⌘P). The
 user can browse it there, and the agent can use it through the
@@ -103,9 +112,8 @@ failure:
 `image` (`mimeType`, base64 `data`, `width`, `height`); `scroll` adds `scrollY`.
 Error codes: `denied`, `revoked`, `approval_timeout`, `out_of_scope`,
 `no_page`, `not_found`, `invalid`, `timeout`, `busy`, `failed`. The engine side
-is `rustcode/engine/src/preview.rs`; the app side is
-`macos/Sources/RustCodeKit/PreviewAgent.swift` and
-`macos/Sources/RustCode/PreviewAgentBridge.swift`.
+is `rustcode/engine/src/preview.rs`; the app side was in the removed SwiftUI
+app (#2820) and has no replacement yet.
 
 ## Resource lifecycle
 

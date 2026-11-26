@@ -108,7 +108,7 @@ ambient access to other projects.
 | Session store and search | `rustcode/core/rustcode-session`, `engine/src/sessions/store.rs`, `rc sessions search --json`, `SessionSearch.swift` | Persistent sessions filed by date with `workspace.json`, content search with snippets, exact-project and all-project scopes | Only the user can browse; no bounded, permissioned read for an agent |
 | Remote control plane | `remote/protocol.rs` (`RemoteOperation`), `remote/owner.rs`, `remote_gateway/`; [remote.md](../remote.md) | A tested contract for driving a session from outside its owner: list, create, attach, `GetHistory`, `SubmitPrompt`, `Steer`, `Queue`, `CancelTurn`, `AnswerQuestion`, `ResolveApproval`, `ResumeSession`, request receipts (`Received`/`Applied`/`Rejected`/`Unknown`) | Built for a paired device and a human, not for an agent inside another session; terminal-owned |
 | Scheduler daemon | `daemon/`; [daemon.md](../daemon.md) | `JobAction::Prompt { prompt, workspace, session_id }`: durable, out-of-turn prompts into a session | Scheduled, not interactive; no result routing back to a caller |
-| macOS app | `macos/Sources/RustCode/RustCodeApp.swift` | Several open sessions per engine (`openSessions`), per-session queues and turn activity, permission sheets driven by `session/request_permission`, sidebar search across projects | No notion of one chat driving another |
+| macOS app (historical, removed in #2820) | `macos/Sources/RustCode/RustCodeApp.swift` | Several open sessions per engine (`openSessions`), per-session queues and turn activity, permission sheets driven by `session/request_permission`, sidebar search across projects | No notion of one chat driving another |
 
 Two lessons from #2215 shape this design:
 
