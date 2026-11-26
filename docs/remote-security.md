@@ -397,4 +397,5 @@ Not covered, and listed so nobody assumes otherwise:
 - A device-test checklist for an iPhone on LAN, NetBird and cellular.
 - Key support in the phone app (`rustcode-mobile`), then refusing tokens from
   devices without a key.
-- Optional hosted relay: #3199, opt-in.
+- Optional relay: decided in [ADR 0013](adr/0013-machine-relay-and-nat-traversal.md)
+  (a blind, self-hostable splice; gateway TLS stays pinned end to end).
