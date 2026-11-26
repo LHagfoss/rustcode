@@ -48,7 +48,6 @@ const SHAPED = /(?<![\w-])rounded-(?:md|lg|full)(?![\w-])/;
 const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/AttentionCards.tsx", "send([o])", "the answers are choice rows"],
   ["ui/CommandPalette.tsx", 'role="option"', "the palette's result rows: the fill marks the selected one"],
-  ["ui/PanelToggle.tsx", "data-panel-toggle", "the side panel's toggle: its fill marks the panel open"],
   ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
   ["ui/ChatView.tsx", "px-2 font-medium", "the plan pill is a popover trigger"],
   ["ui/ComposerFooter.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],

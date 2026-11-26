@@ -30,20 +30,13 @@ import { createPortal } from "react-dom";
 import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
-import { type AppState, setPanel, showPanel, useApp } from "../state/store";
+import { setPanel, showPanel, useApp } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
-import {
-  CircleDot,
-  GitCompareArrows,
-  GitPullRequest,
-  Globe,
-  Info,
-  type LucideIcon,
-  MessagesSquare,
-} from "./icons";
+import { CircleDot, GitCompareArrows, GitPullRequest, Globe, Info, MessagesSquare } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
+import { type PanelKind, type PanelTab, PanelTabs } from "./PanelTabs";
 import { PanelToggle, useCardOverHeader } from "./PanelToggle";
-import { cx, Pill, Tooltip } from "./primitives";
+import { cx } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -54,8 +47,7 @@ const BrowserPreviewPanel = lazy(() =>
   import("./BrowserPreviewPanel").then((m) => ({ default: m.BrowserPreviewPanel })),
 );
 
-/** The views the panel shows. */
-type Kind = NonNullable<AppState["panel"]>;
+type Kind = PanelKind;
 
 /** The card's own bounds, in px, and the width it starts with. */
 export const MIN = 320;
@@ -155,39 +147,6 @@ function inField(target: EventTarget | null): boolean {
 /** The header's button that opens the panel: where a close hands focus when nothing else had it. */
 function headerToggle(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-panel-toggle]");
-}
-
-interface PanelTab {
-  kind: Kind;
-  label: string;
-  icon: LucideIcon;
-}
-
-/** One view's tab: its icon alone, and its name beside it while it is the one showing. */
-function PanelTabButton({ tab, active, onSelect }: { tab: PanelTab; active: boolean; onSelect: () => void }) {
-  const Icon = tab.icon;
-  if (active) {
-    return (
-      <Pill role="tab" aria-selected aria-label={tab.label} onClick={onSelect}>
-        <Icon size={14} />
-        <span className="truncate">{tab.label}</span>
-      </Pill>
-    );
-  }
-  return (
-    <Tooltip label={tab.label}>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={false}
-        aria-label={tab.label}
-        onClick={onSelect}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-      >
-        <Icon size={14} />
-      </button>
-    </Tooltip>
-  );
 }
 
 export function RightPanel() {
@@ -377,33 +336,36 @@ export function RightPanel() {
       : []),
   ];
 
+  const tabIndex = tabs.findIndex((t) => t.kind === kind);
+  const previousTab = useRef(tabIndex);
+  const tabShift = tabIndex === previousTab.current ? 0 : tabIndex > previousTab.current ? 12 : -12;
+  useEffect(() => {
+    previousTab.current = tabIndex;
+  }, [tabIndex]);
+
   const contents = kind && (
     <>
+      <PanelTabs
+        tabs={tabs}
+        active={kind}
+        onSelect={showPanel}
+        height={(overHeader ? HEADER_HEIGHT : 44) + 1}
+        end={<PanelToggle />}
+      />
       <div
-        data-tauri-drag-region
-        role="tablist"
-        aria-label="Side panel views"
-        className="flex h-11 shrink-0 items-center gap-0.5 border-separator border-b px-2"
+        key={kind}
+        className="rc-tab-in flex min-h-0 flex-1 flex-col"
+        style={{ "--rc-tab-from": `${tabShift}px` } as CSSProperties}
       >
-        {tabs.map((tab) => (
-          <PanelTabButton
-            key={tab.kind}
-            tab={tab}
-            active={tab.kind === kind}
-            onSelect={() => showPanel(tab.kind)}
-          />
-        ))}
-        <span className="flex-1" data-tauri-drag-region />
-        <PanelToggle iconOnly />
+        <Suspense fallback={<div className="flex-1" />}>
+          {kind === "details" && <ThreadDetails />}
+          {kind === "changes" && <ChangesPanel />}
+          {kind === "pulls" && <PullsPanel />}
+          {kind === "issues" && <IssuesPanel />}
+          {kind === "preview" && <BrowserPreviewPanel />}
+          {kind === "peek" && <ThreadPeek />}
+        </Suspense>
       </div>
-      <Suspense fallback={<div className="flex-1" />}>
-        {kind === "details" && <ThreadDetails />}
-        {kind === "changes" && <ChangesPanel />}
-        {kind === "pulls" && <PullsPanel />}
-        {kind === "issues" && <IssuesPanel />}
-        {kind === "preview" && <BrowserPreviewPanel />}
-        {kind === "peek" && <ThreadPeek />}
-      </Suspense>
     </>
   );
 
