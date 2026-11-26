@@ -67,6 +67,8 @@ export interface WorkflowRun {
   woken: boolean;
   /** False for a run a restart left running that nothing drives yet. */
   driven: boolean;
+  /** A `checkpoint()` waits on the user. */
+  needsUser: boolean;
   /** What its workers spent so far, and which budget it reached. */
   usage?: RunUsage;
 }
@@ -150,6 +152,7 @@ export function parseWorkflowRun(value: Json | undefined): WorkflowRun | undefin
     hasResult: o.has_result === true,
     woken: o.woken === true,
     driven: o.driven === true,
+    needsUser: o.needs_user === true,
     usage: parseRunUsage(o.usage, o.budget) ?? undefined,
   };
 }

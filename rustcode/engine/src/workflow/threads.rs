@@ -207,6 +207,20 @@ impl AgentRunner for ThreadRunner {
                 .await;
         })
     }
+
+    fn ask<'a>(
+        &'a self,
+        question: &'a str,
+        options: &'a [String],
+        cancel: &'a CancellationToken,
+    ) -> Fut<'a, Result<String, String>> {
+        Box::pin(super::checkpoint::ask(
+            &self.caller,
+            question,
+            options,
+            cancel,
+        ))
+    }
 }
 
 #[cfg(test)]

@@ -50,6 +50,7 @@ return { reviews, verdict };
 | `parallel(items)` | `Promise.all` over an array of functions (called in order) or promises. Results come back in the array's order. The run's concurrency limit, not `parallel`, decides how many workers run at once. |
 | `phase(title)` | Names the step the next calls belong to. Phases and the workers in them are what the run reports. |
 | `log(...parts)` | Adds a line to the run's log (at most 200 are kept). |
+| `checkpoint(question, options)` | Asks the user of the thread that started the run, with the question card `ask_user_question` shows, and resolves to the option picked (2 to 4 non-empty strings; anything else rejects in the script). It is a recorded call (`harness: "checkpoint"` in `calls.jsonl`): a resumed or retried run answers it from the record without asking again, and it counts toward `call_budget`. While it waits it holds no worker slot, the run's status says `needs_user: true` and the app's run card says *Needs you*. Built-in threads register how to ask when they open, harness threads with their question channel; a thread nobody can ask (not open in any app) rejects the call. The run's time limit keeps counting while it waits. |
 | `args` | The JSON the run was started with. |
 
 ### Roles

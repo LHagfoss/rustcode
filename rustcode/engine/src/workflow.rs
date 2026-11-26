@@ -18,6 +18,7 @@
 //! wake that tells the starting thread it ended ([`claim_wake`]).
 
 mod budget;
+pub(crate) mod checkpoint;
 mod driver;
 mod reply;
 mod run;
@@ -1038,6 +1039,9 @@ fn report(store: &Store, record: &RunRecord) -> Value {
         },
         "budget": budget,
         "usage": usage,
+        "needs_user": calls.iter().any(|call| {
+            call.state == CallState::Running && call.harness.as_deref() == Some(checkpoint::KIND)
+        }),
         "phases": phases,
         "workers": workers,
         "logs": logs,

@@ -524,6 +524,7 @@ async fn set_launch(
     ask_user: bool,
     defer_tools: bool,
 ) -> bool {
+    crate::workflow::checkpoint::register(&session.id, session.question_asker());
     let channel = launch.is_some()
         && crate::orchestration::tool_socket::set_questions(&session.id, session.question_asker())
             .await;

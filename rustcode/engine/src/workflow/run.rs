@@ -78,6 +78,17 @@ pub(crate) trait AgentRunner: Send + Sync + 'static {
     ) -> Fut<'a, Result<String, String>>;
     /// Stop a worker whose run ended before it did, as well as it can.
     fn abandon<'a>(&'a self, worker: &'a Worker) -> Fut<'a, ()>;
+    /// Ask the user of the thread that started the run (`checkpoint()`);
+    /// the option picked.
+    fn ask<'a>(
+        &'a self,
+        question: &'a str,
+        options: &'a [String],
+        cancel: &'a CancellationToken,
+    ) -> Fut<'a, Result<String, String>> {
+        let _ = (question, options, cancel);
+        Box::pin(async { Err("checkpoint: this run has nobody to ask".to_owned()) })
+    }
 }
 
 /// What `agent()`'s second argument may hold.
@@ -183,6 +194,8 @@ struct Fresh {
     phase: Option<String>,
     prompt: String,
     options: AgentOptions,
+    /// The options a `checkpoint()` offers; `None` for an `agent()` call.
+    checkpoint: Option<Vec<String>>,
 }
 
 impl Run {
@@ -254,7 +267,11 @@ impl Run {
     fn begin(&self, prompt: String, options: &str) -> Result<Begun, String> {
         let options_value: Value = serde_json::from_str(options)
             .map_err(|error| format!("agent options are not JSON: {error}"))?;
-        let parsed = AgentOptions::parse(&options_value)?;
+        let checkpoint = super::checkpoint::options_of(&options_value).transpose()?;
+        let parsed = match checkpoint {
+            Some(_) => AgentOptions::default(),
+            None => AgentOptions::parse(&options_value)?,
+        };
         let hash = call_hash(&prompt, &options_value);
         let mut inner = self.lock();
         let seq = inner.next_seq;
@@ -293,7 +310,10 @@ impl Run {
                     seq,
                     phase: phase.clone(),
                     prompt: clip(&prompt, MAX_LINE_CHARS),
-                    harness: parsed.harness.clone(),
+                    harness: match checkpoint {
+                        Some(_) => Some(super::checkpoint::KIND.to_owned()),
+                        None => parsed.harness.clone(),
+                    },
                     model: parsed.model.clone(),
                     state: CallState::Running,
                     attempt: 0,
@@ -313,12 +333,16 @@ impl Run {
             phase,
             prompt,
             options: parsed,
+            checkpoint,
         })))
     }
 
     /// The asynchronous half: start a worker (or find the one an earlier
     /// attempt started), wait for it, and keep what it answered.
     async fn execute(&self, call: Fresh) -> Result<Value, String> {
+        if let Some(options) = call.checkpoint.clone() {
+            return self.checkpoint(call, &options).await;
+        }
         let permit = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => return Err(STOPPED.to_owned()),
@@ -439,6 +463,49 @@ impl Run {
         }
         self.record_call(record);
         drop(permit);
+        outcome
+    }
+
+    /// A `checkpoint()`: ask the starting thread's user and keep the answer,
+    /// so a resumed run replays it. Holds no worker permit while it waits.
+    async fn checkpoint(&self, call: Fresh, options: &[String]) -> Result<Value, String> {
+        let mut record = CallRecord {
+            key: call.key.clone(),
+            seq: call.seq,
+            phase: call.phase.clone(),
+            prompt: clip(&call.prompt, MAX_LINE_CHARS),
+            harness: Some(super::checkpoint::KIND.to_owned()),
+            model: None,
+            state: CallState::Running,
+            attempt: 0,
+            session_id: None,
+            link_id: None,
+            started_at: now_ms(),
+            finished_at: None,
+            result: None,
+            error: None,
+        };
+        self.record_call(record.clone());
+        let outcome = self
+            .runner
+            .ask(&call.prompt, options, &self.cancel)
+            .await
+            .map(Value::String);
+        if self.cancel.is_cancelled() {
+            return Err(STOPPED.to_owned());
+        }
+        record.finished_at = Some(now_ms());
+        match &outcome {
+            Ok(value) => {
+                record.state = CallState::Done;
+                record.result = Some(value.clone());
+            }
+            Err(reason) => {
+                record.state = CallState::Failed;
+                record.error = Some(clip(reason, MAX_LINE_CHARS));
+            }
+        }
+        self.record_call(record);
         outcome
     }
 
@@ -636,6 +703,7 @@ mod tests {
         running: AtomicUsize,
         most_running: AtomicUsize,
         abandoned: AtomicUsize,
+        asked: AtomicUsize,
         delay: Duration,
         /// The reply for a prompt, or an error.
         reply: Box<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
@@ -650,6 +718,7 @@ mod tests {
                 running: AtomicUsize::new(0),
                 most_running: AtomicUsize::new(0),
                 abandoned: AtomicUsize::new(0),
+                asked: AtomicUsize::new(0),
                 delay: Duration::from_millis(20),
                 reply: Box::new(reply),
             })
@@ -705,6 +774,22 @@ mod tests {
         fn abandon<'a>(&'a self, _worker: &'a Worker) -> Fut<'a, ()> {
             Box::pin(async move {
                 self.abandoned.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+
+        /// Picks the last option offered.
+        fn ask<'a>(
+            &'a self,
+            _question: &'a str,
+            options: &'a [String],
+            _cancel: &'a CancellationToken,
+        ) -> Fut<'a, Result<String, String>> {
+            Box::pin(async move {
+                self.asked.fetch_add(1, Ordering::SeqCst);
+                options
+                    .last()
+                    .cloned()
+                    .ok_or_else(|| "no options".to_owned())
             })
         }
     }
@@ -885,6 +970,37 @@ mod tests {
         let record = resume(&setup, runner.clone(), &record.id).await;
         assert_eq!(record.result, Some(json!("answer to: new prompt")));
         assert_eq!(runner.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_asks_once_and_a_resume_replays_the_answer() {
+        let setup = setup();
+        let source = r#"
+            const picked = await checkpoint("Continue?", ["Stop", "Continue"]);
+            const refused = [];
+            for (const call of [() => checkpoint("", ["A", "B"]), () => checkpoint("Go?", ["Only"])]) {
+              try { await call(); } catch (error) { refused.push(error.message); }
+            }
+            return { picked, refused };
+        "#;
+        let runner = Fake::echo();
+        let record = run_to_end(&setup, runner.clone(), source, limits()).await;
+        assert_eq!(record.status, RunStatus::Done, "{:?}", record.error);
+        let result = record.result.clone().unwrap();
+        assert_eq!(result["picked"], json!("Continue"));
+        assert_eq!(result["refused"].as_array().unwrap().len(), 2);
+        assert_eq!(runner.asked.load(Ordering::SeqCst), 1);
+        assert_eq!(runner.starts(), 0);
+        let calls = setup.store.calls(&record.id);
+        assert_eq!(
+            calls[0].harness.as_deref(),
+            Some(super::super::checkpoint::KIND)
+        );
+
+        let again = Fake::echo();
+        let resumed = resume(&setup, again.clone(), &record.id).await;
+        assert_eq!(resumed.result.unwrap()["picked"], json!("Continue"));
+        assert_eq!(again.asked.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
