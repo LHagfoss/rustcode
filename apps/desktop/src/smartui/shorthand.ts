@@ -51,12 +51,26 @@ const DIVIDER = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const escapeAttr = (text: string) => escapeHtml(text).replace(/"/g, "&quot;");
 
-/** `code` and **bold** in a line of text; HTML in it is kept as written. */
+/** `code`, **bold** and `[label](url)` links in a line of text; HTML in it is kept as written. */
 export function inline(text: string): string {
   const code = (value: string) =>
     value.replace(/`([^`]+)`/g, (_, body: string) => `<code>${escapeHtml(body)}</code>`);
-  return text.replace(/`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*/g, (match, literal, bold) =>
-    literal === undefined ? `<b>${code(bold)}</b>` : code(match),
+  const styled = (value: string) =>
+    value.replace(/`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*/g, (match, literal, bold) =>
+      literal === undefined ? `<b>${code(bold)}</b>` : code(match),
+    );
+  const link = (value: string) =>
+    value.replace(
+      /\[([^\]]+)\]\(((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\)/gi,
+      (_, label: string, href: string) => `<a href="${escapeAttr(href)}">${styled(label)}</a>`,
+    );
+  return text.replace(
+    /`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*|\[([^\]]+)\]\(((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\)/gi,
+    (match, literal, bold, label, href) => {
+      if (literal !== undefined) return code(match);
+      if (bold !== undefined) return `<b>${link(code(bold))}</b>`;
+      return `<a href="${escapeAttr(href)}">${styled(label)}</a>`;
+    },
   );
 }
 
@@ -295,21 +309,71 @@ function table(block: Block): string {
 }
 
 function callout(block: Block): string {
-  const [first = "", ...rest] = block.arg.split(/\s+/);
-  const tint = TINTS.has(first) ? ` rc-${first}` : "";
-  const title = tint ? rest.join(" ") : block.arg;
-  const text = [...block.items, ...block.text].map(inline).join(" ");
+  const [argBody, argTint] = tinted(block.arg);
+  const [first = "", ...rest] = argBody.split(/\s+/);
+  const leadTint = TINTS.has(first) ? ` rc-${first}` : "";
+  const title = leadTint ? rest.join(" ") : argBody;
+  let found = leadTint || argTint;
+  const text = [...block.items, ...block.text]
+    .map((line) => {
+      const [clean, own] = tinted(line);
+      if (own && !found) found = own;
+      return inline(own ? clean : line);
+    })
+    .join(" ");
   const lead = title ? `<b>${inline(title)}</b> ` : "";
-  return `<div class="rc-callout${tint}">${lead}${text}</div>`;
+  return `<div class="rc-callout${found}">${lead}${text}</div>`;
+}
+
+const LINK_URL = /^(?:https?:\/\/|mailto:)/i;
+const SOURCES_HEADING = /^sources?(?:\s*[:·-]?\s*\(?\d+\)?)?$/i;
+const MD_SOURCE =
+  /^\[([^\]]+)\]\(\s*((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\s*\)(?:\s*(?:\||—|–|-)\s*(.*))?$/i;
+
+function stripUrl(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
+}
+
+function sourceItem(item: string): string {
+  const trimmed = item.trim();
+  if (!trimmed) return "";
+  if (/^<a\b[^>]*\bhref\s*=/i.test(trimmed)) return `<li>${inline(trimmed)}</li>`;
+  const md = MD_SOURCE.exec(trimmed);
+  if (md) {
+    const note = md[3]?.trim() ? ` <span class="rc-muted">${inline(md[3].trim())}</span>` : "";
+    return `<li><a href="${escapeAttr(md[2]!)}">${inline(md[1]!)}</a>${note}</li>`;
+  }
+  const [first = "", second, third] = cells(trimmed, 3);
+  if (second !== undefined) {
+    const url = stripUrl(second);
+    if (LINK_URL.test(url)) {
+      const note = third ? ` <span class="rc-muted">${inline(third)}</span>` : "";
+      return `<li><a href="${escapeAttr(url)}">${inline(first || url)}</a>${note}</li>`;
+    }
+    const firstUrl = stripUrl(first);
+    if (LINK_URL.test(firstUrl)) {
+      const label = third ? `${second} — ${third}` : second;
+      return `<li><a href="${escapeAttr(firstUrl)}">${inline(label)}</a></li>`;
+    }
+    const rest = third ? `${second} — ${third}` : second;
+    return `<li>${inline(first)} <span class="rc-muted">${inline(rest)}</span></li>`;
+  }
+  const onlyUrl = stripUrl(first);
+  if (LINK_URL.test(onlyUrl)) return `<li><a href="${escapeAttr(onlyUrl)}">${escapeHtml(onlyUrl)}</a></li>`;
+  return `<li>${inline(first)}</li>`;
 }
 
 function sources(block: Block): string {
-  const out = block.items.map((item) => {
-    const [title = "", url] = cells(item, 2);
-    const href = url || title;
-    return `<li><a href="${escapeAttr(href)}">${inline(title)}</a></li>`;
-  });
-  const summary = block.arg ? inline(block.arg) : "Sources";
+  const entries = [...block.text.map((line) => line.replace(/^\d+[.)]\s+/, "")), ...block.items];
+  const out = entries.map(sourceItem).filter(Boolean);
+  const [rawSummary = ""] = cells(block.arg, 2);
+  const summary =
+    rawSummary && !SOURCES_HEADING.test(rawSummary)
+      ? inline(rawSummary)
+      : /^source\b/i.test(rawSummary) && !/^sources\b/i.test(rawSummary)
+        ? "Source"
+        : "Sources";
   return `<details class="rc-details rc-sources"><summary>${summary}</summary><ol>${out.join("")}</ol></details>`;
 }
 
@@ -660,6 +724,9 @@ function code(block: Block): string {
 
 function details(block: Block): string {
   const [summary = "", aside] = cells(block.arg, 2);
+  if (SOURCES_HEADING.test(summary) && (!aside || /^\d+$/.test(aside))) {
+    return sources({ ...block, arg: summary });
+  }
   const asideHtml = aside ? `<span class="rc-muted">${inline(aside)}</span>` : "";
   const items = block.items.length ? list({ ...block, arg: "" }) : "";
   const text = block.text.length ? `<p>${inline(block.text.join(" "))}</p>` : "";
@@ -849,9 +916,16 @@ export function expandShorthand(source: string): string {
     }
     const directive = DIRECTIVE.exec(line);
     if (directive && BLOCKS.has(directive[1]!)) {
-      flush();
       const name = directive[1]!;
       const arg = directive[2]!.trim();
+      const emptySourcesWrapper =
+        name === "sources" &&
+        block?.name === "details" &&
+        block.items.length === 0 &&
+        block.text.length === 0 &&
+        SOURCES_HEADING.test(cells(block.arg, 2)[0] ?? "");
+      if (emptySourcesWrapper) block = null;
+      else flush();
       if (name === "tab") {
         let set = tabs as TabSet | null;
         if (set) out.push("</section>");

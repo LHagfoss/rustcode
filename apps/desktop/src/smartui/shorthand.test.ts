@@ -122,12 +122,47 @@ describe("shorthand", () => {
     expect(expandShorthand(":: callout warn Careful.\nThe cap is `5|10` s.")).toBe(
       '<div class="rc-callout rc-warn"><b>Careful.</b> The cap is <code>5|10</code> s.</div>',
     );
+    expect(expandShorthand(":: callout Sandbox only {warn}\nDon't give it prod credentials.")).toBe(
+      '<div class="rc-callout rc-warn"><b>Sandbox only</b> Don\'t give it prod credentials.</div>',
+    );
     expect(expandShorthand(":: p\nOne line\nand **two**.")).toBe("<p>One line and <b>two</b>.</p>");
     expect(expandShorthand(":: title Runs <today>\n:: h Next")).toBe(
       "<title>Runs &lt;today&gt;</title>\n<h3>Next</h3>",
     );
     expect(expandShorthand(':: sources\n- Docs | https://example.com/?a="b"')).toBe(
       '<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://example.com/?a=&quot;b&quot;">Docs</a></li></ol></details>',
+    );
+  });
+
+  test("sources and details Sources normalise links, plain notes, numbered rows and empty wrappers", () => {
+    expect(
+      expandShorthand(
+        [
+          ":: details Sources",
+          ":: sources",
+          "- [Stripe Docs](https://stripe.com/docs) — Sandbox guide",
+          '- <a href="https://example.com/api">API ref</a>',
+          "- Spec | <https://example.com/spec> | section 2",
+          "- Local file | `docs/smart-ui.md`",
+        ].join("\n"),
+      ),
+    ).toBe(
+      '<details class="rc-details rc-sources"><summary>Sources</summary><ol>' +
+        '<li><a href="https://stripe.com/docs">Stripe Docs</a> <span class="rc-muted">Sandbox guide</span></li>' +
+        '<li><a href="https://example.com/api">API ref</a></li>' +
+        '<li><a href="https://example.com/spec">Spec</a> <span class="rc-muted">section 2</span></li>' +
+        '<li>Local file <span class="rc-muted"><code>docs/smart-ui.md</code></span></li>' +
+        "</ol></details>",
+    );
+    expect(
+      expandShorthand(
+        ":: details Sources | 2\n1. Docs | https://example.com/docs\n2. https://example.com/faq",
+      ),
+    ).toBe(
+      '<details class="rc-details rc-sources"><summary>Sources</summary><ol>' +
+        '<li><a href="https://example.com/docs">Docs</a></li>' +
+        '<li><a href="https://example.com/faq">https://example.com/faq</a></li>' +
+        "</ol></details>",
     );
   });
 
@@ -172,6 +207,9 @@ describe("shorthand", () => {
     );
     expect(inline("<span class=rc-badge>x</span> `<b>`")).toBe(
       "<span class=rc-badge>x</span> <code>&lt;b&gt;</code>",
+    );
+    expect(inline("See [**Docs**](https://example.com/a_(b)) and `[raw](https://x.test)`")).toBe(
+      'See <a href="https://example.com/a_(b)"><b>Docs</b></a> and <code>[raw](https://x.test)</code>',
     );
   });
 

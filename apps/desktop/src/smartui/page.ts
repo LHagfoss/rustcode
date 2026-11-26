@@ -946,46 +946,108 @@ ${KIT_SCRIPT}
       link.replaceChildren(icon, label);
       link.classList.add("rc-github-chip");
     }
-    // Coalesce adjacent bibliography folds, including the plain HTML form.
-    const sourceList = (fold) => {
-      if (!fold || !fold.matches("details")) return null;
-      const [summary, list] = fold.children;
-      if (fold.children.length !== 2 || !summary.matches("summary") || !list.matches("ol, ul")) return null;
-      if (!fold.classList.contains("rc-sources") && !/^sources?$/i.test(summary.textContent.trim())) return null;
-      return Array.from(list.children).every((row) => row.matches("li") && row.querySelectorAll("a[href]").length === 1)
-        ? list : null;
+    // Coalesce adjacent bibliography folds, including :: details Sources and raw HTML forms.
+    const SOURCE_TITLE = /^sources?(?:\\s*[:·-]?\\s*\\(?\\d+\\)?)?$/i;
+    const summaryLabel = (summary) => Array.from(summary.childNodes)
+      .filter((node) => !(node instanceof Element && node.matches(".rc-sources-count, .rc-muted, .rc-label")))
+      .map((node) => node.textContent || "")
+      .join("")
+      .trim();
+    const isSourceFold = (fold) => {
+      if (!fold || !fold.matches("details")) return false;
+      const summary = fold.firstElementChild;
+      if (!summary || !summary.matches("summary")) return false;
+      return fold.classList.contains("rc-sources") || SOURCE_TITLE.test(summaryLabel(summary));
+    };
+    const unwrapSourceItems = (fold) => {
+      const rows = [];
+      for (const child of Array.from(fold.children).slice(1)) {
+        if (child.matches("ol, ul")) {
+          for (const li of Array.from(child.children)) {
+            if (!li.matches("li")) continue;
+            li.classList.remove("rc-item", "rc-prose");
+            rows.push(li);
+          }
+        } else if (child.matches("details") && isSourceFold(child)) {
+          rows.push(...unwrapSourceItems(child));
+        } else if (child.textContent && child.textContent.trim()) {
+          const li = document.createElement("li");
+          li.append(...child.childNodes);
+          rows.push(li);
+        }
+      }
+      return rows;
     };
     for (const fold of document.querySelectorAll("details")) {
-      if (!fold.isConnected) continue;
-      const list = sourceList(fold);
-      if (!list) continue;
-      fold.classList.add("rc-sources");
+      if (!fold.isConnected || !isSourceFold(fold)) continue;
+      if (fold.children.length === 1 && fold.nextElementSibling && fold.nextElementSibling.matches("ol, ul")) {
+        fold.append(fold.nextElementSibling);
+      }
+      const group = [fold];
       let next = fold.nextElementSibling;
-      while (sourceList(next)) {
-        list.append(...sourceList(next).children);
-        fold.open ||= next.open;
-        next.remove();
-        next = fold.nextElementSibling;
+      while (isSourceFold(next)) {
+        group.push(next);
+        next = next.nextElementSibling;
+      }
+      const rows = [];
+      let open = false;
+      for (const part of group) {
+        open ||= part.open;
+        rows.push(...unwrapSourceItems(part));
+      }
+      const primary = group[0];
+      for (const extra of group.slice(1)) extra.remove();
+      primary.classList.add("rc-sources");
+      primary.open = open;
+      const summary = primary.firstElementChild;
+      if (summary) {
+        for (const aside of Array.from(summary.querySelectorAll(":scope > .rc-muted, :scope > .rc-label"))) {
+          if (/^\\(?\\d+\\)?$/.test((aside.textContent || "").trim())) aside.remove();
+        }
+        const label = summaryLabel(summary);
+        if (SOURCE_TITLE.test(label) && /\\d/.test(label)) {
+          const count = summary.querySelector(":scope > .rc-sources-count");
+          summary.textContent = /^source\\b/i.test(label) && !/^sources\\b/i.test(label) ? "Source" : "Sources";
+          if (count) summary.append(count);
+        }
+      }
+      let list = primary.querySelector(":scope > ol, :scope > ul");
+      if (!list) {
+        list = document.createElement("ol");
+        primary.append(list);
+      } else {
+        list.classList.remove("rc-list");
+      }
+      for (const child of Array.from(primary.children).slice(1)) {
+        if (child !== list) child.remove();
       }
       const seen = new Set();
-      for (const row of Array.from(list.children)) {
-        const url = row.querySelector("a[href]").href;
-        if (seen.has(url)) row.remove();
-        seen.add(url);
+      const kept = [];
+      for (const row of rows) {
+        const links = row.querySelectorAll("a[href]");
+        const text = (row.textContent || "").trim();
+        if (!links.length && !text) continue;
+        const key = links.length === 1 ? "u:" + links[0].href : "t:" + text;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        kept.push(row);
       }
+      list.replaceChildren(...kept);
     }
     // A sources fold says how many it holds and which site each link is on.
     for (const sources of document.querySelectorAll("details.rc-sources")) {
+      const items = sources.querySelectorAll("li");
       const links = sources.querySelectorAll("li a[href]");
       const summary = sources.querySelector(":scope > summary");
-      if (summary && links.length) {
+      const total = items.length || links.length;
+      if (summary && total) {
         let count = summary.querySelector(":scope > .rc-sources-count");
         if (!count) {
           count = document.createElement("span");
           count.className = "rc-sources-count";
           summary.append(count);
         }
-        count.textContent = String(links.length);
+        count.textContent = String(total);
       }
       for (const link of links) {
         if (link.nextElementSibling && link.nextElementSibling.classList.contains("rc-sources-host")) continue;

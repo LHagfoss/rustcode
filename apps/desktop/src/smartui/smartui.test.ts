@@ -1193,6 +1193,13 @@ describe("smart ui", () => {
     expect(BASE_CSS).toMatch(/\ndetails > summary \{[^}]*cursor: pointer;/);
     expect(BASE_CSS).toContain("details > summary::-webkit-details-marker { display: none; }");
     expect(BASE_CSS).toContain(".rc-sources > summary > .rc-sources-count {");
+    const script = runtimeScript(
+      "t",
+      pageTheme("dark", () => ""),
+    );
+    expect(script).toContain("const isSourceFold =");
+    expect(script).toContain("const unwrapSourceItems =");
+    expect(() => new Function(script)).not.toThrow();
     expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
     expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");
   });
