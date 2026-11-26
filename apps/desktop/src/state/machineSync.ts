@@ -20,6 +20,7 @@ import {
 } from "./store";
 import { splitThreadKey, threadKey } from "./threadKeys";
 import { isTombstoned, keptUnlisted } from "./threadListGuards";
+import { isPrimaryWindow } from "./windowSync";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -122,7 +123,7 @@ export async function flushMachineOutbox(
   conn: AcpConnection,
   rows: readonly SessionSummary[],
 ): Promise<void> {
-  if (flushingOutbox.has(host) || !changesFor(host).length) return;
+  if (!isPrimaryWindow() || flushingOutbox.has(host) || !changesFor(host).length) return;
   const byId = new Map(rows.map((row) => [row.id, row]));
   let overridden = 0;
   const toSend: OutboxChange[] = [];

@@ -15,6 +15,7 @@ import {
   type IssueListState,
   issueBranchSlug,
   issueErrorTitle,
+  issuesCwd,
   startIssueThread,
 } from "../state/githubIssues";
 import {
@@ -355,7 +356,7 @@ export function IssuesPanel() {
   const selectedId = useApp((s) => s.selectedId);
   const cwd = useApp((s) => {
     const thread = s.selectedId ? s.threads[s.selectedId] : undefined;
-    return thread?.worktree?.repo || thread?.cwd || s.projectCwd;
+    return issuesCwd(s.selectedId, thread?.worktree?.repo || thread?.cwd || s.projectCwd);
   });
   const host = selectedId ? splitThreadKey(selectedId).host : "";
   const [state, setState] = useState<IssueListState>("open");
@@ -439,6 +440,16 @@ export function IssuesPanel() {
       return next;
     });
   };
+
+  if (host) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        <Callout>
+          Issues are available for threads on this computer. Switch to a local thread to browse them.
+        </Callout>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

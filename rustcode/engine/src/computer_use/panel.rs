@@ -396,13 +396,28 @@ pub fn cropped_clip(rect: &ElementRect, viewport_w: f64, viewport_h: f64) -> Opt
     let max_h = (viewport_h - y).max(1.0);
     let width = (rect.width + pad * 2.0).clamp(1.0, max_w);
     let height = (rect.height + pad * 2.0).clamp(1.0, max_h);
+    let scale = (MAX_PICK_SCREENSHOT_PIXELS / (width * height))
+        .sqrt()
+        .min(1.0);
     Some(json!({
         "x": x,
         "y": y,
         "width": width,
         "height": height,
-        "scale": 1,
+        "scale": scale,
     }))
+}
+
+/// Largest area, in CSS pixels after scaling, a picked element's screenshot covers.
+pub const MAX_PICK_SCREENSHOT_PIXELS: f64 = 480_000.0;
+
+/// Largest base64 screenshot a pick returns, so the answer fits one remote relay frame.
+pub const MAX_PICK_SCREENSHOT_BYTES: usize = 512 * 1024;
+
+/// The captured base64 screenshot, or nothing when it would not fit `MAX_PICK_SCREENSHOT_BYTES`.
+pub fn capped_screenshot(data: Option<&str>) -> Option<String> {
+    data.filter(|data| !data.is_empty() && data.len() <= MAX_PICK_SCREENSHOT_BYTES)
+        .map(str::to_owned)
 }
 
 pub(super) fn now_ms() -> u64 {
@@ -793,7 +808,7 @@ pub(super) async fn handle_cdp_action(
                 )
                 .await
             {
-                picked.screenshot_png = shot["data"].as_str().map(str::to_owned);
+                picked.screenshot_png = capped_screenshot(shot["data"].as_str());
             }
             serde_json::to_value(picked).map_err(|e| e.to_string())
         }
@@ -944,5 +959,41 @@ mod tests {
         assert_eq!(clip["width"], json!(116.0));
         assert_eq!(clip["height"], json!(56.0));
         assert!(cropped_clip(&ElementRect::default(), 390.0, 844.0).is_none());
+        assert_eq!(clip["scale"], json!(1.0));
+    }
+
+    #[test]
+    fn cropped_clip_scales_a_large_element_down_to_the_pixel_budget() {
+        let clip = cropped_clip(
+            &ElementRect {
+                x: 0.0,
+                y: 0.0,
+                width: 3840.0,
+                height: 2160.0,
+            },
+            3840.0,
+            2160.0,
+        )
+        .unwrap();
+        let scale = clip["scale"].as_f64().unwrap();
+        let width = clip["width"].as_f64().unwrap();
+        let height = clip["height"].as_f64().unwrap();
+        assert!(scale < 1.0);
+        assert!(width * height * scale * scale <= MAX_PICK_SCREENSHOT_PIXELS + 1.0);
+    }
+
+    #[test]
+    fn capped_screenshot_drops_images_that_would_overflow_a_relay_frame() {
+        assert_eq!(capped_screenshot(Some("png")).as_deref(), Some("png"));
+        let limit = "a".repeat(MAX_PICK_SCREENSHOT_BYTES);
+        assert_eq!(
+            capped_screenshot(Some(&limit)).map(|s| s.len()),
+            Some(limit.len())
+        );
+        let oversized = "a".repeat(MAX_PICK_SCREENSHOT_BYTES + 1);
+        assert!(capped_screenshot(Some(&oversized)).is_none());
+        assert!(capped_screenshot(Some("")).is_none());
+        assert!(capped_screenshot(None).is_none());
+        assert!(MAX_PICK_SCREENSHOT_BYTES * 2 <= crate::remote_gateway::gateway::MAX_FRAME_BYTES);
     }
 }

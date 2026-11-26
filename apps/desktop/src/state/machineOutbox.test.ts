@@ -34,6 +34,7 @@ import {
   unsettleThreads,
   useApp,
 } from "./store";
+import { setWindowRoleForTests } from "./windowSync";
 
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
 const ID = "mock-studio-1";
@@ -218,6 +219,19 @@ describe("a thread on a machine that is away", () => {
     setPinned([KEY], true);
     expect(useApp.getState().pinned).toContain(KEY);
     expect(changesFor(STUDIO)).toMatchObject([{ kind: "pin", key: KEY, value: true, base: false }]);
+  });
+
+  test("a window that is not the primary one leaves the sending to it", async () => {
+    await settleThread(KEY);
+    const asked: JsonObject[] = [];
+    setWindowRoleForTests("window-2", "main");
+    try {
+      await flushMachineOutbox(STUDIO, liveConnection(asked), [row(ID, 1_000)]);
+    } finally {
+      setWindowRoleForTests(null, "main");
+    }
+    expect(asked).toEqual([]);
+    expect(changesFor(STUDIO)).toHaveLength(1);
   });
 
   test("sends what waits, in order, when the machine lists its threads again", async () => {

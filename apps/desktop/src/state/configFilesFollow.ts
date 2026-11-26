@@ -13,8 +13,9 @@
  */
 
 import { create } from "zustand";
-import { arr, type JsonObject, obj, str } from "../acp/jsonrpc";
+import { arr, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
+import { syncStorageKey } from "./storageSync";
 
 export type FileKind = "skills" | "themes" | "commands";
 export const FILE_KINDS: { kind: FileKind; label: string }[] = [
@@ -42,6 +43,7 @@ function readOff(): Record<string, FileKind[]> {
 
 /** The folders each follower does not take, by machine id; every folder travels unless listed. */
 export const useFilesFollowOff = create<{ off: Record<string, FileKind[]> }>(() => ({ off: readOff() }));
+syncStorageKey(STORAGE, () => useFilesFollowOff.setState({ off: readOff() }));
 
 export function followedKinds(id: string): FileKind[] {
   const off = useFilesFollowOff.getState().off[id] ?? [];
@@ -83,17 +85,19 @@ function listed(answer: unknown): ListedEntry[] {
 }
 
 /**
- * The entries of `from` that `to` lacks or holds with other content, and the names per kind `to`
- * keeps as `source`'s copies.
+ * The entries of `from` that `to` lacks or holds with other content, the ones `to` already holds
+ * as they are (still recorded as `source`'s, so a later prune removes them), and the names per kind
+ * `to` keeps as `source`'s copies.
  */
 export function planCopy(
   from: ListedEntry[],
   to: ListedEntry[],
   kinds: FileKind[],
-): { copy: ListedEntry[]; keep: Record<FileKind, string[]>; skipped: string[] } {
+): { copy: ListedEntry[]; adopt: ListedEntry[]; keep: Record<FileKind, string[]>; skipped: string[] } {
   const there = new Map(to.map((entry) => [`${entry.kind}/${entry.name}`, entry.hash]));
   const keep: Record<FileKind, string[]> = { skills: [], themes: [], commands: [] };
   const copy: ListedEntry[] = [];
+  const adopt: ListedEntry[] = [];
   const skipped: string[] = [];
   for (const entry of from) {
     if (!kinds.includes(entry.kind)) continue;
@@ -101,14 +105,19 @@ export function planCopy(
     const label = `${entry.kind}/${entry.name}`;
     if (entry.skipped) skipped.push(`${label} (${entry.skipped})`);
     else if (there.get(label) !== entry.hash) copy.push(entry);
+    else adopt.push(entry);
   }
-  return { copy, keep, skipped };
+  return { copy, adopt, keep, skipped };
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
  * Copy `kinds` from the machine `from` to the machine `to`, recording them on `to` as copies of
  * `source` (the id of the machine they came from). Answers `null` when either side's engine is too
- * old to list its files.
+ * old to list its files; any other failure to list is thrown.
  */
 export async function copyFiles(
   request: Request,
@@ -125,8 +134,9 @@ export async function copyFiles(
       request(from, "_rustcode/config/files/list", { kinds }, LIST_MS).then(listed),
       request(to, "_rustcode/config/files/list", { kinds }, LIST_MS).then(listed),
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof RpcError && error.isMethodNotFound) return null;
+    throw error;
   }
   const plan = planCopy(theirs, ours, kinds);
   const report: FilesCopyReport = { written: [], removed: [], skipped: plan.skipped };
@@ -141,15 +151,29 @@ export async function copyFiles(
       );
       if (str(answer?.outcome) === "written") report.written.push(label);
     } catch (error) {
-      report.skipped.push(`${label} (${error instanceof Error ? error.message : String(error)})`);
+      report.skipped.push(`${label} (${reason(error)})`);
+    }
+  }
+  for (const entry of plan.adopt) {
+    try {
+      const content = obj(
+        await request(to, "_rustcode/config/files/get", { kind: entry.kind, name: entry.name }, ENTRY_MS),
+      );
+      await request(to, "_rustcode/config/files/put", { source, entry: content ?? {} }, ENTRY_MS);
+    } catch (error) {
+      report.skipped.push(`${entry.kind}/${entry.name} (${reason(error)})`);
     }
   }
   for (const kind of kinds) {
-    const answer = obj(
-      await request(to, "_rustcode/config/files/prune", { source, kind, keep: plan.keep[kind] }, LIST_MS),
-    );
-    for (const name of arr(answer?.removed))
-      if (typeof name === "string") report.removed.push(`${kind}/${name}`);
+    try {
+      const answer = obj(
+        await request(to, "_rustcode/config/files/prune", { source, kind, keep: plan.keep[kind] }, LIST_MS),
+      );
+      for (const name of arr(answer?.removed))
+        if (typeof name === "string") report.removed.push(`${kind}/${name}`);
+    } catch (error) {
+      report.skipped.push(`${kind} cleanup (${reason(error)})`);
+    }
   }
   return report;
 }

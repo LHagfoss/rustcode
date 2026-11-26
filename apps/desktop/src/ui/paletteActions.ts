@@ -6,6 +6,7 @@
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
+import { issuesAvailableFor } from "../state/githubIssues";
 import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
 import {
@@ -187,7 +188,11 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       detail: "GitHub issues and worktree fan-out",
       icon: CircleDot,
       words: "open issues github bugs tasks worktree fan out",
-      disabled: s.agent?.pullRequests ? undefined : "Not available with this harness",
+      disabled: !s.agent?.pullRequests
+        ? "Not available with this harness"
+        : issuesAvailableFor(s.selectedId)
+          ? undefined
+          : "Only for threads on this computer",
       run: () => setPanel("issues"),
     },
     {

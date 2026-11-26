@@ -11,8 +11,10 @@
 import { create } from "zustand";
 import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
+import { errorDetail, recordAutoSync } from "./autoSyncStatus";
 import { copyFiles, followedKinds } from "./configFilesFollow";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
+import { syncStorageKey } from "./storageSync";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STORAGE = "rustcode.settingsFollow";
@@ -31,6 +33,7 @@ function readIds(): string[] {
 
 /** The machines that follow this computer's settings, by id. */
 export const useSettingsFollow = create<{ ids: string[] }>(() => ({ ids: readIds() }));
+syncStorageKey(STORAGE, () => useSettingsFollow.setState({ ids: readIds() }));
 
 export function followsThisComputer(id: string): boolean {
   return useSettingsFollow.getState().ids.includes(id);
@@ -80,10 +83,15 @@ export function copySettingsTo(host: string): Promise<number> {
     again.add(host);
     return running;
   }
-  const task = copyOnce(host).finally(() => {
-    copies.delete(host);
-    if (again.delete(host)) void copySettingsTo(host).catch(() => 0);
-  });
+  const task = copyOnce(host)
+    .catch((error: unknown) => {
+      recordAutoSync(host, "follow", "failed", errorDetail(error));
+      throw error;
+    })
+    .finally(() => {
+      copies.delete(host);
+      if (again.delete(host)) void copySettingsTo(host).catch(() => 0);
+    });
   copies.set(host, task);
   return task;
 }
@@ -102,7 +110,8 @@ async function copyOnce(host: string): Promise<number> {
   let remote: JsonObject | undefined;
   try {
     remote = obj(obj(await scope.machineRequest(host, "_rustcode/settings/get", {}, REQUEST_MS))?.values);
-  } catch {
+  } catch (error) {
+    recordAutoSync(host, "follow", "skipped", `Its settings could not be read (${errorDetail(error)}).`);
     return 0;
   }
   const values = followValues(local, remote);
@@ -111,7 +120,15 @@ async function copyOnce(host: string): Promise<number> {
     await scope.machineRequest(host, "_rustcode/settings/set", { values }, REQUEST_MS);
     await scope.loadServerSettings(host, true).catch(() => undefined);
   }
-  await copyFilesTo(host, scope.machineRequest);
+  const files = await copyFilesTo(host, scope.machineRequest);
+  if (files) recordAutoSync(host, "follow", files.outcome, files.detail);
+  else
+    recordAutoSync(
+      host,
+      "follow",
+      "synced",
+      count ? `${count} ${count === 1 ? "setting" : "settings"} changed.` : undefined,
+    );
   return count;
 }
 
@@ -119,11 +136,20 @@ async function copyOnce(host: string): Promise<number> {
 async function copyFilesTo(
   host: string,
   request: (host: string, method: string, params: JsonObject, timeoutMs: number) => Promise<unknown>,
-): Promise<void> {
-  const { useFleet } = await import("./fleet");
-  const self = useFleet.getState().host?.hostId;
-  if (!self || !followsThisComputer(host)) return;
-  await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host)).catch(() => null);
+): Promise<{ outcome: "skipped" | "failed"; detail: string } | null> {
+  if (!followsThisComputer(host)) return null;
+  const { ownHostId } = await import("./fleet");
+  const self = await ownHostId();
+  if (!self)
+    return { outcome: "skipped", detail: "This computer has no id yet, so its files were not copied." };
+  try {
+    const copied = await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host));
+    return copied === null
+      ? { outcome: "skipped", detail: "Its server is too old to take skills, themes and commands." }
+      : null;
+  } catch (error) {
+    return { outcome: "failed", detail: `Files: ${errorDetail(error)}` };
+  }
 }
 
 /**
@@ -141,16 +167,26 @@ export function followLocalChange(): void {
 let started = false;
 let lastListing: string | null = null;
 
+/** A fresh listing against the last one: one that could not be read keeps the last as the baseline. */
+export function compareListing(
+  previous: string | null,
+  listing: string | null,
+): { baseline: string | null; changed: boolean } {
+  if (listing === null) return { baseline: previous, changed: false };
+  return { baseline: listing, changed: previous !== null && listing !== previous };
+}
+
 /** List this computer's skills, themes and commands; a change since the last look reaches every follower. */
-async function checkLocalFiles(): Promise<void> {
-  if (!useSettingsFollow.getState().ids.length) return;
+async function checkLocalFiles(seed = false): Promise<void> {
+  if (!seed && !useSettingsFollow.getState().ids.length) return;
   const scope = await import("./settingsScope");
-  const listing = JSON.stringify(
-    await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).catch(() => null),
+  const listing = await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).then(
+    (answer) => JSON.stringify(answer),
+    () => null,
   );
-  const changed = lastListing !== null && listing !== lastListing;
-  lastListing = listing;
-  if (changed) followLocalChange();
+  const next = compareListing(lastListing, listing);
+  lastListing = next.baseline;
+  if (next.changed) followLocalChange();
 }
 
 /** Copy to a follower each time its connection opens. */
@@ -162,5 +198,6 @@ export function startSettingsFollow(): void {
       if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
     });
   });
+  void checkLocalFiles(true).catch(() => undefined);
   setInterval(() => void checkLocalFiles().catch(() => undefined), FILES_CHECK_MS);
 }

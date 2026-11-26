@@ -16,6 +16,7 @@ import { create } from "zustand";
 import type { SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import type { CacheStorage } from "./machineCache";
+import { syncStorageKey } from "./storageSync";
 import { splitThreadKey } from "./threadKeys";
 
 /** Where the changes live in app storage: `{ ‹machine id›: Change[] }`. */
@@ -96,6 +97,7 @@ function save(byHost: Record<string, OutboxChange[]>): void {
 
 /** The waiting changes, by machine id, in the order they were made. */
 export const useOutbox = create<{ byHost: Record<string, OutboxChange[]> }>(() => ({ byHost: load() }));
+syncStorageKey(OUTBOX_KEY, () => useOutbox.setState({ byHost: load() }));
 
 function commit(byHost: Record<string, OutboxChange[]>): void {
   const kept = Object.fromEntries(Object.entries(byHost).filter(([, list]) => list.length));

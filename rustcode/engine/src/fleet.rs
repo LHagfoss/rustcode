@@ -298,15 +298,29 @@ pub(crate) fn apply_own_name(
 
 // -------------------------------------------------------------------- views
 
-/// The gateway id of this computer, or empty while no gateway ever ran here.
+/// The id this computer is known by: the gateway's, else the `machines/host-id`
+/// the client keeps, else empty while neither exists yet.
 pub(crate) fn own_id(dir: &Path) -> String {
     #[derive(Deserialize)]
     struct Identity {
         #[serde(default)]
         gateway_id: String,
     }
+    #[derive(Deserialize)]
+    struct StoredId {
+        #[serde(default)]
+        id: String,
+    }
     read_private_json::<Identity>(&dir.join("remote").join("gateway.json"), 4 * 1024)
+        .ok()
         .map(|identity| identity.gateway_id)
+        .filter(|id| !id.trim().is_empty())
+        .or_else(|| {
+            read_private_json::<StoredId>(&dir.join("machines").join("host-id"), 4 * 1024)
+                .ok()
+                .map(|stored| stored.id)
+                .filter(|id| !id.trim().is_empty())
+        })
         .unwrap_or_default()
 }
 
@@ -637,6 +651,23 @@ mod tests {
             format!(r#"{{"gateway_id":"{id}"}}"#),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn own_id_falls_back_to_the_client_host_id_without_a_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(own_id(dir.path()), "");
+        std::fs::create_dir_all(dir.path().join("machines")).unwrap();
+        std::fs::write(
+            dir.path().join("machines").join("host-id"),
+            r#"{"id":"0123456789abcdef0123456789abcdef"}"#,
+        )
+        .unwrap();
+        assert_eq!(own_id(dir.path()), "0123456789abcdef0123456789abcdef");
+        write_identity(dir.path(), "");
+        assert_eq!(own_id(dir.path()), "0123456789abcdef0123456789abcdef");
+        write_identity(dir.path(), "gateway-id");
+        assert_eq!(own_id(dir.path()), "gateway-id");
     }
 
     #[test]

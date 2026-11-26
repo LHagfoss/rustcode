@@ -28,6 +28,7 @@ import {
 import { deliverPendingRevocations } from "./revokeEverywhere";
 import { connectionFor } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
+import { isPrimaryWindow } from "./windowSync";
 
 /**
  * The wire name of the machine sync. It keeps the word "environment" on purpose: older paired
@@ -270,10 +271,55 @@ async function ask(connection: AcpConnection | null, params: JsonObject): Promis
   return parseFleetView(await connection.request<Json>(FLEET_SYNC_METHOD, params, SYNC_TIMEOUT_MS));
 }
 
+/**
+ * This computer's fleet id: the one the last sync learned, else asked of its engine now, for work
+ * that starts before the first sync has answered.
+ */
+export async function ownHostId(
+  askLocal: () => Promise<FleetView | null> = () => ask(connectionFor(LOCAL_HOST), {}),
+): Promise<string | undefined> {
+  const known = useFleet.getState().host?.hostId;
+  if (known) return known;
+  const view = await askLocal().catch(() => null);
+  return view?.host.hostId || undefined;
+}
+
+/**
+ * Send `view` to every connected peer at once and merge each answer into this computer's engine as
+ * it arrives, one merge at a time. A peer that is slow or away holds up only its own answer: the
+ * others are merged without waiting for it. An answer from a computer that is not the one saved
+ * under that id is not merged. Answers the view after the last merge.
+ */
+export async function exchangeWithPeers<C>(
+  peers: readonly { id: string; connection: C }[],
+  view: FleetView,
+  askPeer: (connection: C, params: JsonObject) => Promise<FleetView | null>,
+  merge: (remote: FleetView) => Promise<FleetView | null>,
+): Promise<FleetView> {
+  const params = { from: wireEntry(view.host), entries: view.entries.map(wireEntry) };
+  let latest = view;
+  let merging: Promise<void> = Promise.resolve();
+  await Promise.allSettled(
+    peers.map(async ({ id, connection }) => {
+      const remote = await askPeer(connection, params);
+      if (!remote || (remote.host.hostId && remote.host.hostId !== id)) return;
+      merging = merging.then(async () => {
+        latest = (await merge(remote).catch(() => null)) ?? latest;
+      });
+      await merging;
+    }),
+  );
+  return latest;
+}
+
 async function syncOnce(): Promise<void> {
   const local = connectionFor(LOCAL_HOST);
   let view = await ask(local, {});
   if (!view) return;
+  if (!isPrimaryWindow()) {
+    useFleet.setState({ host: view.host, entries: view.entries, syncedAt: Date.now() });
+    return;
+  }
   await deliverPendingRevocations();
 
   // This computer's own rename goes to its engine first, so every peer below hears it.
@@ -282,21 +328,12 @@ async function syncOnce(): Promise<void> {
     view = (await ask(local, { entries: [wireEntry(step.entry)] })) ?? view;
   }
 
-  for (const link of machineLinks()) {
-    if (!link.connection) continue;
-    try {
-      const remote = await ask(link.connection, {
-        from: wireEntry(view.host),
-        entries: view.entries.map(wireEntry),
-      });
-      // An answer from a computer that is not the one saved under this id is not merged.
-      if (!remote || (remote.host.hostId && remote.host.hostId !== link.machine.id)) continue;
-      view =
-        (await ask(local, { from: wireEntry(remote.host), entries: remote.entries.map(wireEntry) })) ?? view;
-    } catch {
-      // Away, older than this protocol, or slow: caught up at the next sync.
-    }
-  }
+  const peers = machineLinks().flatMap((link) =>
+    link.connection ? [{ id: link.machine.id, connection: link.connection }] : [],
+  );
+  view = await exchangeWithPeers(peers, view, ask, (remote) =>
+    ask(local, { from: wireEntry(remote.host), entries: remote.entries.map(wireEntry) }),
+  );
 
   const machines = useMachines.getState().machines;
   if (hasShell()) {
