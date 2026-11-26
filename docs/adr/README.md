@@ -20,3 +20,4 @@ changes, update the record in the same pull request.
 | [0008](0008-builtin-agent-crate.md) | The built-in agent gets its own crate, behind a `BuiltinAgent` trait |
 | [0009](0009-objectives-and-coordination.md) | Objectives run as workflow runs, and the engine owns them |
 | [0010](0010-thread-state-ownership.md) | Who owns each piece of thread state, and how it comes back after a crash |
+| [0011](0011-os-computer-use.md) | OS computer use runs in a separate worker, behind the RustCode MCP server |
