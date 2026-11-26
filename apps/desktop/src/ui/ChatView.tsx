@@ -206,7 +206,7 @@ function Header({
                 <button
                   type="button"
                   aria-label={`Project: ${project}`}
-                  className="-mx-1 flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-2 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
+                  className="-mx-1 flex h-7 max-w-[220px] shrink-0 items-center gap-2 rounded-sm px-2 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
                 >
                   <ProjectMark name={project} />
                   <span className="min-w-0 truncate">{project}</span>
