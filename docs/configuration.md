@@ -722,6 +722,35 @@ with other agents, and pushing one agent's skills into it would conflict with
 them. Version those skills separately, or point `extra_skill_dirs` at a
 directory you sync yourself.
 
+### From a paired machine, without Git
+
+Paired machines can copy the same three folders over their connection, with no
+Git remote:
+
+```bash
+rc config sync from <machine>                 # skills, themes and commands
+rc config sync from <machine> --only skills   # or themes, commands
+```
+
+`<machine>` is a name or host id from `rc machines list`. It copies once and
+does not follow. In the app, a paired machine's Settings page has **Fetch from
+‹machine›** for the same copy, and **Use ‹this computer›'s settings** keeps a
+follower's folders up to date with this computer's (`docs/desktop.md` ›
+Settings on one machine or all).
+
+What travels: every skill folder in `skills/` that has a `SKILL.md`, with all
+its files; each `themes/*.toml`; each `commands/*.md`. An entry over 512 KiB
+or a skill with more than 200 files is skipped and named in the result. Hidden
+files and symlinks stay behind, and so does everything else in the config
+directory: `config.toml`, credentials, `provider-accounts.json` and the
+machine's own state never move. Skills in `~/.agents/skills` and
+`extra_skill_dirs` stay put, for the reason above.
+
+A copy replaces an entry of the same name. `followed-files.json` in the config
+directory records which entries came from which machine, so when an entry is
+deleted on the source, the next copy removes only the copy taken from it.
+Entries the receiving machine has under other names are never changed.
+
 ## Prompt commands
 
 In the terminal frontend, reusable Markdown templates are loaded with

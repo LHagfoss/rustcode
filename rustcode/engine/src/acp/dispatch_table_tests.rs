@@ -477,6 +477,30 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for crate::worktrees::HandoffRequest"
     );
     assert!(
+        <config_files::ListRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/config/files/list"
+        ),
+        "method mismatch for config_files::ListRequest"
+    );
+    assert!(
+        <config_files::GetRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/config/files/get"
+        ),
+        "method mismatch for config_files::GetRequest"
+    );
+    assert!(
+        <config_files::PutRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/config/files/put"
+        ),
+        "method mismatch for config_files::PutRequest"
+    );
+    assert!(
+        <config_files::PruneRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/config/files/prune"
+        ),
+        "method mismatch for config_files::PruneRequest"
+    );
+    assert!(
         <worktree_scripts::StateRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/worktrees/scripts/state"
         ),

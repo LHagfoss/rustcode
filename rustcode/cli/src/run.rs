@@ -1404,6 +1404,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "Sync repository setup complete! You can now run `rc config sync` anytime."
                 );
             }
+            crate::cli::SyncAction::From(args) => {
+                if let Err(error) = crate::sync_from::run(&args).await {
+                    eprintln!("Sync from {} failed: {error:#}", args.machine);
+                    std::process::exit(1);
+                }
+            }
             crate::cli::SyncAction::PullThenPush => {
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."

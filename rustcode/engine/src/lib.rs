@@ -10,6 +10,7 @@ mod checkpoints;
 pub mod clipboard;
 pub mod command_guard;
 pub mod config;
+pub mod config_files;
 pub mod connections;
 mod context;
 pub mod controller;

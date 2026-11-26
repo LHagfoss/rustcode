@@ -6,6 +6,7 @@ mod capabilities;
 pub(crate) mod clients;
 mod commands;
 mod config;
+mod config_files;
 mod connections;
 mod cursor;
 pub(crate) mod data;
