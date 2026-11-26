@@ -214,6 +214,8 @@ const METHOD_PREFIXES: &[&str] = &[
     "_rustcode/capabilities",
     "_rustcode/outside/",
     "_rustcode/loops/",
+    "_rustcode/browser/",
+    "_rustcode/ports/",
 ];
 
 fn allowed(method: &str) -> bool {

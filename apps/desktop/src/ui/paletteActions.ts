@@ -44,6 +44,7 @@ import {
   FolderPlus,
   Gauge,
   GitPullRequest,
+  Globe,
   Layers,
   type LucideIcon,
   Pin,
@@ -188,6 +189,15 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       words: "open issues github bugs tasks worktree fan out",
       disabled: s.agent?.pullRequests ? undefined : "Not available with this harness",
       run: () => setPanel("issues"),
+    },
+    {
+      id: "preview",
+      label: "Open Browser Preview",
+      detail: "Stream the thread's browser and pick UI elements",
+      icon: Globe,
+      words: "open browser preview chrome screencast inspect element picker",
+      disabled: s.selectedId ? undefined : "Select a thread",
+      run: () => setPanel("preview"),
     },
     {
       id: "usage",

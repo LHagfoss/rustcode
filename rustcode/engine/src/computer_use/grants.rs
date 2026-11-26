@@ -55,6 +55,25 @@ pub(super) fn grant(session_id: &str, origin: &str) {
         .insert(origin.to_owned());
 }
 
+/// Whether `session_id` has an active site grant for `origin`.
+pub(super) fn has_origin(session_id: &str, origin: &str) -> bool {
+    all()
+        .get(session_id)
+        .is_some_and(|thread| thread.origins.contains(origin))
+}
+
+/// Whether `session_id` has an active site grant covering `host`.
+pub(super) fn has_host(session_id: &str, target_host: &str) -> bool {
+    let target = target_host.to_ascii_lowercase();
+    all().get(session_id).is_some_and(|thread| {
+        thread
+            .origins
+            .iter()
+            .filter_map(|origin| host(origin))
+            .any(|granted| granted.to_ascii_lowercase() == target)
+    })
+}
+
 /// Whether a call on `origin` runs without a card under the thread's grant.
 /// Clicks and typing need `actions_too`; an unknown origin never does.
 pub(super) fn skips_card(

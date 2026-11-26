@@ -17,6 +17,7 @@ import {
 import { mockGit, mockGitRun, mockQrRows } from "./mockGit";
 import { mockIssuesList } from "./mockIssues";
 import { mockPortsCall } from "./mockPorts";
+import { mockBrowserCall } from "./mockPreview";
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
@@ -865,6 +866,7 @@ export class MockEngine {
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
     if (isLoopMethod(method)) return this.loops.answer(method, obj(params) ?? {});
+    if (method.startsWith("_rustcode/browser/")) return mockBrowserCall(method, obj(params) ?? {});
     if (method.startsWith("_rustcode/memory/")) return this.memory.answer(method, obj(params) ?? {});
     if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
       return this.connections.answer(method, obj(params) ?? {});

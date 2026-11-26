@@ -1210,6 +1210,8 @@ export async function handleInbound(
       // A sign-in or a call now waits for the owner on that machine, or no longer does.
       else if (message.method === "_rustcode/outside/changed")
         void import("./outside").then((outside) => outside.refreshOutside(host));
+      else if (message.method === "_rustcode/browser/frame")
+        void import("./browserPreview").then((bp) => bp.onBrowserFrameNotification(message.params, host));
       return;
     case "request":
       if (message.method === Method.requestPermission) {
