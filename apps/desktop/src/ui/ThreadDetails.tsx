@@ -311,9 +311,9 @@ function PullsSection({
       folded={folded}
       onToggle={onToggle}
       action={
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <OpenButton label="Issues" onClick={() => showPanel("issues")} />
-          <OpenButton label="All pull requests" onClick={openAll} />
+          <OpenButton label="All" tip="All pull requests" onClick={openAll} />
         </div>
       }
     >
@@ -352,10 +352,14 @@ const OUTCOME = {
   failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
 } as const;
 
-/** A turn's price: reported, else estimated (marked `~`), else a dash, so every row has one. */
-function turnPrice(turn: TurnEntry, harness: string | undefined, model: string | undefined): string {
+/** A turn's price: reported, else estimated (marked `~`), else nothing rather than a placeholder. */
+function turnPrice(
+  turn: TurnEntry,
+  harness: string | undefined,
+  model: string | undefined,
+): string | undefined {
   const cost = turnCost(turn, harness, model);
-  if (!cost) return "$–";
+  if (!cost) return undefined;
   return `${cost.estimated ? "~" : ""}${formatCost(cost.usd)}`;
 }
 
@@ -559,16 +563,17 @@ function ContextMeter({ used, usage }: { used: number; usage: SessionUsage }) {
 }
 
 /** A section's way to its full view: the diff, the pull list. */
-function OpenButton({ label, onClick }: { label: string; onClick: () => void }) {
+/** A quiet text link in a section heading: its word says where it goes, so two never read alike. */
+function OpenButton({ label, tip, onClick }: { label: string; tip?: string; onClick: () => void }) {
   return (
-    <Tooltip label={label}>
+    <Tooltip label={tip ?? label}>
       <button
         type="button"
-        aria-label={label}
+        aria-label={tip ?? label}
         onClick={onClick}
-        className="flex size-6 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+        className="flex h-6 items-center rounded-md px-1.5 text-caption text-fg-muted hover:bg-fill hover:text-fg"
       >
-        <ChevronRight size={14} />
+        {label}
       </button>
     </Tooltip>
   );

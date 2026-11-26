@@ -39,6 +39,9 @@ function contextTint(fraction: number) {
 }
 
 /** Brand while there is room; amber under a fifth, red under a twentieth. */
+/** The plan's bar and percentage stay off the composer until this much or less is left; the hover card always says it. */
+const PLAN_SHOWN_BELOW = 50;
+
 function planTint(left: number) {
   return left < 5 ? "bg-danger" : left < 20 ? "bg-warning" : "bg-accent";
 }
@@ -172,7 +175,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           }}
           className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >
-          {left !== null && (
+          {left !== null && left < PLAN_SHOWN_BELOW && (
             <span className="flex items-center gap-1.5">
               <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
                 <span

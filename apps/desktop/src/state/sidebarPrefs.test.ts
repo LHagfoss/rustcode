@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { PREF, readPref, SIDEBAR_DENSITIES, sidebarDensity, writePref } from "./sidebarPrefs";
 
 describe("the sidebar's row density", () => {
-  test("is detailed unless compact was chosen", () => {
-    expect(sidebarDensity(undefined)).toBe("detailed");
-    expect(sidebarDensity("roomy")).toBe("detailed");
-    expect(sidebarDensity(3)).toBe("detailed");
-    expect(sidebarDensity("compact")).toBe("compact");
+  test("is compact unless detailed was chosen", () => {
+    expect(sidebarDensity(undefined)).toBe("compact");
+    expect(sidebarDensity("roomy")).toBe("compact");
+    expect(sidebarDensity(3)).toBe("compact");
+    expect(sidebarDensity("detailed")).toBe("detailed");
   });
 
-  test("offers both densities, detailed first", () => {
-    expect(SIDEBAR_DENSITIES.map((d) => d.id)).toEqual(["detailed", "compact"]);
+  test("offers both densities, compact first", () => {
+    expect(SIDEBAR_DENSITIES.map((d) => d.id)).toEqual(["compact", "detailed"]);
   });
 
   test("is kept with the other sidebar preferences", () => {

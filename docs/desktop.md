@@ -1250,12 +1250,13 @@ composer's keys stay outside the table.
   rows are two lines (`docs/design.md` › Sidebar rows): the title with the state
   and its time, then the branch, worktree or folder cut in the middle (else the
   computer), delegates, the pull request and the model.
-  *Sidebar rows: Compact* (Settings › Appearance, or
-  ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
-  one 28px line instead: a status dot (needs you, working, failed, finished
-  unseen; `compactMark`), the harness mark, the title and its state or age,
-  with the project, computer, branch and model on the hover card, so about two
-  and a half times as many threads fit. Renaming edits the title in place, at the row's height. A turn that ended while you looked elsewhere keeps its row at
+  *Sidebar rows: Compact*, the default (Settings › Appearance, or
+  ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`), draws each thread on
+  one 32px line instead: the project's mark with a status dot on its corner
+  (needs you, working, failed, finished unseen; `compactMark`), the title in
+  muted text (the open thread's at full strength) and its age in faint text,
+  with the computer, branch, agent and model on the hover card and in Thread
+  info, so about twice as many threads fit. The sidebar opens 288px wide. Renaming edits the title in place, at the row's height. A turn that ended while you looked elsewhere keeps its row at
   full strength until you open the thread (`finished`/`failed` in the store;
   *Mark Unread* in the menu brings it back). Hovering swaps the state for Pin,
   Settle (or Unsettle) and the menu, in the same place, on a 24px target each.

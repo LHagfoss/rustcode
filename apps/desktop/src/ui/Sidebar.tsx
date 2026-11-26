@@ -128,7 +128,7 @@ import { UpdateRow } from "./Updates";
 const MIN = LIGHTS_INSET + 144;
 const MAX = 460;
 /** What the sidebar is wide before it is dragged, and what a double-click on its edge puts back. */
-const DEFAULT_WIDTH = 256;
+const DEFAULT_WIDTH = 288;
 
 function useSidebarWidth() {
   const [width, setWidth] = useState(() =>
