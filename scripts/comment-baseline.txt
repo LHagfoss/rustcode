@@ -46,7 +46,7 @@
 9 apps/desktop/src/acp/mockMachineFixtures.ts
 4 apps/desktop/src/acp/mockMachineRoutes.ts
 10 apps/desktop/src/acp/mockOutside.ts
-16 apps/desktop/src/acp/mockSeeds.ts
+15 apps/desktop/src/acp/mockSeeds.ts
 2 apps/desktop/src/acp/mockSmartUi.ts
 2 apps/desktop/src/acp/mockTransfer.ts
 18 apps/desktop/src/acp/mockTransport.ts

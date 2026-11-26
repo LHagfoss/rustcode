@@ -790,6 +790,10 @@ fn previous_builtin(filename: &str, content: &str) -> bool {
             "rustcode.toml",
             include_str!("builtin/previous/rustcode.toml"),
         ),
+        (
+            "rustcode.toml",
+            include_str!("builtin/previous/rustcode-graphite.toml"),
+        ),
         ("nord.toml", include_str!("builtin/previous/nord.toml")),
     ];
     PREVIOUS_BUILTINS

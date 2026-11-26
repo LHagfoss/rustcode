@@ -105,7 +105,7 @@ export function ThreadSectionLabel({
   return (
     <div
       className={cx(
-        "flex w-full px-2 font-medium text-caption text-fg-faint",
+        "flex w-full px-2 font-medium text-[10.5px] text-fg-faint uppercase tracking-[0.08em]",
         threads ? "h-7 items-center gap-1" : "h-5 items-start",
       )}
     >
