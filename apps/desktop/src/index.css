@@ -1359,11 +1359,9 @@ aside[aria-hidden="true"] + .rc-main-panel {
   transition: background-color 160ms ease-out;
 }
 .rc-panel-card {
-  background: var(--rc-composer-bg);
-  @apply glass-filter;
-  box-shadow:
-    0 3px 12px -4px var(--rc-shadow-soft),
-    0 0 0 1px var(--rc-separator);
+  background: var(--rc-bg);
+  border-radius: var(--rc-radius-xl);
+  box-shadow: 0 0 0 1px var(--rc-separator);
 }
 /* The tray is the card's last row, not a slab of its own: the card's one glass carries it. Its
    controls come from four files and each sets its own height (`h-7` on the pills, the round send
@@ -1451,9 +1449,8 @@ aside[aria-hidden="true"] + .rc-main-panel {
 /* The chat's bottom edge: a short fade to the pane, pinned behind the composer (ui/ChatView.tsx).
    The card floats over it, so text shows through its glass higher up and fades at the very bottom
    rather than stopping on a hard edge. */
-/* The chat lane's side gutters (`px-3 sm:px-12`), less the room the right panel's card takes from
-   the row it floats over (`--rc-panel-room`, ui/RightPanel.tsx). The transcript keeps the row's
-   whole width, so its scrollbar stays at the window's edge, and the lane centres in what is left.
+/* The chat lane's side gutters (`px-3 sm:px-12`). The right panel is a card of its own beside the
+   chat's (ui/RightPanel.tsx), so the lane always has its card's whole width.
    `rc-lane-pad` pads a scroller, `rc-lane-inset` places an absolute box. */
 .rc-lane-pad,
 .rc-lane-inset {
@@ -1465,47 +1462,28 @@ aside[aria-hidden="true"] + .rc-main-panel {
     --rc-lane-gutter: 3rem;
   }
 }
-.rc-peek {
-  --rc-panel-room: 0px;
-}
 .rc-peek .rc-lane-pad,
 .rc-peek .rc-lane-inset {
   --rc-lane-gutter: 0.75rem;
 }
 .rc-lane-pad {
   padding-left: var(--rc-lane-gutter);
-  padding-right: calc(var(--rc-lane-gutter) + var(--rc-panel-room, 0px));
+  padding-right: var(--rc-lane-gutter);
 }
 .rc-lane-inset {
   left: var(--rc-lane-gutter);
-  right: calc(var(--rc-lane-gutter) + var(--rc-panel-room, 0px));
+  right: var(--rc-lane-gutter);
 }
 /* The room that is the lane's, measured for the composer's width and the toasts' centre. */
 .rc-lane-room {
-  right: var(--rc-panel-room, 0px);
+  right: 0;
 }
-/* Centred horizontally in the chat lane, clear of the right panel's card (`--rc-panel-room`). */
 .rc-lane-center {
-  left: calc(50% - var(--rc-panel-room, 0px) / 2);
+  left: 50%;
 }
-/* Opening or closing the card eases the lane with it, on the card's own 200ms. */
-.rc-panel-moving .rc-lane-pad {
-  transition: padding-right 200ms var(--ease-snappy);
-}
-.rc-panel-moving .rc-lane-inset {
-  transition: right 200ms var(--ease-snappy);
-}
-.rc-panel-moving .rc-lane-center {
-  transition-property: opacity, translate, left, bottom;
-}
-/* The composer's stack eases its `bottom` as a new thread fills, and its `right` with the lane. */
+/* The composer's stack eases its `bottom` as a new thread fills. */
 .rc-lane-stack {
   transition: bottom 500ms var(--ease-snappy);
-}
-.rc-panel-moving .rc-lane-stack {
-  transition:
-    bottom 500ms var(--ease-snappy),
-    right 200ms var(--ease-snappy);
 }
 .rc-composer-fade {
   height: 56px;

@@ -1324,8 +1324,8 @@ composer's keys stay outside the table.
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): the
   plan's progress and the side panel's toggle, each on its own with no shared
   pill behind them. The toggle is a quiet pill, its icon then "Thread info". While
-  the panel is open on a wide window the card rises over the header's right end and
-  carries the toggle at its top right, and the header leaves it out
+  the panel is open on a wide window its card, beside the chat's, carries the
+  toggle at the right end of its tab band, and the header leaves it out
   (`ui/PanelToggle.tsx`). The title is a breadcrumb after the
   project (t3code-style): it opens the thread's menu, the sidebar row's own,
   with a chevron on hover, and its Rename edits the title in place. Settings › Chat › Thread
@@ -1552,10 +1552,9 @@ composer's keys stay outside the table.
   The new-thread screen opens closed. The Changes read belongs to the thread's
   folder: an answer for the last thread's folder is dropped and never drawn
   with this thread's name, and while the turn runs the panel says the changes
-  are read when it ends. It takes no slot, so the chat keeps the pane and the
-  lane centres in the room the card leaves, narrowing only when that room is
-  too small to read; under 320px of room the card floats over the lane, which
-  steps clear as far as it can. The card stops above the composer.
+  are read when it ends. It is a card of its own beside the chat's, in the slot
+  after the main card, so the chat's card narrows to make room and keeps at
+  least 360px.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).

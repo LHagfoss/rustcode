@@ -40,6 +40,7 @@ import { GrantDialog } from "./ui/Links";
 import { useLoopBadges } from "./ui/LoopBadge";
 import { OutsideApprovals } from "./ui/OutsideApprovals";
 import { cx, Pill } from "./ui/primitives";
+import { PANEL_SLOT_ID } from "./ui/RightPanel";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { SettingsPage } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
@@ -266,9 +267,9 @@ export function App() {
           <Sidebar />
           <div className="rc-main-panel relative flex min-w-0 flex-1 overflow-hidden bg-bg">
             {/*
-              The view and the terminal under it. The right panel is docked inside
-              the chat view's own row (ui/ChatView.tsx), so it is never drawn over
-              the board, the review or the compare view.
+              The view and the terminal under it. The chat view's right panel draws
+              as a card of its own in the slot after this one (ui/RightPanel.tsx),
+              so it is never beside the board, the review or the compare view.
             */}
             <div className={cx("flex min-w-0 flex-1 flex-col", settings && "invisible")} inert={settings}>
               {view.kind === "chat" ? (
@@ -291,6 +292,7 @@ export function App() {
               </div>
             )}
           </div>
+          <div id={PANEL_SLOT_ID} className={cx("flex min-h-0 shrink-0", settings && "hidden")} />
         </div>
       </div>
       <CommandPalette />

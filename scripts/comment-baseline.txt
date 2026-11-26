@@ -460,7 +460,7 @@
 21 apps/desktop/src/ui/ChangesPanel.tsx
 5 apps/desktop/src/ui/ChatBackgroundGroup.tsx
 5 apps/desktop/src/ui/ChatLight.tsx
-97 apps/desktop/src/ui/ChatView.tsx
+95 apps/desktop/src/ui/ChatView.tsx
 11 apps/desktop/src/ui/CommandPalette.tsx
 5 apps/desktop/src/ui/Compare.tsx
 210 apps/desktop/src/ui/Composer.tsx
@@ -545,7 +545,7 @@
 2 apps/desktop/src/ui/RestartToApply.tsx
 21 apps/desktop/src/ui/Review.tsx
 12 apps/desktop/src/ui/RightPanel.test.ts
-71 apps/desktop/src/ui/RightPanel.tsx
+52 apps/desktop/src/ui/RightPanel.tsx
 9 apps/desktop/src/ui/RollingNumber.tsx
 5 apps/desktop/src/ui/Rows.test.ts
 48 apps/desktop/src/ui/Rows.tsx

@@ -1348,24 +1348,19 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   requests, Thread). Overview uses a 280px card sized to its contents, with workspace actions,
   branch, Changes, delegates and context usage. It previews up to three active delegates, with
   the remaining agents available on demand. The detailed sections are under More thread details.
-  The other views use a card **floating** over the chat view's row at the window's
-  right edge (`ui/ChatView.tsx`), so it is never drawn over the board, the review or
-  the compare view. Every view draws on one surface, the Details card's: the chat's
-  own `bg-bg` with a hairline `border-border` and `rounded-2xl`, inset 12px from the
-  window's top, right and bottom edges: it rises over the header's right end and
-  carries the panel's toggle ("Thread info", `ui/PanelToggle.tsx`) at its top right,
-  and runs the window's whole height. The chat column keeps the row's whole
-  width, so the transcript's scrollbar stays at the window's edge; the card
-  publishes the room it takes as `--rc-panel-room` on the row, and the lane pads by
-  it (`.rc-lane-pad` on a scroller, `.rc-lane-inset` on an absolute box, index.css),
-  so the lane re-centres in the room that is left. The header floats above both,
-  and the card draws above the header's glass (`z-20` against the header's
-  `z-10`). The header's controls stand clear of it by `--rc-panel-room`, published on the
-  column that holds both. Where the window draws its own controls at the header's right
-  (Windows) and on a sheet, the card stays below the header and the toggle in it. The
-  dock around the card takes no pointer, so the chat under it still scrolls.
-  A pane's header row is a 44px band: "Properties" on Details, a back button and the
-  view's name on the views it opens (Changes, Pull requests, Thread), and the toggle;
+  The other views use a **second card beside the chat's**, Sable-style: the chat
+  view renders it into the slot after the main card (`PANEL_SLOT_ID`, `App.tsx`), so
+  the chat's card narrows as it opens (its width eases over 200ms) instead of being
+  drawn over, and it is never beside the board, the review or the compare view.
+  Every view draws on the chat card's own surface (`.rc-panel-card`: `bg-bg`, the
+  `--rc-separator` hairline and `--rc-radius-xl`), 8px from the window's top, right
+  and bottom edges and from the chat's card, the window's whole height. Where the
+  window draws its own controls at the top right (Windows) the card starts under the
+  header's row. The chat lane always has its card's whole width.
+  A pane's header row is a 44px band of tabs (`role="tablist"`): Thread info,
+  Changes, Pull requests, Issues and Preview, plus the beside thread while it shows,
+  each a quiet icon `Pill` with the open one filled and named; the panel's toggle
+  ("Thread info", `ui/PanelToggle.tsx`) closes it from the band's right end, icon only;
   a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
   pane is wide enough for split, the git button (commit, push, pull, open a pull
