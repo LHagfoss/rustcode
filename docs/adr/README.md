@@ -21,3 +21,4 @@ changes, update the record in the same pull request.
 | [0009](0009-objectives-and-coordination.md) | Objectives run as workflow runs, and the engine owns them |
 | [0010](0010-thread-state-ownership.md) | Who owns each piece of thread state, and how it comes back after a crash |
 | [0011](0011-os-computer-use.md) | OS computer use runs in a separate worker, behind the RustCode MCP server |
+| [0012](0012-embedded-browser.md) | The browser panel shows the engine's own Chrome |
