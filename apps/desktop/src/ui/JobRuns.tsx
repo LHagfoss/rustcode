@@ -61,6 +61,7 @@ export function runText(run: LoopRun): string {
     if (run.queued) return `Waiting for ${run.machine ?? "its machine"} (offline)`;
     if (run.machine) return `Started on ${run.machine}`;
     if (run.quiet) return "Nothing to report";
+    if (run.runId) return "Workflow finished";
     return run.verdict ?? "Finished";
   }
   if (run.state === "running" || run.state === "claimed") return "Running…";

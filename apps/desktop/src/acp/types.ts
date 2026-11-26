@@ -126,6 +126,7 @@ export const Method = {
   /** Jobs: scheduled, one-off, manual and webhook agent runs (`docs/daemon.md` › Jobs). */
   loopsList: "_rustcode/loops/list",
   loopsSave: "_rustcode/loops/save",
+  workflowsSaved: "_rustcode/workflows/saved",
   loopsSetPaused: "_rustcode/loops/set_paused",
   loopsRun: "_rustcode/loops/run",
   loopsCancel: "_rustcode/loops/cancel",

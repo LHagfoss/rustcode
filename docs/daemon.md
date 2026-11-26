@@ -244,6 +244,25 @@ login while named accounts exist.
   the command that signs it in, and the job pauses after that one run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
+### Workflow jobs (the `workflow` action)
+
+A job can run a saved workflow instead of a prompt (#4443): wire action
+`{"type": "workflow", "name", "workspace", "args"?, "harness"?, "account"?}`,
+or *Workflow* in the Jobs page editor, which lists the project's
+`.rustcode/workflows/*.js` (`_rustcode/workflows/saved {workspace}` answers
+`{names}`). `_rustcode/loops/save` takes `workflow` and `args` in place of a
+prompt.
+
+- Each run starts a fresh thread in the project, titled with the job's name,
+  and starts the named workflow there with `args`. A run its webhook started
+  gets `args.webhook = {event, delivery, body}`.
+- The job run ends when the workflow run does: `done` succeeds, `cancelled`
+  is cancelled, and `failed` or `timed_out` fails and counts toward the
+  three-failure pause. Its output is `{thread_id, run_id, status}`, so the
+  run row links both.
+- A name with no file fails the run with the path it looked for. A workflow
+  job runs on this computer only, and like a Loop run it may take 25 minutes.
+
 ### Across paired machines (and optional hub fallback)
 
 Paired machines form one bidirectional network: the remote ACP relay exposes

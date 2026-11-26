@@ -25,7 +25,7 @@ import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import { MockConnections } from "./mockConnections";
 import { mockBrowse, mockCreate } from "./mockFolders";
 import { ACP_CAPS, HARNESS_MODELS, initialHarnesses, MOCK_CUSTOM_MODELS, withLast } from "./mockHarnesses";
-import { MockLoops } from "./mockLoops";
+import { isLoopMethod, MockLoops } from "./mockLoops";
 import { MOCK_LOCAL_HOST, mockHostEntry, mockNameWins, mockRemote } from "./mockMachineFixtures";
 import { MockAddedMcp } from "./mockMcp";
 import { MockMemory } from "./mockMemory";
@@ -860,7 +860,7 @@ export class MockEngine {
   }
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
-    if (method.startsWith("_rustcode/loops/")) return this.loops.answer(method, obj(params) ?? {});
+    if (isLoopMethod(method)) return this.loops.answer(method, obj(params) ?? {});
     if (method.startsWith("_rustcode/memory/")) return this.memory.answer(method, obj(params) ?? {});
     if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
       return this.connections.answer(method, obj(params) ?? {});

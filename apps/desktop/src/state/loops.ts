@@ -7,6 +7,7 @@ import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc"
 import { Method } from "../acp/types";
 import { connectionFor, request, useApp } from "./store";
 import { LOCAL_HOST, threadKey } from "./threadKeys";
+import { workflowParams } from "./workflowJobs";
 
 /** Failed runs in a row that pause a loop: the daemon's `LOOP_FAILURE_LIMIT`. */
 export const LOOP_FAILURE_LIMIT = 3;
@@ -49,6 +50,9 @@ export interface LoopRun {
   machine?: string;
   /** That machine was offline, so the hub holds the run until it connects again. */
   queued?: boolean;
+  /** A workflow job's run: the workflow run it started in `threadId`, and how that run ended. */
+  runId?: string;
+  workflowStatus?: string;
 }
 
 export interface Loop {
@@ -75,6 +79,10 @@ export interface Loop {
   webhookEvents?: string[];
   /** A hub Loop: each run goes to this member of the hub, and `workspace` is a folder there. */
   machine?: string;
+  /** A workflow job: the `.rustcode/workflows/<name>.js` each run starts, in place of the prompt. */
+  workflow?: string;
+  /** The workflow's `args`. */
+  args?: JsonObject;
   nextDueAt?: number;
   /** Newest first. */
   runs: LoopRun[];
@@ -155,6 +163,8 @@ function runOf(value: Json): LoopRun | null {
     signedOut: bool(raw.signedOut) ?? false,
     machine: str(raw.machine),
     queued: bool(raw.queued) ?? false,
+    runId: str(raw.runId),
+    workflowStatus: str(raw.workflowStatus),
   };
 }
 
@@ -180,6 +190,8 @@ function loopOf(value: Json, host = LOCAL_HOST): Loop | null {
     webhook: bool(raw.webhook) ?? false,
     webhookEvents: arr(raw.webhookEvents).flatMap((event) => str(event) ?? []),
     machine: str(raw.machine),
+    workflow: str(raw.workflow),
+    args: obj(raw.args),
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
   };
@@ -739,6 +751,10 @@ export interface LoopDraft {
   webhookEvents?: string;
   /** On the hub: run each turn on this member instead of this computer. */
   machine?: string;
+  /** Set (even empty) for a workflow job: the saved workflow each run starts. */
+  workflow?: string;
+  /** The workflow's args as typed: a JSON object, or blank for none. */
+  args?: string;
 }
 
 /** A loop's webhook as saving it answers, once, when its secret is new. */
@@ -808,7 +824,7 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
     const value = draft[key]?.trim();
     if (value) params[key] = value;
   }
-  return params;
+  return draft.workflow === undefined ? params : workflowParams(params, draft.workflow, draft.args);
 }
 
 /** The events a typed filter names, without blanks or repeats (issue 4386). */

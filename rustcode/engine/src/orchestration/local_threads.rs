@@ -22,6 +22,7 @@
 //! from what the engine can see (its `/yolo` and Settings › General › Default
 //! access).
 
+pub(crate) mod job_workflow;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -2297,60 +2298,13 @@ pub(crate) async fn run_loop_thread(
                 Err(end) => return end,
             }
         }
-        None => {
-            let harness = match harness_for(run.harness.as_deref()) {
-                Ok(harness) => harness,
-                Err(value) => return failed(refusal(value)),
-            };
-            let model = match model_for(&harness, run.model.as_deref()) {
-                Ok(model) => model,
-                Err(value) => return failed(refusal(value)),
-            };
-            let account = match loop_account(&harness, run.account.as_deref()) {
-                Ok(account) => account,
-                Err(value) => return failed(refusal(value)),
-            };
-            run_login = Some((harness.clone(), account.clone()));
-            let mut meta = Map::new();
-            meta.insert("harness".to_owned(), json!(harness.id));
-            if let Some(account) = account {
-                meta.insert("account".to_owned(), json!(account));
+        None => match start_job_thread(&engine, &run, &cancellation).await {
+            Ok((thread_id, login)) => {
+                run_login = Some(login);
+                thread_id
             }
-            meta.insert("title".to_owned(), json!(run.name));
-            // The run's thread belongs to the Jobs view, not the thread list.
-            // Store the stable job id so "View job" still resolves after renames
-            // or beyond the recent-run history cap.
-            let job_ref = if run.id.is_empty() {
-                &run.name
-            } else {
-                &run.id
-            };
-            meta.insert("scheduledJob".to_owned(), json!(job_ref));
-            if let Some(model) = model.as_ref() {
-                meta.insert("model".to_owned(), json!(model));
-            }
-            if let Some(effort) = run
-                .effort
-                .as_deref()
-                .map(str::trim)
-                .filter(|effort| !effort.is_empty())
-            {
-                meta.insert("effort".to_owned(), json!(effort));
-            }
-            let mut request = NewSessionRequest::new(PathBuf::from(&run.workspace));
-            request.meta = Some(Map::from_iter([(
-                "rustcode".to_owned(),
-                Value::Object(meta),
-            )]));
-            let created = tokio::select! {
-                _ = cancellation.cancelled() => return LoopRunEnd::Cancelled { thread_id: None },
-                created = engine.request(request, CREATE_TIMEOUT) => created,
-            };
-            match created {
-                Ok(response) => response.session_id.to_string(),
-                Err(message) => return failed(format!("the thread could not start: {message}")),
-            }
-        }
+            Err(end) => return end,
+        },
     };
     let text = loop_prompt(&run.name, &run.prompt, run.read_only);
     let ended = tokio::select! {
@@ -2391,6 +2345,72 @@ pub(crate) async fn run_loop_thread(
             thread_id: Some(thread_id),
             error: message,
         },
+    }
+}
+
+/// Start a fresh thread for a job run in its workspace, on its harness,
+/// account, model and effort, titled with the job's name and filed under it.
+/// The thread's id and the login it started on.
+async fn start_job_thread(
+    engine: &Engine,
+    run: &LoopThread,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<(String, (crate::harness::ResolvedHarness, Option<String>)), LoopRunEnd> {
+    let failed = |error: String| LoopRunEnd::Failed {
+        thread_id: None,
+        error,
+    };
+    let harness = match harness_for(run.harness.as_deref()) {
+        Ok(harness) => harness,
+        Err(value) => return Err(failed(refusal(value))),
+    };
+    let model = match model_for(&harness, run.model.as_deref()) {
+        Ok(model) => model,
+        Err(value) => return Err(failed(refusal(value))),
+    };
+    let account = match loop_account(&harness, run.account.as_deref()) {
+        Ok(account) => account,
+        Err(value) => return Err(failed(refusal(value))),
+    };
+    let login = (harness.clone(), account.clone());
+    let mut meta = Map::new();
+    meta.insert("harness".to_owned(), json!(harness.id));
+    if let Some(account) = account {
+        meta.insert("account".to_owned(), json!(account));
+    }
+    meta.insert("title".to_owned(), json!(run.name));
+    // The run's thread belongs to the Jobs view, not the thread list.
+    // Store the stable job id so "View job" still resolves after renames
+    // or beyond the recent-run history cap.
+    let job_ref = if run.id.is_empty() {
+        &run.name
+    } else {
+        &run.id
+    };
+    meta.insert("scheduledJob".to_owned(), json!(job_ref));
+    if let Some(model) = model.as_ref() {
+        meta.insert("model".to_owned(), json!(model));
+    }
+    if let Some(effort) = run
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+    {
+        meta.insert("effort".to_owned(), json!(effort));
+    }
+    let mut request = NewSessionRequest::new(PathBuf::from(&run.workspace));
+    request.meta = Some(Map::from_iter([(
+        "rustcode".to_owned(),
+        Value::Object(meta),
+    )]));
+    let created = tokio::select! {
+        _ = cancellation.cancelled() => return Err(LoopRunEnd::Cancelled { thread_id: None }),
+        created = engine.request(request, CREATE_TIMEOUT) => created,
+    };
+    match created {
+        Ok(response) => Ok((response.session_id.to_string(), login)),
+        Err(message) => Err(failed(format!("the thread could not start: {message}"))),
     }
 }
 

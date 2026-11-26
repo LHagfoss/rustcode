@@ -269,6 +269,8 @@ The desktop app reads a run from the same record through these ACP messages
 | `_rustcode/workflows/changed` | A notification, `{sessionId, run}`, each time a run's record moves (a phase, a worker starting or ending, a log line, the end). The engine gathers changes for 300 ms and sends one summary per run. |
 | `_rustcode/workflows/stop` | `{sessionId, runId}`: `stop_workflow` for the Stop button. |
 | `_rustcode/workflows/resume` | `{sessionId, runId}`: resume one undriven run from its saved script and progress. |
+| `_rustcode/workflows/start` | `{sessionId, name, args?}`: start the project's named workflow on that thread (a job's `workflow` action, `docs/daemon.md`). Answers `{runId}`. |
+| `_rustcode/workflows/saved` | `{workspace}`: the names in that project's `.rustcode/workflows/`, for the Jobs page's picker. Answers `{names}`. |
 | `_rustcode/workflows/wake` | `{sessionId, runId}`: claim the wake of a run that ended. Answers `{claimed}`, true once. |
 
 **Waking the starting thread.** When a run ends the app tells the thread that

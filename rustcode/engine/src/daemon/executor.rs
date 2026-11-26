@@ -108,6 +108,38 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
     }
 }
 
+/// A `workflow` job run's outcome: the workflow run's own status, its thread
+/// and run id in the output so the run row links both.
+pub(crate) fn workflow_outcome(
+    end: crate::orchestration::local_threads::job_workflow::WorkflowRunEnd,
+) -> RunOutcome {
+    use crate::orchestration::local_threads::job_workflow::WorkflowRunEnd;
+    let (thread_id, run_id, status, error) = match end {
+        WorkflowRunEnd::NotRun(end) => return loop_outcome(end),
+        WorkflowRunEnd::Settled {
+            thread_id,
+            run_id,
+            status,
+            error,
+        } => (thread_id, run_id, status, error),
+    };
+    let output = Some(
+        serde_json::json!({ "thread_id": thread_id, "run_id": run_id, "status": status })
+            .to_string(),
+    );
+    match status.as_str() {
+        "done" => RunOutcome::Succeeded {
+            summary: "The workflow run finished".into(),
+            output,
+        },
+        "cancelled" => RunOutcome::Cancelled { output },
+        _ => bounded(RunOutcome::Permanent {
+            error: error.unwrap_or_else(|| format!("the workflow run ended as {status}")),
+            output,
+        }),
+    }
+}
+
 /// The only injected boundary: one direct action, never a polling loop.
 pub trait ActionBackend: Send + Sync {
     fn run(
@@ -160,7 +192,7 @@ impl JobExecutor for ActionExecutor {
                 } => id.clone(),
                 // A Loop has no session to serialize on; the backend gets its
                 // name instead, which titles the thread each run starts.
-                JobAction::Loop { .. } => context.job.name.clone(),
+                JobAction::Loop { .. } | JobAction::Workflow { .. } => context.job.name.clone(),
                 _ => context
                     .job
                     .target_session
@@ -207,6 +239,19 @@ impl JobExecutor for ActionExecutor {
                         let started = super::webhook::Delivery::from_input(input);
                         *prompt = delivery_prompt(prompt, &started);
                         delivery = Some(started);
+                    }
+                    (action, Duration::ZERO, 1, LOOP_TIMEOUT, false)
+                }
+                mut action @ JobAction::Workflow { .. } => {
+                    if let (JobAction::Workflow { args, .. }, Some(input)) =
+                        (&mut action, context.run.input.as_deref())
+                    {
+                        let started = super::webhook::Delivery::from_input(input);
+                        *args =
+                            crate::orchestration::local_threads::job_workflow::args_with_delivery(
+                                args,
+                                Some(&started),
+                            );
                     }
                     (action, Duration::ZERO, 1, LOOP_TIMEOUT, false)
                 }
@@ -581,6 +626,31 @@ impl ActionBackend for ProductionActions {
                     loop_outcome(
                         crate::orchestration::local_threads::run_loop_thread(run, cancellation)
                             .await,
+                    )
+                }
+                JobAction::Workflow {
+                    name: workflow,
+                    workspace,
+                    args,
+                    harness,
+                    account,
+                    ..
+                } => {
+                    use crate::orchestration::local_threads::job_workflow;
+                    workflow_outcome(
+                        job_workflow::run_workflow_thread(
+                            job_workflow::WorkflowThread {
+                                id: job_id,
+                                name: session,
+                                workflow,
+                                args,
+                                workspace,
+                                harness,
+                                account,
+                            },
+                            cancellation,
+                        )
+                        .await,
                     )
                 }
                 JobAction::Poll { .. } => permanent("nested polling is not supported"),

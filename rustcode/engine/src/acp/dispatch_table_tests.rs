@@ -618,6 +618,18 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for workflows::WorkflowStopRequest"
     );
     assert!(
+        <workflows::WorkflowSavedRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/workflows/saved"
+        ),
+        "method mismatch for workflows::WorkflowSavedRequest"
+    );
+    assert!(
+        <workflows::WorkflowStartRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/workflows/start"
+        ),
+        "method mismatch for workflows::WorkflowStartRequest"
+    );
+    assert!(
         <workflows::WorkflowResumeRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/workflows/resume"
         ),
