@@ -7,6 +7,9 @@ between) lives only in the orchestrating agent's context, and is lost to a
 restart or a compaction. A workflow run holds that plan in a script and in a
 folder instead (#3394).
 
+How an objective is run as a workflow, and who owns a run, is decided in
+[ADR 0009](adr/0009-objectives-and-coordination.md).
+
 An agent starts a run with `run_workflow`, reads it with `workflow_status` and
 ends it with `stop_workflow`. The desktop app shows it as a card in the chat, a
 row above the composer with Stop, and a list of its worker threads

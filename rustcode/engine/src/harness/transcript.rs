@@ -366,6 +366,11 @@ impl Transcript {
         self.history.push(ChatMessage::new("user", text.to_owned()));
     }
 
+    /// Whether a prompt turn is in flight: from its prompt until its reply ends.
+    pub(crate) fn is_live(&self) -> bool {
+        self.live
+    }
+
     /// Whether the turn in flight is the user's `/compact` command (with or
     /// without instructions after it). A harness's compaction report does not
     /// always say what started it, and a failed one never does.
@@ -452,20 +457,45 @@ impl Transcript {
     }
 
     fn take_reply(&mut self) -> Option<ChatMessage> {
+        let reply = self.reply_so_far();
+        self.reply.clear();
+        self.thought.clear();
+        reply
+    }
+
+    fn reply_so_far(&self) -> Option<ChatMessage> {
         if self.reply.is_empty() && self.thought.is_empty() {
             return None;
         }
         let content = if self.thought.trim().is_empty() {
-            std::mem::take(&mut self.reply)
+            self.reply.clone()
         } else {
-            format!(
-                "<think>{}</think>{}",
-                std::mem::take(&mut self.thought),
-                std::mem::take(&mut self.reply)
-            )
+            format!("<think>{}</think>{}", self.thought, self.reply)
         };
-        self.thought.clear();
         Some(ChatMessage::new("assistant", content))
+    }
+
+    /// The history as it would read if the turn stopped now: the reply so far
+    /// appended and every call still running marked interrupted. What a
+    /// thread reopened after the engine died mid-turn shows. The live
+    /// transcript is left as it is.
+    pub(crate) fn checkpoint(&self) -> Vec<ChatMessage> {
+        let mut history = self.history.clone();
+        for slot in self.tools.values() {
+            if let Some(record) = history
+                .get_mut(slot.result)
+                .and_then(|message| message.tool_result.as_mut())
+                && record.pending
+            {
+                record.pending = false;
+                record.success = false;
+                record
+                    .error_kind
+                    .get_or_insert_with(|| "interrupted".to_owned());
+            }
+        }
+        history.extend(self.reply_so_far());
+        history
     }
 }
 

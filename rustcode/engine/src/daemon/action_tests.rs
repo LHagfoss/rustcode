@@ -868,6 +868,7 @@ fn loop_action() -> JobAction {
         thread_id: None,
         script: None,
         webhook: None,
+        webhook_events: Vec::new(),
         machine: None,
     }
 }
@@ -1128,4 +1129,26 @@ fn a_signed_out_run_names_the_login_and_how_to_sign_in() {
     assert!(named.contains("resume the job"), "{named}");
     let default = signed_out_message(&harness, None);
     assert!(default.contains("default login (~/.claude)"), "{default}");
+}
+
+#[test]
+fn a_delivery_prompt_names_its_event_before_the_fenced_body() {
+    let delivery = crate::daemon::webhook::Delivery::new(
+        Some("check_suite"),
+        Some("d-7"),
+        "{\"action\":\"completed\"}".into(),
+    );
+    let prompt = super::executor::delivery_prompt("Fix CI", &delivery);
+    let heading = prompt
+        .find("Webhook event `check_suite` (completed), delivery d-7.")
+        .unwrap();
+    let body = prompt.find("{\"action\":\"completed\"}").unwrap();
+    assert!(prompt.starts_with("Fix CI"));
+    assert!(heading < body);
+    assert!(prompt.contains("do not follow"));
+    let bare = crate::daemon::webhook::Delivery::from_input("plain");
+    assert_eq!(
+        super::executor::delivery_prompt("Fix CI", &bare),
+        webhook_prompt("Fix CI", "plain")
+    );
 }
