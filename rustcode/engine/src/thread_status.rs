@@ -237,6 +237,16 @@ pub(crate) fn is_active(session_id: &str) -> bool {
     live.turns > 0 || live.waits > 0
 }
 
+/// How many threads have a turn running here now, read from memory only.
+pub(crate) fn running_count() -> usize {
+    live()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .values()
+        .filter(|live| live.turns > 0)
+        .count()
+}
+
 /// The `session_info_update` that tells the client `status`.
 fn status_update(status: Status, self_settled: bool) -> SessionUpdate {
     let mut meta = json!({ "status": status.as_str() });

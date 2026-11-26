@@ -3,6 +3,7 @@ import { type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type Harness, type HarnessSnapshot, Method, plainPath, projectName } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { titleFrom } from "../lib/title";
+import { capacityRow, useFleet } from "./fleet";
 import { unavailableReason } from "./harness";
 import { book, delegateLimits, permitted, ruleThread, setBook } from "./host";
 import { addLink, deliver, type FanOutCall, type StartCall } from "./hostManage";
@@ -358,6 +359,16 @@ export function machineProjects(host: string): Project[] {
 /** Models `list_machines` names per harness: enough to choose a machine by, not the catalogue. */
 const MACHINE_LISTED_MODELS = 8;
 
+/** The machine's last capacity report from the fleet sync, as a `capacity` field. */
+function withCapacity(machine: MachineRef): JsonObject {
+  const fleet = useFleet.getState();
+  const report = machine.host
+    ? fleet.entries.find((entry) => entry.hostId === machine.id)?.capacity
+    : fleet.host?.capacity;
+  const row = capacityRow(report);
+  return row ? { capacity: row } : {};
+}
+
 /**
  * A machine as `list_machines` describes it: what it is, where it stands and
  * why, how busy it is, and what it has to run a thread with and in. An agent
@@ -385,6 +396,7 @@ async function machineEntry(machine: MachineRef, callerHost: string = LOCAL_HOST
     ...(saved?.paused ? { paused: true } : {}),
     platform: machine.platform,
     ...(version ? { version } : {}),
+    ...withCapacity(machine),
     ...(machine.host === callerHost ? { current: true } : {}),
     state,
     // Why it is not connected, in the words Settings › Machines shows, as a word to branch on

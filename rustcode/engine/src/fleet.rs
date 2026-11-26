@@ -28,6 +28,9 @@ use std::path::{Path, PathBuf};
 
 use crate::daemon::private_files::{publish_private_json, read_private_json};
 
+pub(crate) mod capacity;
+use capacity::Capacity;
+
 /// The most computers one fleet file keeps; the least recently seen go first.
 const MAX_ENTRIES: usize = 256;
 /// The longest name kept, in characters.
@@ -75,6 +78,9 @@ pub(crate) struct FleetEntry {
     /// computer itself. Set by the receiver; whatever a sender writes is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// How busy the computer was at its last report about itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<Capacity>,
 }
 
 fn unknown_platform() -> String {
@@ -98,6 +104,7 @@ impl FleetEntry {
                 .filter(|version| !version.is_empty()),
             last_seen_at: self.last_seen_at,
             via: None,
+            capacity: self.capacity.map(|capacity| capacity.cleaned(Utc::now())),
         }
     }
 }
@@ -132,6 +139,13 @@ fn merge_entry(current: &mut FleetEntry, incoming: &FleetEntry) -> bool {
     {
         current.name = incoming.name.clone();
         current.name_updated_at = incoming.name_updated_at;
+        changed = true;
+    }
+    if incoming
+        .capacity
+        .is_some_and(|newer| current.capacity.is_none_or(|known| newer.at > known.at))
+    {
+        current.capacity = incoming.capacity;
         changed = true;
     }
     if incoming.last_seen_at > current.last_seen_at {
@@ -311,6 +325,7 @@ pub(crate) fn host_entry(dir: &Path, now: DateTime<Utc>) -> FleetEntry {
         version: Some(crate::remote_gateway::gateway::host_version()),
         last_seen_at: Some(now),
         via: None,
+        capacity: Some(Capacity::measure(now)),
     }
 }
 
@@ -367,6 +382,7 @@ pub(crate) fn paired_entries(dir: &Path) -> Vec<FleetEntry> {
                 version: machine.version,
                 last_seen_at: machine.last_connected_at,
                 via: None,
+                capacity: None,
             }
             .cleaned()
         })
@@ -474,6 +490,7 @@ mod tests {
             version: Some("1.33.0".into()),
             last_seen_at: seen.map(at),
             via: None,
+            capacity: None,
         }
     }
 
@@ -752,5 +769,32 @@ mod tests {
         assert!(Fleet::load(dir.path()).entries.is_empty());
         std::fs::write(dir.path().join(FLEET_FILE), "not json").unwrap();
         assert!(Fleet::load(dir.path()).entries.is_empty());
+    }
+
+    #[test]
+    fn capacity_travels_newest_first_and_an_entry_without_it_still_parses() {
+        let old: FleetEntry =
+            serde_json::from_str(r#"{"hostId":"gw-1","name":"Studio","platform":"macos"}"#)
+                .unwrap();
+        assert!(old.capacity.is_none());
+        let report = |minutes: i64, turns: u32| Capacity {
+            cores: 10,
+            load1_hundredths: 50,
+            memory_free_mb: 8_000,
+            on_battery: Some(false),
+            running_turns: turns,
+            at: at(minutes),
+        };
+        let mut current = entry("gw-1", "Studio", None, Some(0));
+        let mut newer = entry("gw-1", "Studio", None, Some(0));
+        newer.capacity = Some(report(5, 2));
+        assert!(merge_entry(&mut current, &newer));
+        assert_eq!(current.capacity.unwrap().running_turns, 2);
+        let mut older = entry("gw-1", "Studio", None, Some(0));
+        older.capacity = Some(report(1, 7));
+        assert!(!merge_entry(&mut current, &older));
+        assert_eq!(current.capacity.unwrap().running_turns, 2);
+        let json = serde_json::to_value(&current).unwrap();
+        assert_eq!(json["capacity"]["runningTurns"], 2);
     }
 }
