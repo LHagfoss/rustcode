@@ -53,12 +53,26 @@ fn opened(state: crate::app::AppState, clients: clients::SessionClients) -> Open
         usage: usage::usage_update(&state),
     };
     let session_id = state.active_session_id.clone();
+    crate::workflow::checkpoint::register(&session_id, question_asker(clients.clone()));
     OpenedThread {
         session_id,
         agent: super::prompt::builtin_agent(Arc::new(Mutex::new(state))),
         clients,
         snapshot,
     }
+}
+
+/// How a workflow's `checkpoint()` asks this built-in thread's user: a
+/// question card on its clients, the thread waiting on the user meanwhile.
+fn question_asker(clients: clients::SessionClients) -> crate::orchestration::ask_user::Asker {
+    Arc::new(move |mut request| {
+        let clients = clients.clone();
+        Box::pin(async move {
+            request.session_id = clients.session_id().to_owned().into();
+            let _waiting = crate::thread_status::waiting(clients.session_id());
+            clients.request_approval(request).await.ok()
+        })
+    })
 }
 
 pub(crate) fn build_loaded_app_state(

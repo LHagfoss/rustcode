@@ -278,7 +278,12 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
             (run.status === "failed" || run.status === "timed_out") && "text-danger",
           )}
         >
-          · {live && !run.driven ? "Awaiting resume" : statusWord(run.status)}
+          ·{" "}
+          {live && !run.driven
+            ? "Awaiting resume"
+            : live && run.needsUser
+              ? "Needs you"
+              : statusWord(run.status)}
         </span>
         <span className="ml-auto shrink-0 text-fg-faint">{formatDuration(elapsedMs(run, now))}</span>
         {live && !run.driven && <ResumeButton run={run} threadId={threadId} />}

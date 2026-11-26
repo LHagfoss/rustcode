@@ -62,7 +62,7 @@ impl Bounds {
     }
 }
 
-/// `agent`, `parallel`, `phase` and `log`, over the three host functions the
+/// `agent`, `checkpoint`, `parallel`, `phase` and `log`, over the three host functions the
 /// sandbox installs (and then removes from the globals, so a script reaches
 /// them only through these).
 const PRELUDE: &str = r#"
@@ -85,6 +85,21 @@ const PRELUDE: &str = r#"
       throw new TypeError("agent(prompt, options): options must be an object");
     }
     const reply = JSON.parse(await hostAgent(prompt, JSON.stringify(options === undefined ? {} : options)));
+    if (reply.error !== undefined) {
+      throw new Error(reply.error);
+    }
+    return reply.value;
+  };
+
+  globalThis.checkpoint = async (question, options) => {
+    if (typeof question !== "string" || question.trim().length === 0) {
+      throw new TypeError("checkpoint(question, options): question must be a non-empty string");
+    }
+    if (!Array.isArray(options) || options.length < 2 || options.length > 4
+        || options.some((option) => typeof option !== "string" || option.trim().length === 0)) {
+      throw new TypeError("checkpoint(question, options): options must be 2 to 4 non-empty strings");
+    }
+    const reply = JSON.parse(await hostAgent(question, JSON.stringify({ checkpoint: options })));
     if (reply.error !== undefined) {
       throw new Error(reply.error);
     }
