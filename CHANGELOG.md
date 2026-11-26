@@ -1,3 +1,36 @@
+## [v1.55.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.55.0) - 2026-11-26
+
+### Features
+- Jump between review comments (`P`/`N`) and open diff lines directly in your editor from Review and PR Diff. (#4479)
+- Add optional Web Audio notification sounds for background threads needing input or finishing, with tone picker, preview, and volume slider in Settings › Notifications. (#4481)
+- Allow staging and unstaging individual files (or all files) directly in the Changes panel and committing staged files from the commit sheet. (#4482)
+- The dark theme puts the main view on an inset, rounded panel over a darker window, with warmer text. (#4483)
+- Add project worktree lifecycle scripts (`.rustcode/worktrees.toml`) with explicit per-project trust approval, `setup`/`teardown` hooks, and an on-demand Run/Stop control in thread details. (#4484)
+- Browse GitHub issues in the desktop side panel and launch single or multi-select parallel worktree threads with seeded prompts. (#4486)
+- Message pictures show as a tidy gallery with a +N tile, and the picture viewer has a filmstrip and steps through every picture in the chat with the arrow keys. (#4489)
+- Detect active local dev server ports per thread or worktree and surface compact Open in browser and Kill actions in the thread header and details panel. (#4488)
+- Fix delegate threads showing one letter per line in the side panel, and tidy the started-thread card in chat. (#4490)
+- Plan usage now forecasts how much you will have left at the reset, or when you will run out and how early. (#4491)
+- Machines that follow this computer's settings now also get its skills, themes and prompt commands. Use **Fetch from ‹machine›** or `rc config sync from <machine>` to copy them once. (#4487)
+- Support opening multiple app windows connected to the same local engine with synchronized thread updates and settings. (#4492)
+- Add an embedded Browser Preview panel streamed from the thread's shared engine Chrome with responsive viewports and a sanitized element picker that attaches element context and screenshots to the composer. (#4493)
+- Pull request updates that arrive while a thread works now wake it once with the current state, not once per stale update. (#4494)
+- What's New opens with the release notes already loaded after an update, instead of an empty panel. (#4495)
+- Sidebar thread rows show their state next to the time again, instead of on the second line. (#4496)
+- Reopening the app no longer asks to sign in to a remote MCP server again or opens a sign-in tab per connection. (#4497)
+- Codex threads no longer fail to start when an MCP server is set up both in RustCode and in Codex's own config with different transports. (#4498)
+- Paginate background thread replay under the 1 MiB remote frame limit so mirroring large threads no longer drops paired machine connections every 15 seconds. (#4499)
+- Keep approval and question requests waiting for a client to attach or reconnect instead of cancelling them when a connection drops. (#4500)
+- A paired machine's offline-since time now clears and refreshes when its link reconnects or drops (#4501)
+- Fix Smart UI cards with long badges crushing their titles and keep HTML or source lists inside `:: details` folds collapsed until opened. (#4508)
+- Fix the Pull requests card saying the GitHub CLI is not installed when it is: gh is found on your PATH, and a removed folder is reported as such. (#4509)
+- Fix Smart UI inline table headers, multi-line table badges, and duplicate Sources folds. (#4510)
+- The Issues panel no longer lists the wrong repository for threads on another computer. (#4513)
+- Remote Browser Preview picks stay under the relay frame limit, and several windows can stream one preview at once. (#4512)
+- Even out the spacing around the project and thread title in the chat header. (#4515)
+- Skills, themes and commands now follow reliably to a paired machine right after startup and are pruned there once removed here. (#4514)
+- Opening a second window no longer takes paired machine connections away from the first one. (#4516)
+- One slow or unreachable machine no longer delays the name and version sync with your other machines. (#4517)
 ## [v1.54.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.54.0) - 2026-11-26
 
 ### Features
