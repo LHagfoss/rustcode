@@ -15,6 +15,7 @@
 import { create } from "zustand";
 import { arr, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
+import { syncStorageKey } from "./storageSync";
 
 export type FileKind = "skills" | "themes" | "commands";
 export const FILE_KINDS: { kind: FileKind; label: string }[] = [
@@ -42,6 +43,7 @@ function readOff(): Record<string, FileKind[]> {
 
 /** The folders each follower does not take, by machine id; every folder travels unless listed. */
 export const useFilesFollowOff = create<{ off: Record<string, FileKind[]> }>(() => ({ off: readOff() }));
+syncStorageKey(STORAGE, () => useFilesFollowOff.setState({ off: readOff() }));
 
 export function followedKinds(id: string): FileKind[] {
   const off = useFilesFollowOff.getState().off[id] ?? [];

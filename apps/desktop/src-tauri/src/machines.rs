@@ -17,6 +17,7 @@
 //! Machines lists them, and the server is what runs on each one.
 
 use crate::engine::EngineEvent;
+use crate::machine_link::Link;
 use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
@@ -315,6 +316,8 @@ struct Live {
     /// connection, and what is left in it when the next one opens is thrown
     /// away: those lines belong to the connection that ended.
     outbox: Option<tokio::sync::mpsc::Sender<String>>,
+    /// The windows this machine's connection is relayed to.
+    link: Arc<Link>,
     /// Aborted when the app asks for the machine to be connected again or
     /// disconnected; dropping it closes the socket.
     task: Option<tauri::async_runtime::JoinHandle<()>>,
@@ -350,6 +353,7 @@ impl Live {
     fn new() -> Self {
         Self {
             outbox: None,
+            link: Arc::default(),
             task: None,
             state: MachineState::Stopped,
             route: None,
@@ -476,9 +480,16 @@ impl Machines {
             .collect()
     }
 
-    /// Start (or restart) one machine's supervisor. The webview calls this
-    /// with a channel of its own, so a page that reloads gets a fresh one.
-    fn connect(self: &Arc<Self>, id: &str, channel: Channel<EngineEvent>) -> Result<(), String> {
+    /// Attach a window to one machine's connection. A window that joins a
+    /// machine another window keeps connected shares it; the window that
+    /// asked before (a page that reloaded) starts a fresh supervisor, and the
+    /// other windows see it connect again.
+    fn connect(
+        self: &Arc<Self>,
+        id: &str,
+        window: &str,
+        channel: Channel<EngineEvent>,
+    ) -> Result<(), String> {
         let config_dir = config_dir()?;
         let registry = MachineRegistry::load(&config_dir).map_err(chain)?;
         let machine = registry
@@ -486,12 +497,19 @@ impl Machines {
             .ok_or("That machine is no longer saved.")?
             .clone();
         let (outbox, inbox) = tokio::sync::mpsc::channel::<String>(256);
-        let wake = {
+        let (wake, link) = {
             let mut live = self.live.lock().unwrap();
             let entry = live.entry(id.to_owned()).or_insert_with(Live::new);
+            if joins(entry, window) {
+                entry.link.attach(window, channel);
+                return Ok(());
+            }
             if let Some(task) = entry.task.take() {
                 task.abort();
+                emit_closed(&entry.link, "Connecting again.");
             }
+            entry.link.end();
+            entry.link.attach(window, channel);
             entry.outbox = Some(outbox);
             entry.state = MachineState::Connecting;
             entry.route = None;
@@ -503,14 +521,14 @@ impl Machines {
             // A fresh wake: a permit left by a wake nobody waited for must not
             // cut the new supervisor's first backoff short.
             entry.wake = Arc::new(Notify::new());
-            Arc::clone(&entry.wake)
+            (Arc::clone(&entry.wake), Arc::clone(&entry.link))
         };
         let machines = Arc::clone(self);
         let target = id.to_owned();
         let task = tauri::async_runtime::spawn({
             let target = target.clone();
             async move {
-                supervise(machines, target, machine, channel, inbox, wake).await;
+                supervise(machines, target, machine, link, inbox, wake).await;
             }
         });
         if let Some(entry) = self.live.lock().unwrap().get_mut(&target) {
@@ -629,7 +647,7 @@ async fn supervise(
     machines: Arc<Machines>,
     id: String,
     machine: Machine,
-    channel: Channel<EngineEvent>,
+    channel: Arc<Link>,
     mut inbox: tokio::sync::mpsc::Receiver<String>,
     wake: Arc<Notify>,
 ) {
@@ -929,7 +947,7 @@ fn network_moved(network: &mut tokio::sync::watch::Receiver<Vec<IpAddr>>) -> boo
 async fn wait_out(
     machines: &Arc<Machines>,
     id: &str,
-    channel: &Channel<EngineEvent>,
+    channel: &Link,
     wake: &Notify,
     delay: Duration,
 ) {
@@ -974,7 +992,7 @@ async fn relay_once(
     machines: &Arc<Machines>,
     config_dir: &Path,
     id: &str,
-    channel: &Channel<EngineEvent>,
+    channel: &Link,
     inbox: &mut tokio::sync::mpsc::Receiver<String>,
 ) -> End {
     // Read again every attempt: a machine removed while we waited is gone, and
@@ -1376,13 +1394,13 @@ fn set_stalled(machines: &Arc<Machines>, id: &str, stalled: Option<Stalled>) {
     }
 }
 
-fn emit_closed(channel: &Channel<EngineEvent>, reason: &str) {
+fn emit_closed(channel: &Link, reason: &str) {
     let _ = channel.send(EngineEvent::Closed {
         reason: reason.to_owned(),
     });
 }
 
-fn emit_log(channel: &Channel<EngineEvent>, line: String) {
+fn emit_log(channel: &Link, line: String) {
     let _ = channel.send(EngineEvent::Log { line });
 }
 
@@ -2292,17 +2310,19 @@ pub fn machines_retry(
 /// Connect to one machine and relay its ACP to this page.
 #[tauri::command(async)]
 pub fn machine_connect(
+    window: tauri::WebviewWindow,
     machines: tauri::State<'_, Arc<Machines>>,
     id: String,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
-    machines.inner().connect(&id, on_event)
+    machines.inner().connect(&id, window.label(), on_event)
 }
 
 /// One ACP line for a machine, exactly as the webview writes it to the local
 /// engine.
 #[tauri::command(async)]
 pub fn machine_send(
+    window: tauri::WebviewWindow,
     machines: tauri::State<'_, Arc<Machines>>,
     id: String,
     line: String,
@@ -2315,9 +2335,27 @@ pub fn machine_send(
         .outbox
         .as_ref()
         .ok_or("That machine is not connected yet.")?;
+    let Some(line) = entry.link.outbound(window.label(), &line) else {
+        return Ok(());
+    };
     outbox
         .try_send(line)
         .map_err(|_| "The machine is not keeping up; the line was dropped.".to_string())
+}
+
+/// This page is done with one machine's connection: it leaves it, and the
+/// connection ends once no window is left on it.
+#[tauri::command(async)]
+pub fn machine_detach(
+    window: tauri::WebviewWindow,
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: String,
+) {
+    if let Some(entry) = machines.live.lock().unwrap().get_mut(&id) {
+        if entry.link.detach(window.label()) || entry.link.is_empty() {
+            stop(entry);
+        }
+    }
 }
 
 /// Stop trying to reach one machine. Nothing is forgotten: connecting again
@@ -2329,17 +2367,8 @@ pub fn machine_disconnect(
 ) -> Result<(), String> {
     let mut live = machines.live.lock().unwrap();
     if let Some(entry) = live.get_mut(&id) {
-        if let Some(task) = entry.task.take() {
-            task.abort();
-        }
-        entry.outbox = None;
-        entry.state = MachineState::Stopped;
-        entry.route = None;
-        entry.answered = None;
-        entry.cause = None;
-        entry.detail = None;
-        entry.hint = None;
-        entry.retry_in_secs = None;
+        stop(entry);
+        emit_closed(&entry.link, "Disconnected.");
     }
     Ok(())
 }

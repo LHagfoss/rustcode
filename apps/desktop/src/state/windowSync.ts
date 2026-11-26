@@ -23,6 +23,7 @@ import { parseRecapMinutes } from "./recap";
 import { parseAppFont, parseTextSize } from "./settingsActions";
 import type { SidebarOrder } from "./sidebarOrder";
 import { notifySidebarPrefs } from "./sidebarPrefs";
+import { applySyncedStorage } from "./storageSync";
 import { refreshSessions, updateThread, useApp } from "./store";
 import { beginTurn, finishTurn, isRunning } from "./thread";
 
@@ -51,10 +52,35 @@ let currentWindowLabel: string | null = null;
 let primaryWindowLabel: string | null = "main";
 let channel: BroadcastChannel | null = null;
 
+let roleKnown = !isTauri();
+let waitingForPrimary: (() => void)[] = [];
+
 /** Overrides the window role state for unit tests. */
 export function setWindowRoleForTests(current: string | null, primary: string | null): void {
   currentWindowLabel = current;
   primaryWindowLabel = primary;
+  roleKnown = true;
+  waitingForPrimary = [];
+}
+
+/**
+ * Run `start` in the primary window only: now when this window is primary, else once it becomes
+ * primary (the one before it closed). Background loops that talk to every machine start this way,
+ * so a second window does not run them twice.
+ */
+export function whenPrimaryWindow(start: () => void): void {
+  if (roleKnown && isPrimaryWindow()) start();
+  else waitingForPrimary.push(start);
+}
+
+/** The window's role is known or changed: start what waits for the primary window. */
+export function primaryWindowChanged(primary: string | null): void {
+  if (primary) primaryWindowLabel = primary;
+  roleKnown = true;
+  if (!isPrimaryWindow()) return;
+  const waiting = waitingForPrimary;
+  waitingForPrimary = [];
+  for (const start of waiting) start();
 }
 
 /** Whether this window is currently the primary app window for background side effects. */
@@ -203,7 +229,7 @@ export function applyStorageChange(key: string | null, newValue: string | null):
       patch = { drafts: parseDrafts(newValue) };
       break;
     default:
-      return false;
+      return applySyncedStorage(key, newValue);
   }
 
   useApp.setState(patch);
@@ -322,12 +348,10 @@ export function startWindowSync(): () => void {
         if (!live) return;
         currentWindowLabel = getCurrentWindow().label;
         const primary = await invoke<string | null>("primary_window_label").catch(() => null);
-        if (primary) primaryWindowLabel = primary;
+        primaryWindowChanged(primary);
 
         const stopPrimary = await listen<string>(PRIMARY_WINDOW_EVENT, (event) => {
-          if (typeof event.payload === "string" && event.payload) {
-            primaryWindowLabel = event.payload;
-          }
+          if (typeof event.payload === "string" && event.payload) primaryWindowChanged(event.payload);
         });
         const stopPerm = await listen<number | string>(PERMISSION_RESOLVED_EVENT, (event) => {
           if (typeof event.payload === "number" || typeof event.payload === "string") {
@@ -341,7 +365,7 @@ export function startWindowSync(): () => void {
         }
         tauriCleanups.push(stopPrimary, stopPerm);
       } catch {
-        return;
+        primaryWindowChanged(null);
       }
     })();
     cleanups.push(() => {

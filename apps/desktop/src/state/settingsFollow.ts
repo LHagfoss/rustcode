@@ -13,6 +13,7 @@ import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
 import { copyFiles, followedKinds } from "./configFilesFollow";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
+import { syncStorageKey } from "./storageSync";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STORAGE = "rustcode.settingsFollow";
@@ -31,6 +32,7 @@ function readIds(): string[] {
 
 /** The machines that follow this computer's settings, by id. */
 export const useSettingsFollow = create<{ ids: string[] }>(() => ({ ids: readIds() }));
+syncStorageKey(STORAGE, () => useSettingsFollow.setState({ ids: readIds() }));
 
 export function followsThisComputer(id: string): boolean {
   return useSettingsFollow.getState().ids.includes(id);

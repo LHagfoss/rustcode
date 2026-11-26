@@ -12,6 +12,7 @@ mod git_review;
 mod hub;
 mod issue_report;
 mod links;
+mod machine_link;
 mod machines;
 mod microphone;
 mod native;
@@ -119,6 +120,7 @@ pub fn run() {
             machines::machine_connect,
             machines::machine_send,
             machines::machine_disconnect,
+            machines::machine_detach,
             issue_report::issue_report_options,
             issue_report::issue_report_submit,
             issue_report::issue_report_save_image,

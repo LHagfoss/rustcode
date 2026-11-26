@@ -28,6 +28,7 @@ import {
 import { deliverPendingRevocations } from "./revokeEverywhere";
 import { connectionFor } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
+import { isPrimaryWindow } from "./windowSync";
 
 /**
  * The wire name of the machine sync. It keeps the word "environment" on purpose: older paired
@@ -287,6 +288,10 @@ async function syncOnce(): Promise<void> {
   const local = connectionFor(LOCAL_HOST);
   let view = await ask(local, {});
   if (!view) return;
+  if (!isPrimaryWindow()) {
+    useFleet.setState({ host: view.host, entries: view.entries, syncedAt: Date.now() });
+    return;
+  }
   await deliverPendingRevocations();
 
   // This computer's own rename goes to its engine first, so every peer below hears it.

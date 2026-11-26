@@ -29,6 +29,7 @@ import {
   useApp,
 } from "./state/store";
 import { startUpdateChecks } from "./state/updates";
+import { whenPrimaryWindow } from "./state/windowSync";
 import { useChatRecapWatch } from "./ui/ChatRecap";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
@@ -237,7 +238,7 @@ export function App() {
   useChatRecapWatch();
   useCrashReportNotice();
   useEffect(() => restoreZoom(), []);
-  useEffect(() => startUpdateChecks(), []);
+  useEffect(() => whenPrimaryWindow(startUpdateChecks), []);
   // The sidebar's Loop badges: which threads loops ran in (issue 3937).
   useLoopBadges(useApp((s) => sessionsListed(s.engine)));
   const settings = useApp((s) => s.settings !== null);
