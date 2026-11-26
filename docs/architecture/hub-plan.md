@@ -19,7 +19,9 @@ machine, and in which order it is built.
   duplicate them or hold an all-powerful credential to the engine. A tunnel
   (`cloudflared`, run as a system service or in Docker) is the only extra
   process.
-- **Self-hosted tunnel, no relay service.** T3 Code's T3 Connect is a
+- **Self-hosted tunnel, no relay service** (superseded for machine-to-machine
+  routes by [ADR 0013](../adr/0013-machine-relay-and-nat-traversal.md): a blind,
+  self-hostable relay). T3 Code's T3 Connect is a
   multi-tenant relay (a Cloudflare Worker that provisions a tunnel per
   environment under its own zone, with Clerk accounts). One owner with their
   own domain needs only a named Cloudflare Tunnel per public machine.
