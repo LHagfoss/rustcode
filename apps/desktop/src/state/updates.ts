@@ -36,6 +36,8 @@ const CHANNEL_KEY = "rustcode.updateChannel";
 const SKIPPED_KEY = "rustcode.skippedBeta";
 /** "Install updates automatically" (Settings › About): "1" is on, anything else (or nothing) is off. */
 const AUTO_KEY = "rustcode.autoInstallUpdates";
+/** The notes of the newest release fetched, as `{ version, notes }`: What's New opens with them after the restart. */
+const NOTES_KEY = "rustcode.releaseNotes";
 /** How often a found update asks again whether the app is idle yet. */
 export const AUTO_INSTALL_RETRY_MS = 10_000;
 /**
@@ -257,6 +259,43 @@ async function whatsNewOnLaunch() {
   await showWhatsNew(current);
 }
 
+/** The stored notes when they belong to `version`, else null: anything unreadable counts as none. */
+export function cachedNotesFor(stored: string | null, version: string): string | null {
+  if (!stored) return null;
+  try {
+    const entry = JSON.parse(stored) as { version?: unknown; notes?: unknown };
+    return entry.version === version && typeof entry.notes === "string" && entry.notes ? entry.notes : null;
+  } catch {
+    return null;
+  }
+}
+
+function cachedNotes(version: string): string | null {
+  return cachedNotesFor(read(NOTES_KEY), version);
+}
+
+/** Asks the shell for a release's notes and keeps them, so the next open needs no network. */
+async function fetchNotes(version: string): Promise<string | null> {
+  const notes = await shellCall<string | null>("release_notes", { version });
+  if (notes) write(NOTES_KEY, JSON.stringify({ version, notes }));
+  return notes;
+}
+
+const prefetching = new Set<string>();
+
+/**
+ * Fetches an offered release's notes while the old version still runs, so
+ * What's New opens on them after the update instead of on a skeleton. A
+ * failure is quiet: the dialog fetches again when it opens.
+ */
+export function prefetchNotes(version: string) {
+  if (cachedNotes(version) || prefetching.has(version)) return;
+  prefetching.add(version);
+  void fetchNotes(version)
+    .catch(() => null)
+    .finally(() => prefetching.delete(version));
+}
+
 /**
  * The notes follow when GitHub answers, over a dialog that is already on
  * screen: offline it says so and links the release page.
@@ -264,7 +303,7 @@ async function whatsNewOnLaunch() {
 async function loadNotes(version: string) {
   let whatsNew: WhatsNew;
   try {
-    const notes = await shellCall<string | null>("release_notes", { version });
+    const notes = await fetchNotes(version);
     whatsNew = { version, notes, state: "ready" };
   } catch {
     whatsNew = { version, notes: null, state: "error" };
@@ -326,6 +365,7 @@ async function runCheck(): Promise<void> {
       checkedAt: Date.now(),
       channels: info.channels,
     });
+    if (offersUpdate(info, channel) && info.latest) prefetchNotes(info.latest);
     maybeAutoInstall();
     return;
   }
@@ -723,6 +763,11 @@ export function closeWhatsNew() {
 
 /** What's New for the running version on demand (Settings › About). */
 export async function showWhatsNew(version: string) {
+  const notes = cachedNotes(version);
+  if (notes) {
+    useUpdates.setState({ whatsNew: { version, notes, state: "ready" } });
+    return;
+  }
   useUpdates.setState({ whatsNew: { version, notes: null, state: "loading" } });
   await loadNotes(version);
 }

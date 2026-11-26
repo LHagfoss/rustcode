@@ -6,6 +6,7 @@ import {
   autoInstallDecision,
   autoRetryDelay,
   busyThreads,
+  cachedNotesFor,
   compareVersions,
   failedInstallBackoff,
   installNowLabel,
@@ -318,5 +319,19 @@ describe("why a found update waits", () => {
   test("Install now promises a resume only when threads continue after a restart", () => {
     expect(installNowLabel(true)).toBe("Install now and resume threads");
     expect(installNowLabel(false)).toBe("Install now");
+  });
+});
+
+describe("cachedNotesFor", () => {
+  test("returns the notes stored for that version only", () => {
+    const stored = JSON.stringify({ version: "1.54.0", notes: "### Features\n- a note (#1)" });
+    expect(cachedNotesFor(stored, "1.54.0")).toBe("### Features\n- a note (#1)");
+    expect(cachedNotesFor(stored, "1.55.0")).toBeNull();
+  });
+
+  test("reads nothing from a missing, empty or broken entry", () => {
+    expect(cachedNotesFor(null, "1.54.0")).toBeNull();
+    expect(cachedNotesFor(JSON.stringify({ version: "1.54.0", notes: "" }), "1.54.0")).toBeNull();
+    expect(cachedNotesFor("{not json", "1.54.0")).toBeNull();
   });
 });
