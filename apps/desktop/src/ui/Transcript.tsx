@@ -60,6 +60,7 @@ import {
   newDayMessages,
   noticeLine,
   type QueuedPrompt,
+  retriedStarts,
   splitSubagentSteps,
   startedLinks,
   subagentOf,
@@ -360,10 +361,11 @@ export function Transcript({
     return (searching ? ALL_OPEN : open).has(turnFoldKey(end.id)) ? undefined : end;
   }, [settlingId, running, thread.items, searching, open]);
   // A subagent's steps fold into its own row instead of filling the thread.
-  const { items: visible, steps: subagentSteps } = useMemo(
-    () => splitSubagentSteps(thread.items),
-    [thread.items],
-  );
+  const { items: visible, steps: subagentSteps } = useMemo(() => {
+    const split = splitSubagentSteps(thread.items);
+    const retried = retriedStarts(split.items);
+    return retried.size ? { ...split, items: split.items.filter((item) => !retried.has(item.id)) } : split;
+  }, [thread.items]);
   // The threads this one started, by the call that started them (its book of links).
   const links = useApp((s) => s.links.links);
   // No turn runs, but the threads it started or messaged still work: not finished, not working.

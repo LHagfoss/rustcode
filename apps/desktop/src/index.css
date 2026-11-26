@@ -1465,6 +1465,13 @@ aside[aria-hidden="true"] + .rc-main-panel {
     --rc-lane-gutter: 3rem;
   }
 }
+.rc-peek {
+  --rc-panel-room: 0px;
+}
+.rc-peek .rc-lane-pad,
+.rc-peek .rc-lane-inset {
+  --rc-lane-gutter: 0.75rem;
+}
 .rc-lane-pad {
   padding-left: var(--rc-lane-gutter);
   padding-right: calc(var(--rc-lane-gutter) + var(--rc-panel-room, 0px));

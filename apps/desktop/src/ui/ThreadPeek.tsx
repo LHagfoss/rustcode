@@ -75,7 +75,7 @@ export function ThreadPeek() {
   const sideChat = session?.parent ? relationshipOf(session.parent) === "side_chat" : false;
   if (!id) return <div className="flex-1" />;
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="rc-peek flex min-h-0 flex-1 flex-col">
       <div className="rule-b [--rc-rule-inset:0.75rem] flex h-9 shrink-0 items-center gap-2 px-3">
         {sideChat && <MessageSquareQuote size={13} className="shrink-0 text-fg-muted" />}
         {session?.harness && <HarnessIcon id={session.harness} size={13} />}

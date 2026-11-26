@@ -206,6 +206,13 @@ export function AgentTip({
 }
 
 /**
+ * A row control that takes no room until the row is hovered or focused, then widens in, so the
+ * row's own text keeps the whole width and slides aside for it.
+ */
+const HOVER_REVEAL =
+  "flex h-[22px] w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-fg-faint opacity-0 transition-[width,margin,opacity] duration-200 ease-snappy hover:bg-fill hover:text-fg group-hover:mr-1 group-hover:w-[22px] group-hover:opacity-100 group-focus-within:mr-1 group-focus-within:w-[22px] group-focus-within:opacity-100";
+
+/**
  * Every agent row, one shape: subagents, the threads this one delegated to, and
  * the header of a group of them. A mark of the harness with a badge for how it
  * goes, the name over the line it is on, then how long, and a chevron. What it
@@ -311,7 +318,12 @@ export function AgentRow({
     </>
   );
   return (
-    <div className="group flex w-full min-w-0 items-center">
+    <div
+      className={cx(
+        "group flex w-full min-w-0 items-center rounded-lg",
+        onClick !== undefined && "hover:bg-fill-subtle has-[:active]:bg-fill",
+      )}
+    >
       <Tooltip label={tooltip}>
         {onClick === undefined ? (
           // A row that only states something is a named, non-focusable group: no roleless tab stop,
@@ -325,7 +337,7 @@ export function AgentRow({
             aria-label={label}
             aria-expanded={expanded}
             onClick={onClick}
-            className={cx(rowClass, "hover:bg-fill-subtle")}
+            className={rowClass}
           >
             {body}
           </button>
@@ -335,7 +347,7 @@ export function AgentRow({
           right padding, so they read as the row's tail rather than two islands at the card's edge.
           The arrow is a control like the one beside it, never a mark that ignores a press. */}
       {(chevron || action) && (
-        <span className="flex shrink-0 items-center justify-end gap-1 pr-0.5">
+        <span className="flex shrink-0 items-center justify-end">
           {chevron && onClick !== undefined && (
             <Tooltip label={chevronWord}>
               <button
@@ -343,7 +355,7 @@ export function AgentRow({
                 aria-label={chevronWord}
                 aria-expanded={expanded}
                 onClick={onClick}
-                className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+                className="mr-1 flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
               >
                 <ChevronRight
                   size={14}
@@ -462,7 +474,7 @@ export function ThreadAgentRow({
                 type="button"
                 aria-label={`Show ${title} beside this thread`}
                 onClick={() => peekThread(link.target)}
-                className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                className={HOVER_REVEAL}
               >
                 <PanelRight size={12} />
               </button>
@@ -781,7 +793,7 @@ function RemoveLink({ link }: { link: Link }) {
         type="button"
         aria-label={`Remove ${link.targetTitle}`}
         onClick={() => dismissLink(link.id)}
-        className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 hover:bg-fill hover:text-fg group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+        className={HOVER_REVEAL}
       >
         <X size={12} strokeWidth={2.5} />
       </button>
@@ -811,7 +823,8 @@ export function StartedThreadsRow({
   const row = (link: Link) => (
     <ThreadAgentRow key={link.id} link={link} action={<RemoveLink link={link} />} />
   );
-  if (settled.length === 1) return row(settled[0]!.link);
+  if (settled.length === 1)
+    return <div className="my-1 rounded-xl bg-surface p-1">{row(settled[0]!.link)}</div>;
   const counts = linkCounts(settled.map((s) => s.state));
   const groupState: AgentState = counts.working
     ? "working"
