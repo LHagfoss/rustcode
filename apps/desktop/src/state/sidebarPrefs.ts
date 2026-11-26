@@ -103,6 +103,11 @@ export function readPref<T>(key: string, initial: T): T {
 export function writePref<T>(key: string, value: T): void {
   const raw = JSON.stringify(value);
   if (!writeStorage(key, raw)) memory.set(key, raw);
+  notifySidebarPrefs();
+}
+
+/** Notifies subscribers that a sidebar preference changed in another window. */
+export function notifySidebarPrefs(): void {
   for (const listener of listeners) listener();
 }
 

@@ -165,7 +165,6 @@ mod macos {
     use super::Sample;
     use objc2::runtime::AnyObject;
     use objc2::{msg_send, sel};
-    use tauri::Manager;
 
     /// `rusage_info_v0` from `<sys/resource.h>`.
     #[repr(C)]
@@ -201,7 +200,7 @@ mod macos {
     /// The main window's web process id (`_webProcessIdentifier`, which WebKit
     /// has had for years but does not document), read on the main thread.
     pub fn web_process_pid(app: &tauri::AppHandle) -> Option<i32> {
-        let window = app.get_webview_window("main")?;
+        let window = crate::webview::primary_window(app)?;
         let (tx, rx) = std::sync::mpsc::channel();
         window
             .with_webview(move |webview| {

@@ -7,10 +7,12 @@
 
 import { toggleDictation } from "../lib/dictation";
 import { cycleFocusArea } from "../lib/focusAreas";
+import { openNewWindow } from "../lib/native";
 import { stepZoom, zoomLabel } from "../lib/zoom";
 import { chooseFolder } from "./folders";
 import {
   cancel,
+  errorText,
   openSettings,
   setSwitcher,
   settleThread,
@@ -57,6 +59,11 @@ export function runShortcut(command: string): boolean {
       return true;
     case "command-palette":
       setSwitcher(!s.switcherOpen);
+      return true;
+    case "new-window":
+      void openNewWindow().catch((error) =>
+        toast(`Could not open a new window: ${errorText(error)}`, "error"),
+      );
       return true;
     case "settings":
       openSettings(s.settings ? null : undefined);

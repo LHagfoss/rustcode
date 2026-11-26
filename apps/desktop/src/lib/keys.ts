@@ -85,6 +85,7 @@ export const APP_COMMANDS: readonly AppCommand[] = [
     group: "App",
     remappable: true,
   },
+  { id: "new-window", label: "New window", binding: "mod+alt+n", group: "App", remappable: true },
   { id: "settings", label: "Settings", binding: "mod+,", group: "App", remappable: true },
   { id: "usage", label: "Usage", binding: "mod+u", group: "App", remappable: true },
   // No key of its own: the user gives it one (⌘J, say, taken from the terminal).

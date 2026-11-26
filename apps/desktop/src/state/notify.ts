@@ -15,6 +15,7 @@ import {
   playNotificationSound,
 } from "../lib/notifySound";
 import { shellCall } from "../lib/shell";
+import { isPrimaryWindow } from "./windowSync";
 
 /** What a thread has to tell the user about. */
 export type NotifyKind = "approval" | "question" | "limit" | "failed" | "finished";
@@ -228,7 +229,7 @@ export function warmingUp(now = Date.now(), since = startedAt): boolean {
  * for it. Called where a thread starts waiting or a turn ends in the store.
  */
 export function notifyThread(event: NotifyEvent, state: NoticeState): void {
-  if (warmingUp()) return;
+  if (warmingUp() || !isPrimaryWindow()) return;
   const focused = windowFocused();
   const allowed = gate.take(event, contextOf(state, focused));
   if (allowed) void show(allowed);

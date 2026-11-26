@@ -246,7 +246,8 @@ describe("what a binding may be", () => {
     expect(conflictingCommands({}, "new-thread", "mod+b").map((c) => c.id)).toEqual(["toggle-sidebar"]);
     // Its own binding is not a conflict with itself.
     expect(conflictingCommands({}, "toggle-sidebar", "mod+b")).toEqual([]);
-    expect(conflictingCommands({}, "new-thread", "mod+alt+n")).toEqual([]);
+    expect(conflictingCommands({}, "new-thread", "mod+alt+n").map((c) => c.id)).toEqual(["new-window"]);
+    expect(conflictingCommands({}, "new-thread", "mod+alt+z")).toEqual([]);
   });
 
   test("an override frees the key it left", () => {
