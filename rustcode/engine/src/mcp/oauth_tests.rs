@@ -440,8 +440,13 @@ async fn oauth_no_browser_still_discovers_logs_in_and_reuses_persisted_tokens() 
             .unwrap()
     );
     assert_eq!(stub.requests.lock().unwrap().len(), previous);
+    let expired = OAuthToken {
+        expires_at: Some(0),
+        ..token.clone()
+    };
+    save_oauth_token("stub-oauth", &expired).unwrap();
     if let Transport::Remote { state } = &restarted.transport {
-        state.lock().await.auth.as_mut().unwrap().expires_at = Some(0);
+        state.lock().await.auth = Some(expired);
     }
     assert!(
         restarted
@@ -602,4 +607,46 @@ async fn oauth_original_request_scope_challenge_takes_precedence_over_probe() {
         .into_owned()
         .collect();
     assert_eq!(params["scope"], "files:write offline_access");
+}
+
+#[tokio::test]
+async fn oauth_clients_sharing_an_expired_login_refresh_it_once() {
+    let stub = oauth_stub(ServerMode::Downgrade).await;
+    let server = "stub-oauth-shared-refresh";
+    let expired = OAuthToken {
+        access_token: "old-access".into(),
+        refresh_token: Some("old-refresh".into()),
+        client_id: Some("registered-client".into()),
+        token_endpoint: Some(format!("{}/token", stub.base)),
+        expires_at: Some(0),
+    };
+    save_oauth_token(server, &expired).unwrap();
+    let clients: Vec<McpClient> = (0..3)
+        .map(|_| {
+            let mut client = oauth_client(&stub);
+            client.name = server.into();
+            client
+        })
+        .collect();
+    for client in &clients {
+        client.store_auth_token(&expired).await;
+    }
+    let results = futures_util::future::join_all(clients.iter().map(|client| {
+        client.ensure_remote_auth_with(
+            &|_| panic!("a shared refresh must not open a sign-in"),
+            None,
+        )
+    }))
+    .await;
+    assert!(results.into_iter().all(|result| result == Ok(true)));
+    let token_requests = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(path, _)| path == "/token")
+        .count();
+    assert_eq!(token_requests, 1);
+    assert_eq!(load_oauth_token(server).unwrap().access_token, "access");
+    let _ = forget_saved_login(server);
 }

@@ -11,6 +11,7 @@ use tokio::process::Child;
 use tokio::sync::{Mutex, Notify, mpsc};
 
 mod client_metadata;
+mod login_lock;
 
 pub struct McpClient {
     pub name: String,
@@ -854,6 +855,16 @@ fn oauth_token_path(server: &str) -> Option<std::path::PathBuf> {
     Some(oauth_token_path_in_dir(&dir, server))
 }
 
+async fn sign_in_guard(server: &str) -> login_lock::LoginGuard {
+    let lock_path = oauth_token_path(server).map(|path| path.with_extension("lock"));
+    login_lock::acquire(server, lock_path).await
+}
+
+/// The saved token when another client wrote one since `held` was loaded.
+fn newer_saved_login(server: &str, held: Option<&OAuthToken>) -> Option<OAuthToken> {
+    load_oauth_token(server).filter(|saved| held != Some(saved))
+}
+
 async fn post_oauth_form_raw(
     http: &reqwest::Client,
     endpoint: &str,
@@ -1664,13 +1675,21 @@ impl McpClient {
         challenge: Option<&str>,
     ) -> Result<bool, String> {
         let name = self.name.clone();
-        let (http, stored) = match &self.transport {
+        let (http, mut stored) = match &self.transport {
             Transport::Remote { state } => {
                 let state = state.lock().await;
                 (state.http.clone(), state.auth.clone())
             }
             Transport::Stdio { .. } => return Err("MCP client is not a remote client".to_string()),
         };
+        let _sign_in = sign_in_guard(&name).await;
+        if let Some(saved) = newer_saved_login(&name, stored.as_ref()) {
+            if saved.usable() {
+                self.store_auth_token(&saved).await;
+                return Ok(true);
+            }
+            stored = Some(saved);
+        }
         if let Some(token) = stored {
             if token.usable() {
                 return Ok(true);
@@ -2147,6 +2166,11 @@ impl McpClient {
 /// connects to it on its own (Claude Code, Codex): refreshed and saved first
 /// when it expired and can be. None when there is no usable sign-in.
 pub(crate) async fn bearer_for_harness(server: &str) -> Option<String> {
+    let token = load_oauth_token(server)?;
+    if token.usable() {
+        return Some(token.access_token);
+    }
+    let _sign_in = sign_in_guard(server).await;
     let token = load_oauth_token(server)?;
     if token.usable() {
         return Some(token.access_token);
