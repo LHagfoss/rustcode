@@ -17,6 +17,9 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod workflow_job;
+pub(crate) use workflow_job::saved as saved_workflows;
+
 use crate::daemon::model::{JobAction, JobRecord, JobRunRecord, MisfirePolicy, ScheduleSpec};
 use crate::daemon::{
     client::DaemonClient,
@@ -54,7 +57,15 @@ pub(crate) struct LoopsSaveRequest {
     pub id: Option<String>,
     pub name: String,
     pub workspace: String,
+    #[serde(default)]
     pub prompt: String,
+    /// A workflow job: run `.rustcode/workflows/<workflow>.js` instead of
+    /// a prompt (#4443).
+    #[serde(default)]
+    pub workflow: Option<String>,
+    /// The workflow's `args`.
+    #[serde(default)]
+    pub args: Value,
     /// `{ "kind": "cron", "expression", "timezone"? }` or
     /// `{ "kind": "at", "at" }`, as `_rustcode/scheduled/create` takes it.
     pub schedule: Value,
@@ -170,7 +181,7 @@ async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResp
 
 /// What a run's output says about it: the thread it started, or why it was
 /// skipped (`daemon::executor::loop_outcome`).
-fn run_json(run: &JobRunRecord) -> Value {
+pub(super) fn run_json(run: &JobRunRecord) -> Value {
     let output: Value = run
         .output
         .as_deref()
@@ -185,6 +196,8 @@ fn run_json(run: &JobRunRecord) -> Value {
         "error": run.result_summary.as_ref().filter(|_| run.error_class.is_some()),
         "errorClass": run.error_class,
         "threadId": output.get("thread_id"),
+        "runId": output.get("run_id"),
+        "workflowStatus": output.get("status"),
         "verdict": output.get("verdict"),
         "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
         "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
@@ -214,7 +227,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         machine,
     } = &job.action
     else {
-        return None;
+        return workflow_job::json(job, runs);
     };
     let manual = matches!(job.schedule, ScheduleSpec::Manual);
     Some(json!({
@@ -315,7 +328,12 @@ async fn list_with(client: &DaemonClient) -> Result<Value, String> {
     let mut loops = Vec::new();
     for job in jobs
         .iter()
-        .filter(|job| matches!(job.action, JobAction::Loop { .. }))
+        .filter(|job| {
+            matches!(
+                job.action,
+                JobAction::Loop { .. } | JobAction::Workflow { .. }
+            )
+        })
         .take(super::scheduled::MAX_TASKS)
     {
         let runs = match ask(
@@ -348,7 +366,7 @@ pub(crate) fn loop_schedule(value: &Value) -> Result<ScheduleSpec, String> {
     Ok(spec)
 }
 
-fn trimmed(value: Option<String>) -> Option<String> {
+pub(super) fn trimmed(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -403,6 +421,9 @@ pub(crate) fn job_from(
     id: &str,
     webhook: Option<String>,
 ) -> Result<JobRecord, String> {
+    if trimmed(request.workflow.clone()).is_some() {
+        return workflow_job::job_from(request, id, webhook);
+    }
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
         return Err("a loop needs a prompt".to_owned());
@@ -500,13 +521,9 @@ async fn save_with(client: &DaemonClient, request: LoopsSaveRequest) -> Result<V
     let kept = match &existing {
         Some(id) if request.webhook && !request.rotate_webhook => {
             match ask(client, DaemonRequest::Get { job_id: id.clone() }).await? {
-                DaemonResponse::Job {
-                    job:
-                        JobRecord {
-                            action: JobAction::Loop { webhook, .. },
-                            ..
-                        },
-                } => webhook,
+                DaemonResponse::Job { job } => {
+                    job.action.webhook().map(|(hash, _)| hash.to_owned())
+                }
                 _ => None,
             }
         }
@@ -613,12 +630,7 @@ async fn trigger_with(
         Ok(_) => return not_found,
         Err(_) => return (503, json!({ "error": "scheduler_off" })),
     };
-    let JobAction::Loop {
-        webhook: Some(hash),
-        webhook_events,
-        ..
-    } = &job.action
-    else {
+    let Some((hash, webhook_events)) = job.action.webhook() else {
         return not_found;
     };
     if !webhook_matches(hash, secret) {
@@ -758,6 +770,8 @@ pub(crate) async fn patch(
         };
         let request = LoopsSaveRequest {
             id: Some(id.to_owned()),
+            workflow: None,
+            args: serde_json::Value::Null,
             name: name.unwrap_or(existing.name),
             workspace: old_workspace,
             prompt: prompt.unwrap_or(old_prompt),
@@ -849,6 +863,8 @@ mod tests {
     fn request(workspace: &str) -> LoopsSaveRequest {
         LoopsSaveRequest {
             id: None,
+            workflow: None,
+            args: serde_json::Value::Null,
             name: " CI watch ".into(),
             workspace: workspace.into(),
             prompt: " Check CI on main ".into(),

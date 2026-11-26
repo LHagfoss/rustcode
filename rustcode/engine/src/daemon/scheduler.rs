@@ -264,7 +264,12 @@ impl Scheduler {
         let Ok(job) = store.get(job_id) else {
             return;
         };
-        if job.paused || !matches!(job.action, super::model::JobAction::Loop { .. }) {
+        if job.paused
+            || !matches!(
+                job.action,
+                super::model::JobAction::Loop { .. } | super::model::JobAction::Workflow { .. }
+            )
+        {
             return;
         }
         let failing = store.last_run_signed_out(job_id).unwrap_or(false)

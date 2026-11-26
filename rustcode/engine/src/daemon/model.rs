@@ -109,6 +109,24 @@ pub enum JobAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
+    /// A workflow (ADR 0009): each run starts a fresh coordinator thread in
+    /// `workspace` and runs `.rustcode/workflows/<name>.js` there with `args`;
+    /// the job run ends when the workflow run does.
+    Workflow {
+        name: String,
+        workspace: String,
+        #[serde(default)]
+        args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        harness: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        /// The hash of the job's webhook secret, as a Loop keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        webhook: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        webhook_events: Vec<String>,
+    },
     Poll {
         action: Box<JobAction>,
         interval_seconds: u64,
@@ -117,6 +135,26 @@ pub enum JobAction {
         #[serde(default)]
         stop_on_change: bool,
     },
+}
+
+impl JobAction {
+    /// The hash of a Loop's or workflow job's webhook secret and the events
+    /// it takes; `None` for an action without a webhook.
+    pub fn webhook(&self) -> Option<(&str, &[String])> {
+        match self {
+            JobAction::Loop {
+                webhook: Some(hash),
+                webhook_events,
+                ..
+            }
+            | JobAction::Workflow {
+                webhook: Some(hash),
+                webhook_events,
+                ..
+            } => Some((hash, webhook_events)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

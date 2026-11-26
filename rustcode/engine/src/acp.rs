@@ -48,7 +48,7 @@ mod switch_to_builtin;
 mod telemetry;
 mod themes;
 pub(crate) mod usage;
-mod workflows;
+pub(crate) mod workflows;
 pub(crate) use builtin_open::*;
 pub(crate) use session_load::*;
 mod extensions;

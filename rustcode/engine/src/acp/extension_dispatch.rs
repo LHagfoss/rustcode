@@ -1892,6 +1892,17 @@ pub(super) async fn dispatch_request(
             let host = workflows::host(&server.clients, client_id, &request.session_id);
             responder.respond(workflows::resume(request, host))
         }
+        "_rustcode/workflows/saved" => {
+            let request: workflows::WorkflowSavedRequest = parse_params(params)?;
+            responder.respond(workflows::saved(&request))
+        }
+        "_rustcode/workflows/start" => {
+            let request: workflows::WorkflowStartRequest = parse_params(params)?;
+            match workflows::start(request) {
+                Ok(value) => responder.respond(value),
+                Err(error) => responder.respond_with_error(error),
+            }
+        }
         "_rustcode/workflows/retry" => {
             let request: workflows::WorkflowRetryRequest = parse_params(params)?;
             let host = workflows::host(&server.clients, client_id, &request.session_id);

@@ -157,6 +157,8 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
     }
     let request = crate::acp::loops::LoopsSaveRequest {
         id: None,
+        workflow: None,
+        args: serde_json::Value::Null,
         name: field("name").unwrap_or_default(),
         workspace,
         prompt: field("prompt").unwrap_or_default(),

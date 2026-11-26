@@ -254,7 +254,7 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
 }
 
 /// A workflow's name is the file's, without a folder or an extension.
-fn valid_name(name: &str) -> Result<(), String> {
+pub(crate) fn valid_name(name: &str) -> Result<(), String> {
     let ok = !name.is_empty()
         && name.len() <= 100
         && !name.starts_with('.')
@@ -558,6 +558,20 @@ pub(crate) fn start(
         "note": "Read it with workflow_status (wait_ms waits for the end), stop it with stop_workflow. Its workers are threads nested under this one."
     })
     .to_string())
+}
+
+/// Start the workflow `name` from `thread`'s project on `thread`, as a job's
+/// `workflow` action does: the engine starts its workers itself. The run id.
+pub(crate) fn start_named(thread: &str, name: &str, args: Value) -> Result<String, String> {
+    let answer = start(
+        thread,
+        ThreadRunner::new(thread, None, crate::orchestration::VERSION),
+        &json!({ "name": name, "args": args }),
+    )?;
+    serde_json::from_str::<Value>(&answer)
+        .ok()
+        .and_then(|answer| answer["run_id"].as_str().map(str::to_owned))
+        .ok_or_else(|| "the run started without an id".to_owned())
 }
 
 /// Pick up the runs of `thread` that a restart cut short: each continues from

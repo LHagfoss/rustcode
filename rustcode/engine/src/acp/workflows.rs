@@ -44,6 +44,41 @@ pub(crate) struct WorkflowStopRequest {
     pub run_id: String,
 }
 
+/// Start the named workflow of the thread's project on the thread (a job's
+/// `workflow` action). Answers `{runId}` or an error.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/workflows/start", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowStartRequest {
+    pub session_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
+pub(crate) fn start(request: WorkflowStartRequest) -> Result<Value, agent_client_protocol::Error> {
+    crate::workflow::start_named(&request.session_id, &request.name, request.args)
+        .map(|run_id| json!({ "runId": run_id }))
+        .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))
+}
+
+/// `_rustcode/workflows/saved`: the workflows in a project's
+/// `.rustcode/workflows/`, for the Jobs page's picker. Answers `{names}`.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/workflows/saved", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowSavedRequest {
+    pub workspace: String,
+}
+
+pub(crate) fn saved(request: &WorkflowSavedRequest) -> Value {
+    json!({ "names": super::loops::saved_workflows(&request.workspace) })
+}
+
 /// Resume one saved workflow from its first unfinished call.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
