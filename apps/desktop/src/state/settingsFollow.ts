@@ -11,6 +11,7 @@
 import { create } from "zustand";
 import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
+import { errorDetail, recordAutoSync } from "./autoSyncStatus";
 import { copyFiles, followedKinds } from "./configFilesFollow";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
 import { syncStorageKey } from "./storageSync";
@@ -82,10 +83,15 @@ export function copySettingsTo(host: string): Promise<number> {
     again.add(host);
     return running;
   }
-  const task = copyOnce(host).finally(() => {
-    copies.delete(host);
-    if (again.delete(host)) void copySettingsTo(host).catch(() => 0);
-  });
+  const task = copyOnce(host)
+    .catch((error: unknown) => {
+      recordAutoSync(host, "follow", "failed", errorDetail(error));
+      throw error;
+    })
+    .finally(() => {
+      copies.delete(host);
+      if (again.delete(host)) void copySettingsTo(host).catch(() => 0);
+    });
   copies.set(host, task);
   return task;
 }
@@ -104,7 +110,8 @@ async function copyOnce(host: string): Promise<number> {
   let remote: JsonObject | undefined;
   try {
     remote = obj(obj(await scope.machineRequest(host, "_rustcode/settings/get", {}, REQUEST_MS))?.values);
-  } catch {
+  } catch (error) {
+    recordAutoSync(host, "follow", "skipped", `Its settings could not be read (${errorDetail(error)}).`);
     return 0;
   }
   const values = followValues(local, remote);
@@ -113,7 +120,15 @@ async function copyOnce(host: string): Promise<number> {
     await scope.machineRequest(host, "_rustcode/settings/set", { values }, REQUEST_MS);
     await scope.loadServerSettings(host, true).catch(() => undefined);
   }
-  await copyFilesTo(host, scope.machineRequest);
+  const files = await copyFilesTo(host, scope.machineRequest);
+  if (files) recordAutoSync(host, "follow", files.outcome, files.detail);
+  else
+    recordAutoSync(
+      host,
+      "follow",
+      "synced",
+      count ? `${count} ${count === 1 ? "setting" : "settings"} changed.` : undefined,
+    );
   return count;
 }
 
@@ -121,12 +136,20 @@ async function copyOnce(host: string): Promise<number> {
 async function copyFilesTo(
   host: string,
   request: (host: string, method: string, params: JsonObject, timeoutMs: number) => Promise<unknown>,
-): Promise<void> {
-  if (!followsThisComputer(host)) return;
+): Promise<{ outcome: "skipped" | "failed"; detail: string } | null> {
+  if (!followsThisComputer(host)) return null;
   const { ownHostId } = await import("./fleet");
   const self = await ownHostId();
-  if (!self) return;
-  await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host)).catch(() => null);
+  if (!self)
+    return { outcome: "skipped", detail: "This computer has no id yet, so its files were not copied." };
+  try {
+    const copied = await copyFiles(request, LOCAL_HOST, host, self, followedKinds(host));
+    return copied === null
+      ? { outcome: "skipped", detail: "Its server is too old to take skills, themes and commands." }
+      : null;
+  } catch (error) {
+    return { outcome: "failed", detail: `Files: ${errorDetail(error)}` };
+  }
 }
 
 /**

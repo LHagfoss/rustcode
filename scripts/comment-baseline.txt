@@ -239,7 +239,7 @@
 2 apps/desktop/src/state/fileRefs.test.ts
 7 apps/desktop/src/state/fileRefs.ts
 4 apps/desktop/src/state/fleet.test.ts
-20 apps/desktop/src/state/fleet.ts
+18 apps/desktop/src/state/fleet.ts
 6 apps/desktop/src/state/fleetUsage.test.ts
 14 apps/desktop/src/state/fleetUsage.ts
 19 apps/desktop/src/state/fold.test.ts

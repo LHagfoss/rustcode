@@ -13,6 +13,7 @@
 
 import { type AcpConnection, type JsonObject, num, obj, RpcError, str } from "../acp/jsonrpc";
 import { parseSessionUpdate, type SessionSummary } from "../acp/types";
+import { errorDetail, recordAutoSync } from "./autoSyncStatus";
 import type { MirroredEntry } from "./machineMirror";
 import { applyUpdate, emptyThread, finishLoad, type ThreadState } from "./thread";
 import { LOCAL_HOST, threadKey } from "./threadKeys";
@@ -173,7 +174,11 @@ async function backfill(host: string): Promise<void> {
     ]);
     await wait(START_DELAY_MS);
     const status = await mirror.readMirrorStatus();
-    if (!status?.enabled || !machines.machineConnection(host)) return;
+    if (!status?.enabled) return;
+    if (!machines.machineConnection(host)) {
+      recordAutoSync(host, "backfill", "skipped", "It went away before the copy started.");
+      return;
+    }
     const rows = machines.useMachines.getState().sessions[host] ?? [];
     const held = (id: string) => !!store.useApp.getState().threads[threadKey(host, id)];
     const candidates = backfillCandidates(rows, await mirror.loadMirroredEntries(host), {
@@ -182,9 +187,18 @@ async function backfill(host: string): Promise<void> {
       skipped: (row) => dropGuard.isSkipped(host, row),
     });
     let failures = 0;
+    let copied = 0;
     for (const row of candidates) {
       const connection = machines.machineConnection(host);
-      if (!connection) return;
+      if (!connection) {
+        recordAutoSync(
+          host,
+          "backfill",
+          "skipped",
+          `It went away after ${copied} of ${candidates.length} copies.`,
+        );
+        return;
+      }
       // Opened since the list was made: the app keeps that copy itself.
       if (held(row.id)) continue;
       let answer: unknown;
@@ -193,24 +207,47 @@ async function backfill(host: string): Promise<void> {
       } catch (error) {
         if (connection.isClosed) {
           dropGuard.recordDrop(host, row);
+          recordAutoSync(host, "backfill", "failed", "The connection dropped while a thread was copied.");
           return;
         }
         // A machine on an older release cannot answer (or its relay refuses the method); one
         // thread that fails is tried on the next pass.
-        if ((error instanceof RpcError && error.isMethodNotFound) || ++failures >= MAX_FAILURES) return;
+        if (error instanceof RpcError && error.isMethodNotFound) {
+          recordAutoSync(host, "backfill", "skipped", "Its server is too old to copy threads.");
+          return;
+        }
+        if (++failures >= MAX_FAILURES) {
+          recordAutoSync(
+            host,
+            "backfill",
+            "failed",
+            `${failures} copies in a row failed (${errorDetail(error)}).`,
+          );
+          return;
+        }
         continue;
       }
       dropGuard.clear(host, row.id);
       failures = 0;
       const key = threadKey(host, row.id);
       const thread = threadFromReplay(key, answer, row);
-      if (thread?.items.length && !held(row.id)) await mirror.mirrorTranscript(thread, key);
+      if (thread?.items.length && !held(row.id)) {
+        await mirror.mirrorTranscript(thread, key);
+        copied++;
+      }
       const again = await mirror.readMirrorStatus();
       if (!again?.enabled) return;
       await wait(GAP_MS);
     }
-  } catch {
+    recordAutoSync(
+      host,
+      "backfill",
+      "synced",
+      copied ? `${copied} ${copied === 1 ? "thread" : "threads"} copied.` : "Every copy is up to date.",
+    );
+  } catch (error) {
     // Best effort: what was copied stays, and the next connection tries the rest.
+    recordAutoSync(host, "backfill", "failed", errorDetail(error));
   } finally {
     passes.delete(host);
   }
