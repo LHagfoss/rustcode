@@ -65,8 +65,10 @@ const STATUS_POLL: Duration = Duration::from_millis(500);
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
 /// The limits when the user has not set any, and the most any may be set to.
-/// The settings are `workflow-concurrency`, `workflow-call-budget` and
-/// `workflow-timeout-minutes` (`acp/settings.rs`).
+/// The settings are `workflow-concurrency`, `workflow-call-budget`,
+/// `workflow-timeout-minutes`, `workflow-token-budget` and
+/// `workflow-cost-budget-usd` (`acp/settings.rs`). The last two are unset by
+/// default, which means no spend limit.
 pub(crate) const DEFAULT_CONCURRENCY: u64 = 3;
 pub(crate) const MAX_CONCURRENCY: u64 = 8;
 pub(crate) const DEFAULT_CALL_BUDGET: u64 = 40;
@@ -80,8 +82,23 @@ pub(crate) const DEFAULT_KEPT_RUNS: u64 = LISTED_RUNS as u64;
 pub(crate) const MAX_KEPT_RUNS: u64 = 200;
 
 /// The limits a run gets: what the user's settings say, read through `read`.
-fn configured_limits(read: impl Fn(&str) -> Option<u64>) -> Limits {
-    let pick = |key: &str, default: u64, max: u64| read(key).unwrap_or(default).clamp(1, max);
+fn configured_limits(read: impl Fn(&str) -> Option<Value>) -> Limits {
+    let pick = |key: &str, default: u64, max: u64| {
+        read(key)
+            .and_then(|value| value.as_u64())
+            .unwrap_or(default)
+            .clamp(1, max)
+    };
+    let optional = |key: &str| {
+        read(key)
+            .and_then(|value| value.as_u64())
+            .filter(|value| *value > 0)
+    };
+    let dollars = |key: &str| {
+        read(key)
+            .and_then(|value| value.as_f64())
+            .filter(|value| value.is_finite() && *value > 0.0)
+    };
     Limits {
         concurrency: pick("workflow-concurrency", DEFAULT_CONCURRENCY, MAX_CONCURRENCY) as usize,
         call_budget: pick("workflow-call-budget", DEFAULT_CALL_BUDGET, MAX_CALL_BUDGET) as usize,
@@ -90,11 +107,13 @@ fn configured_limits(read: impl Fn(&str) -> Option<u64>) -> Limits {
             DEFAULT_TIMEOUT_MINUTES,
             MAX_TIMEOUT_MINUTES,
         ) * 60,
+        token_budget: optional("workflow-token-budget"),
+        cost_budget_usd: dollars("workflow-cost-budget-usd"),
     }
 }
 
 fn settings_limits() -> Limits {
-    configured_limits(setting_u64)
+    configured_limits(crate::acp::settings::value)
 }
 
 /// How many settled runs a thread keeps, read through `read`.
@@ -116,6 +135,19 @@ fn lowered(configured: Limits, args: &Value) -> Limits {
             .and_then(Value::as_u64)
             .filter(|value| *value > 0)
     };
+    let ask_usd = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+    };
+    let lower = |configured: Option<u64>, asked: Option<u64>| match (configured, asked) {
+        (Some(configured), Some(asked)) => Some(configured.min(asked)),
+        (left, right) => right.or(left),
+    };
+    let lower_usd = |configured: Option<f64>, asked: Option<f64>| match (configured, asked) {
+        (Some(configured), Some(asked)) => Some(configured.min(asked)),
+        (left, right) => right.or(left),
+    };
     Limits {
         concurrency: ask("concurrency").map_or(configured.concurrency, |asked| {
             configured.concurrency.min(asked as usize)
@@ -126,6 +158,8 @@ fn lowered(configured: Limits, args: &Value) -> Limits {
         timeout_secs: ask("timeout_minutes").map_or(configured.timeout_secs, |asked| {
             configured.timeout_secs.min(asked.saturating_mul(60))
         }),
+        token_budget: lower(configured.token_budget, ask("token_budget")),
+        cost_budget_usd: lower_usd(configured.cost_budget_usd, ask_usd("cost_budget_usd")),
     }
 }
 
@@ -133,13 +167,15 @@ pub(crate) fn run_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "script": {"type": "string", "minLength": 1, "maxLength": MAX_SCRIPT_BYTES, "description": "The workflow's JavaScript, run as the body of an async function: it may await and return a JSON value. Give this or name."},
-            "name": {"type": "string", "minLength": 1, "maxLength": 100, "description": "The workflow to run from .rustcode/workflows/<name>.js in this thread's project, instead of a script"},
+            "script": {"type": "string", "minLength": 1, "maxLength": MAX_SCRIPT_BYTES, "description": "The workflow's JavaScript, run as an async function body; give this or name."},
+            "name": {"type": "string", "minLength": 1, "maxLength": 100, "description": "The workflow file .rustcode/workflows/<name>.js, instead of a script"},
             "args": {"description": "Any JSON; the script reads it as the global `args`"},
             "concurrency": {"type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "How many workers may run at once; the user's setting is the most"},
             "call_budget": {"type": "integer", "minimum": 1, "maximum": MAX_CALL_BUDGET, "description": "How many agent() calls the run may make in all; the user's setting is the most"},
             "timeout_minutes": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MINUTES, "description": "How long the run may take; the user's setting is the most"},
-            "retry_run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Retry this thread's failed, timed-out or stopped run instead of starting one: finished calls are answered from the run, only failed or missing calls start workers. Give this instead of script or name"}
+            "token_budget": {"type": "integer", "minimum": 1, "description": "Tokens before new workers stop; unset: no limit"},
+            "cost_budget_usd": {"type": "number", "exclusiveMinimum": 0, "description": "Reported USD before new workers stop; unset: no limit"},
+            "retry_run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Retry this thread's failed, timed-out or stopped run: finished calls are answered from it, only failed or missing ones start workers. Give instead of script or name"}
         },
         "additionalProperties": false
     })
@@ -177,6 +213,8 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             "concurrency",
             "call_budget",
             "timeout_minutes",
+            "token_budget",
+            "cost_budget_usd",
             "retry_run_id",
         ],
         STATUS_TOOL_NAME => &["run_id", "wait_ms"],
@@ -215,6 +253,14 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
     number("concurrency", MAX_CONCURRENCY)?;
     number("call_budget", MAX_CALL_BUDGET)?;
     number("timeout_minutes", MAX_TIMEOUT_MINUTES)?;
+    number("token_budget", u64::MAX)?;
+    if let Some(value) = map.get("cost_budget_usd").filter(|value| !value.is_null())
+        && !value
+            .as_f64()
+            .is_some_and(|amount| amount.is_finite() && amount > 0.0)
+    {
+        return Err("cost_budget_usd must be a positive number of US dollars".to_owned());
+    }
     let text = |key: &str| match map.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.as_str())),
@@ -526,6 +572,8 @@ pub(crate) fn start(
             "concurrency": limits.concurrency,
             "call_budget": limits.call_budget,
             "timeout_minutes": limits.timeout_secs / 60,
+            "token_budget": limits.token_budget,
+            "cost_budget_usd": limits.cost_budget_usd,
         },
         "note": "Read it with workflow_status (wait_ms waits for the end), stop it with stop_workflow. Its workers are threads nested under this one."
     })
@@ -996,7 +1044,19 @@ fn report(store: &Store, record: &RunRecord) -> Value {
             "concurrency": record.limits.concurrency,
             "call_budget": record.limits.call_budget,
             "timeout_minutes": record.limits.timeout_secs / 60,
+            "token_budget": record.limits.token_budget,
+            "cost_budget_usd": record.limits.cost_budget_usd,
         },
+        "usage": {
+            "tokens": record.usage.tokens,
+            "cost_usd": record.usage.cost_usd,
+            "cost_reported_by": format!(
+                "{}/{} workers",
+                record.usage.reported_by, record.usage.workers
+            ),
+            "workers": record.usage.workers,
+        },
+        "limit_hit": record.limit_hit,
         "calls": {
             "total": calls.len(),
             "running": count(CallState::Running),
@@ -1094,32 +1154,64 @@ mod tests {
             Limits {
                 concurrency: 3,
                 call_budget: 40,
-                timeout_secs: 3600
+                timeout_secs: 3600,
+                token_budget: None,
+                cost_budget_usd: None,
             }
         );
         let set = configured_limits(|key| match key {
-            "workflow-concurrency" => Some(100),
-            "workflow-call-budget" => Some(7),
-            "workflow-timeout-minutes" => Some(0),
+            "workflow-concurrency" => Some(json!(100)),
+            "workflow-call-budget" => Some(json!(7)),
+            "workflow-timeout-minutes" => Some(json!(0)),
+            "workflow-token-budget" => Some(json!(900)),
+            "workflow-cost-budget-usd" => Some(json!(12.5)),
             _ => None,
         });
-        // Capped at the most, and never below one.
+        // Capped at the most, and never below one. Spend limits can be unset.
         assert_eq!(set.concurrency, MAX_CONCURRENCY as usize);
         assert_eq!(set.call_budget, 7);
         assert_eq!(set.timeout_secs, 60);
+        assert_eq!(set.token_budget, Some(900));
+        assert_eq!(set.cost_budget_usd, Some(12.5));
         let lower = lowered(
             none,
-            &json!({"concurrency": 2, "call_budget": 5, "timeout_minutes": 10}),
+            &json!({"concurrency": 2, "call_budget": 5, "timeout_minutes": 10,
+                    "token_budget": 500, "cost_budget_usd": 2.5}),
         );
         assert_eq!(
-            (lower.concurrency, lower.call_budget, lower.timeout_secs),
-            (2, 5, 600)
+            (
+                lower.concurrency,
+                lower.call_budget,
+                lower.timeout_secs,
+                lower.token_budget,
+                lower.cost_budget_usd
+            ),
+            (2, 5, 600, Some(500), Some(2.5))
         );
         let higher = lowered(
             none,
             &json!({"concurrency": 8, "call_budget": 500, "timeout_minutes": 999}),
         );
-        assert_eq!(higher, none);
+        assert_eq!(
+            (
+                higher.concurrency,
+                higher.call_budget,
+                higher.timeout_secs,
+                higher.token_budget,
+                higher.cost_budget_usd
+            ),
+            (3, 40, 3600, None, None)
+        );
+        // A call only lowers what the settings allow, including spend limits.
+        let cannot_raise = lowered(
+            set,
+            &json!({"token_budget": 1_000_000, "cost_budget_usd": 100.0}),
+        );
+        assert_eq!(cannot_raise.token_budget, Some(900));
+        assert_eq!(cannot_raise.cost_budget_usd, Some(12.5));
+        let can_lower = lowered(set, &json!({"token_budget": 100, "cost_budget_usd": 1.0}));
+        assert_eq!(can_lower.token_budget, Some(100));
+        assert_eq!(can_lower.cost_budget_usd, Some(1.0));
     }
 
     #[test]
@@ -1149,6 +1241,30 @@ mod tests {
         assert!(ok(RUN_TOOL_NAME, json!({"script": "  "})).is_err());
         assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "concurrency": 0})).is_err());
         assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "concurrency": 9})).is_err());
+        assert!(
+            ok(
+                RUN_TOOL_NAME,
+                json!({"script": "x", "token_budget": 5_000_000})
+            )
+            .is_ok()
+        );
+        assert!(
+            ok(
+                RUN_TOOL_NAME,
+                json!({"script": "x", "cost_budget_usd": 20.5})
+            )
+            .is_ok()
+        );
+        assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "token_budget": 0})).is_err());
+        assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "cost_budget_usd": 0})).is_err());
+        assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "cost_budget_usd": -1})).is_err());
+        assert!(
+            ok(
+                RUN_TOOL_NAME,
+                json!({"script": "x", "cost_budget_usd": "20"})
+            )
+            .is_err()
+        );
         assert!(ok(RUN_TOOL_NAME, json!({"script": "x", "colour": 1})).is_err());
         for name in ["../x", "a/b", ".hidden", "a b", ""] {
             assert!(ok(RUN_TOOL_NAME, json!({"name": name})).is_err(), "{name}");
@@ -1176,6 +1292,8 @@ mod tests {
             concurrency: 2,
             call_budget: 10,
             timeout_secs: 30,
+            token_budget: None,
+            cost_budget_usd: None,
         };
         let id = launch(
             store.clone(),
@@ -1211,6 +1329,48 @@ mod tests {
         assert_eq!(listing(&store)["runs"][0]["run_id"], json!(id));
     }
 
+    #[test]
+    fn a_status_always_reports_usage_and_which_limit_was_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let mut record = new_record("1784626803679", None, Value::Null, limits());
+        store.create(&record, "return 1").unwrap();
+
+        let plain = report(&store, &record);
+        assert_eq!(plain["usage"]["tokens"], json!(0));
+        assert_eq!(plain["usage"]["cost_usd"], json!(0.0));
+        assert_eq!(plain["usage"]["cost_reported_by"], json!("0/0 workers"));
+        assert_eq!(plain["limit_hit"], Value::Null);
+
+        record.limits.token_budget = Some(4_000_000);
+        record.limits.cost_budget_usd = Some(20.0);
+        record.usage = store::Usage {
+            tokens: 5_000_000,
+            cost_usd: 12.5,
+            reported_by: 2,
+            workers: 3,
+        };
+        record.limit_hit = Some("the run reached its token budget".to_owned());
+        let spent = report(&store, &record);
+        assert_eq!(spent["limits"]["token_budget"], json!(4_000_000));
+        assert_eq!(spent["limits"]["cost_budget_usd"], json!(20.0));
+        assert_eq!(spent["usage"]["tokens"], json!(5_000_000));
+        assert_eq!(spent["usage"]["cost_usd"], json!(12.5));
+        assert_eq!(spent["usage"]["cost_reported_by"], json!("2/3 workers"));
+        assert_eq!(
+            spent["limit_hit"],
+            json!("the run reached its token budget")
+        );
+        assert_eq!(
+            summary(&store, &record)["usage"]["tokens"],
+            json!(5_000_000)
+        );
+
+        let schema = run_schema();
+        assert!(schema["properties"]["token_budget"].is_object());
+        assert!(schema["properties"]["cost_budget_usd"].is_object());
+    }
+
     #[tokio::test]
     async fn a_restart_resumes_a_run_that_was_left_running() {
         let dir = tempfile::tempdir().unwrap();
@@ -1225,6 +1385,8 @@ mod tests {
                 concurrency: 2,
                 call_budget: 10,
                 timeout_secs: 30,
+                token_budget: None,
+                cost_budget_usd: None,
             },
         );
         let source = r#"return [await agent("one"), await agent("two")];"#;
@@ -1282,6 +1444,8 @@ mod tests {
                 concurrency: 1,
                 call_budget: 5,
                 timeout_secs: 30,
+                token_budget: None,
+                cost_budget_usd: None,
             },
         );
         store
@@ -1314,6 +1478,8 @@ mod tests {
             concurrency: 1,
             call_budget: 5,
             timeout_secs: 30,
+            token_budget: None,
+            cost_budget_usd: None,
         };
         let thread = "1784626803679";
         let record = new_record(thread, None, Value::Null, limits);
@@ -1359,6 +1525,8 @@ mod tests {
                 concurrency: 1,
                 call_budget: 5,
                 timeout_secs: 30,
+                token_budget: None,
+                cost_budget_usd: None,
             },
         );
         store
@@ -1402,6 +1570,8 @@ mod tests {
                 concurrency: 2,
                 call_budget: 2,
                 timeout_secs: 30,
+                token_budget: None,
+                cost_budget_usd: None,
             },
         );
         record.status = RunStatus::Failed;
@@ -1441,6 +1611,8 @@ mod tests {
             concurrency: 1,
             call_budget: 5,
             timeout_secs: 30,
+            token_budget: None,
+            cost_budget_usd: None,
         };
         let running = new_record("1784626803679", None, Value::Null, limits);
         store.create(&running, "return 1;").unwrap();
@@ -1491,6 +1663,8 @@ mod tests {
                 concurrency: 1,
                 call_budget: 1,
                 timeout_secs: 30,
+                token_budget: None,
+                cost_budget_usd: None,
             },
         );
         store.create(&record, "return 1").unwrap();
@@ -1572,6 +1746,8 @@ mod tests {
             concurrency: 2,
             call_budget: 10,
             timeout_secs: 60,
+            token_budget: None,
+            cost_budget_usd: None,
         }
     }
 

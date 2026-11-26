@@ -69,6 +69,9 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("workflow-concurrency", SettingType::Number, json!(3)),
             ("workflow-call-budget", SettingType::Number, json!(40)),
             ("workflow-timeout-minutes", SettingType::Number, json!(60)),
+            // Unset means no spend limit for a workflow run (#4385).
+            ("workflow-token-budget", SettingType::Number, json!(null)),
+            ("workflow-cost-budget-usd", SettingType::Number, json!(null)),
             ("workflow-kept-runs", SettingType::Number, json!(20)),
             // Whether a thread is listed the tools few threads need
             // (`orchestration::EXTRA_TOOL_NAMES`), which cost context in every one.
@@ -432,6 +435,8 @@ fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
         "workflow-concurrency" => ("Workflow workers at once", None),
         "workflow-call-budget" => ("Workflow agent calls per run", None),
         "workflow-timeout-minutes" => ("Workflow run time limit, in minutes", None),
+        "workflow-token-budget" => ("Workflow tokens per run, unset for no limit", None),
+        "workflow-cost-budget-usd" => ("Workflow reported USD per run, unset for no limit", None),
         "workflow-kept-runs" => ("Finished workflow runs kept per thread", None),
         crate::orchestration::ALL_TOOLS_SETTING => (
             "List the project, loop, workflow and worktree handoff tools to threads",

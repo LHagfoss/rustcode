@@ -31,6 +31,7 @@ use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+    params_from_iter,
 };
 use serde_json::{Value, json};
 
@@ -2999,6 +3000,63 @@ pub fn stats_at(path: &Path) -> Result<Value, String> {
         "total_bytes": std::fs::metadata(path).map(|meta| meta.len()).ok(),
         "objects": out,
     }))
+}
+
+/// Tokens and reported cost over the turns of some threads, for a workflow
+/// run's workers. Tokens are input plus output: cached ones may already be in
+/// input. A turn with no reported cost adds none, and is counted separately.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub struct ThreadsUsage {
+    pub tokens: i64,
+    pub cost_usd: f64,
+    /// How many of the threads reported a cost in at least one turn.
+    pub cost_reported_by: usize,
+}
+
+/// [`threads_usage_at`] against the user's store. A store that does not exist
+/// yet holds no turns, so it reads as zero rather than an error.
+pub fn threads_usage(thread_ids: &[String]) -> Result<ThreadsUsage, String> {
+    let Some(path) = data_path() else {
+        return Ok(ThreadsUsage::default());
+    };
+    threads_usage_at(&path, thread_ids)
+}
+
+/// Sum the recorded turns of `thread_ids`, for a test store or a peer. Only
+/// costs a harness reported are added; nothing is priced here.
+pub fn threads_usage_at(path: &Path, thread_ids: &[String]) -> Result<ThreadsUsage, String> {
+    let mut total = ThreadsUsage::default();
+    if !path.is_file() || thread_ids.is_empty() {
+        return Ok(total);
+    }
+    let ids: Vec<&String> = {
+        let mut seen = HashSet::new();
+        thread_ids
+            .iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .collect()
+    };
+    let connection = open_readonly(path)?;
+    // Chunked so a run with many workers stays under SQLite's variable limit.
+    for chunk in ids.chunks(500) {
+        let places = vec!["(?)"; chunk.len()].join(", ");
+        let sql = format!(
+            "WITH ids(id) AS (VALUES {places}) \
+             SELECT COALESCE(SUM(COALESCE(t.input_tokens, 0) + COALESCE(t.output_tokens, 0)), 0), \
+                    COALESCE(SUM(t.cost_usd), 0), \
+                    COUNT(DISTINCT CASE WHEN t.cost_usd IS NOT NULL THEN t.thread_id END) \
+             FROM turns t JOIN ids ON ids.id = t.thread_id"
+        );
+        let (tokens, cost_usd, reported): (i64, f64, i64) = connection
+            .query_row(&sql, params_from_iter(chunk), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|error| error.to_string())?;
+        total.tokens = total.tokens.saturating_add(tokens);
+        total.cost_usd += cost_usd;
+        total.cost_reported_by += reported as usize;
+    }
+    Ok(total)
 }
 
 /// All-time input and output tokens the local store recorded, without adding

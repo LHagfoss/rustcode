@@ -105,6 +105,40 @@ fn rows(answer: &Value) -> Vec<Value> {
 }
 
 #[test]
+fn threads_usage_sums_only_the_named_threads_and_only_reported_costs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = usage_store(dir.path());
+    let connection = open(&path).unwrap();
+    let mut priced = turn("a", "2026-11-04T10:00:00Z", (7, 3), "completed");
+    priced.cost_usd = Some(1.25);
+    write_turn(&connection, &priced).unwrap();
+
+    let ids = vec![
+        "a".to_owned(),
+        "b".to_owned(),
+        "c".to_owned(),
+        "a".to_owned(),
+    ];
+    let all = threads_usage_at(&path, &ids).unwrap();
+    assert_eq!(all.tokens, 100 + 10 + 200 + 20 + 7 + 3);
+    assert!((all.cost_usd - 1.25).abs() < 1e-9, "{all:?}");
+    assert_eq!(all.cost_reported_by, 1);
+
+    let unpriced = threads_usage_at(&path, &["b".to_owned()]).unwrap();
+    assert_eq!(unpriced.tokens, 220);
+    assert_eq!(unpriced.cost_usd, 0.0);
+    assert_eq!(unpriced.cost_reported_by, 0);
+    assert_eq!(
+        threads_usage_at(&path, &[]).unwrap(),
+        ThreadsUsage::default()
+    );
+    assert_eq!(
+        threads_usage_at(&dir.path().join("missing.sqlite"), &ids).unwrap(),
+        ThreadsUsage::default()
+    );
+}
+
+#[test]
 fn model_groups_strip_provider_namespaces_and_keep_raw_labels() {
     let dir = tempfile::tempdir().unwrap();
     let path = usage_store(dir.path());

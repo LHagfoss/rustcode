@@ -26,8 +26,13 @@ use super::reply;
 use super::sandbox::{self, Bounds, Host, Reply};
 use super::store::{
     CallRecord, CallState, Limits, LogLine, MAX_LINE_CHARS, MAX_LOG_LINES, Phase, RunRecord,
-    RunStatus, Store, clip, now_ms,
+    RunStatus, Store, Usage, clip, now_ms,
 };
+use crate::data_store::ThreadsUsage;
+
+/// Where a run reads its workers' recorded usage. The engine uses the data
+/// store; tests supply the same shape over a temporary store or a fixture.
+type UsageReader = dyn Fn(&[String]) -> ThreadsUsage + Send + Sync;
 
 pub(crate) type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -165,6 +170,7 @@ struct Inner {
 pub(super) struct Run {
     store: Store,
     runner: Arc<dyn AgentRunner>,
+    usage: Arc<UsageReader>,
     cancel: CancellationToken,
     permits: Semaphore,
     inner: Mutex<Inner>,
@@ -188,6 +194,21 @@ struct Fresh {
 impl Run {
     /// A run over `record`, picking up the calls its folder already holds.
     pub(super) fn new(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord) -> Arc<Self> {
+        Self::with_usage(
+            store,
+            runner,
+            record,
+            Arc::new(|ids| crate::data_store::threads_usage(ids).unwrap_or_default()),
+        )
+    }
+
+    /// The same run with another reader of worker usage, for tests.
+    pub(super) fn with_usage(
+        store: Store,
+        runner: Arc<dyn AgentRunner>,
+        record: RunRecord,
+        usage: Arc<UsageReader>,
+    ) -> Arc<Self> {
         let known = store
             .calls(&record.id)
             .into_iter()
@@ -197,6 +218,7 @@ impl Run {
         Arc::new(Self {
             store,
             runner,
+            usage,
             cancel: CancellationToken::new(),
             permits: Semaphore::new(permits),
             inner: Mutex::new(Inner {
@@ -206,6 +228,39 @@ impl Run {
                 next_seq: 0,
             }),
         })
+    }
+
+    /// The distinct threads this run started as workers.
+    fn worker_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .lock()
+            .known
+            .values()
+            .filter_map(|call| call.session_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Re-read the workers' turns and remember both the usage and, once, which
+    /// budget stopped new workers. Never interrupts a worker already running.
+    fn refresh_usage(&self) {
+        let ids = self.worker_ids();
+        let read = (self.usage)(&ids);
+        let mut inner = self.lock();
+        inner.record.usage = Usage {
+            tokens: read.tokens,
+            cost_usd: read.cost_usd,
+            reported_by: read.cost_reported_by,
+            workers: ids.len(),
+        };
+        let hit = budget_hit(&inner.record.limits, &read);
+        if hit.is_some() && inner.record.limit_hit.is_none() {
+            inner.record.limit_hit = hit;
+        }
+        drop(inner);
+        self.save();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -259,17 +314,36 @@ impl Run {
         let mut inner = self.lock();
         let seq = inner.next_seq;
         inner.next_seq += 1;
-        let count = inner.seen.entry(hash.clone()).or_insert(0);
-        let key = format!("{hash}#{count}");
-        *count += 1;
+        let key = {
+            let count = inner.seen.entry(hash.clone()).or_insert(0);
+            let key = format!("{hash}#{count}");
+            *count += 1;
+            key
+        };
         let phase = inner.record.phases.last().map(|phase| phase.title.clone());
-        if let Some(known) = inner.known.get(&key) {
-            if known.state == CallState::Done
-                && let Some(value) = known.result.clone()
-            {
-                return Ok(Begun::Cached(value));
-            }
-        } else {
+        let cached = inner
+            .known
+            .get(&key)
+            .filter(|known| known.state == CallState::Done)
+            .and_then(|known| known.result.clone());
+        if let Some(value) = cached {
+            // A replayed call costs nothing, so no spend check is needed.
+            return Ok(Begun::Cached(value));
+        }
+        let budgeted = inner.record.limits.token_budget.is_some()
+            || inner.record.limits.cost_budget_usd.is_some();
+        if budgeted {
+            // Read the workers' turns before another worker can be started.
+            drop(inner);
+            self.refresh_usage();
+            inner = self.lock();
+        }
+        if let Some(reason) = inner.record.limit_hit.clone() {
+            return Err(reason);
+        }
+        // A call left over from an earlier attempt keeps its recorded state,
+        // including how many times it failed, for `execute` to pick up.
+        if !inner.known.contains_key(&key) {
             if inner.known.len() >= inner.record.limits.call_budget {
                 return Err(format!(
                     "the call budget of {} agent calls is spent; raise it with call_budget when starting the run",
@@ -429,6 +503,9 @@ impl Run {
             }
         }
         self.record_call(record);
+        // The worker has settled: refresh what the run has spent, so a status
+        // read now shows usage even if the script starts no further workers.
+        self.refresh_usage();
         drop(permit);
         outcome
     }
@@ -451,6 +528,28 @@ impl Run {
 
 /// What a script is told when its run was stopped under it.
 const STOPPED: &str = "the run was stopped";
+
+/// What a script is told when a spend budget is reached. The token one is
+/// also what `workflow_status` names in `limit_hit`.
+const TOKEN_BUDGET_HIT: &str = "the run reached its token budget";
+
+fn cost_budget_hit(usd: f64) -> String {
+    format!("the run reached its cost budget of ${usd:.2}")
+}
+
+fn budget_hit(limits: &Limits, usage: &ThreadsUsage) -> Option<String> {
+    if let Some(max) = limits.token_budget
+        && (usage.tokens as u128) >= max as u128
+    {
+        return Some(TOKEN_BUDGET_HIT.to_owned());
+    }
+    if let Some(max) = limits.cost_budget_usd
+        && usage.cost_usd >= max
+    {
+        return Some(cost_budget_hit(max));
+    }
+    None
+}
 
 /// A call's identity: its prompt and options, spelled the same however the
 /// script ordered the options.
@@ -585,6 +684,7 @@ pub(super) async fn drive(run: Arc<Run>, source: String) {
             crate::dbg_log!("workflow {id}: {reason}");
         }
     }
+    run.refresh_usage();
     run.save();
 }
 
@@ -607,6 +707,8 @@ pub(super) fn new_record(
         updated_at: now,
         finished_at: None,
         resumes: 0,
+        usage: Usage::default(),
+        limit_hit: None,
         phases: Vec::new(),
         logs: Vec::new(),
         result: None,
@@ -704,6 +806,8 @@ mod tests {
             concurrency: 3,
             call_budget: 20,
             timeout_secs: 30,
+            token_budget: None,
+            cost_budget_usd: None,
         }
     }
 
@@ -735,6 +839,25 @@ mod tests {
         setup.store.create(&record, source).unwrap();
         drive(
             Run::new(setup.store.clone(), runner, record),
+            source.to_owned(),
+        )
+        .await;
+        setup.store.load(&id).unwrap()
+    }
+
+    /// The same, with recorded usage supplied as a test fixture.
+    async fn run_to_end_with_usage(
+        setup: &Setup,
+        runner: Arc<Fake>,
+        source: &str,
+        limits: Limits,
+        usage: Arc<UsageReader>,
+    ) -> RunRecord {
+        let record = new_record("1784626803679", None, Value::Null, limits);
+        let id = record.id.clone();
+        setup.store.create(&record, source).unwrap();
+        drive(
+            Run::with_usage(setup.store.clone(), runner, record, usage),
             source.to_owned(),
         )
         .await;
@@ -794,6 +917,11 @@ mod tests {
         assert_eq!(calls[3].phase.as_deref(), Some("verify"));
         assert!(calls.iter().all(|call| call.session_id.is_some()));
         assert!(record.finished_at.is_some());
+        // Usage is kept even with no budgets set; nothing stopped the run.
+        assert_eq!(record.usage.workers, 4);
+        assert_eq!(record.usage.tokens, 0);
+        assert_eq!(record.usage.reported_by, 0);
+        assert_eq!(record.limit_hit, None);
     }
 
     #[tokio::test]
@@ -912,6 +1040,133 @@ mod tests {
         let record = resume(&setup, again.clone(), &record.id).await;
         assert_eq!(record.result.unwrap()[2], results[2]);
         assert_eq!(again.starts(), 0);
+    }
+
+    /// Workers a script started in parallel are left to finish when the
+    /// budget is reached; only later `agent()` calls are refused.
+    #[tokio::test]
+    async fn a_token_budget_stops_new_workers_when_recorded_tokens_reach_it() {
+        let setup = setup();
+        let runner = Fake::echo();
+        let usage: Arc<UsageReader> = Arc::new(|ids| ThreadsUsage {
+            tokens: ids.len() as i64 * 100,
+            ..ThreadsUsage::default()
+        });
+        let source = r#"
+            const results = [];
+            for (const name of ["a", "b", "c"]) {
+              try { results.push(await agent("call " + name)); }
+              catch (error) { results.push("refused: " + error.message); }
+            }
+            return results;
+        "#;
+        let budgeted = Limits {
+            token_budget: Some(100),
+            ..limits()
+        };
+        let record = run_to_end_with_usage(&setup, runner.clone(), source, budgeted, usage).await;
+
+        assert_eq!(record.status, RunStatus::Done, "{:?}", record.error);
+        assert_eq!(runner.starts(), 1);
+        assert_eq!(runner.abandoned.load(Ordering::SeqCst), 0);
+        let results = record.result.clone().unwrap();
+        assert_eq!(results[0], json!("answer to: call a"));
+        for refused in [&results[1], &results[2]] {
+            assert!(
+                refused
+                    .as_str()
+                    .unwrap()
+                    .starts_with("refused: the run reached its token budget"),
+                "{results}"
+            );
+        }
+        assert_eq!(
+            record.usage,
+            Usage {
+                tokens: 100,
+                cost_usd: 0.0,
+                reported_by: 0,
+                workers: 1,
+            }
+        );
+        assert_eq!(record.limit_hit.as_deref(), Some(TOKEN_BUDGET_HIT));
+    }
+
+    #[tokio::test]
+    async fn a_cost_budget_counts_only_reported_usd_and_names_workers_that_reported_none() {
+        let setup = setup();
+        let runner = Fake::echo();
+        // The first harness has not reported a cost yet; the second has.
+        let usage: Arc<UsageReader> = Arc::new(|ids| {
+            let reported = ids.len() >= 2;
+            ThreadsUsage {
+                tokens: ids.len() as i64 * 50,
+                cost_usd: if reported { 2.0 } else { 0.0 },
+                cost_reported_by: usize::from(reported),
+            }
+        });
+        let source = r#"
+            const results = [];
+            for (const name of ["a", "b", "c"]) {
+              try { results.push(await agent("call " + name)); }
+              catch (error) { results.push("refused: " + error.message); }
+            }
+            return results;
+        "#;
+        let budgeted = Limits {
+            cost_budget_usd: Some(2.0),
+            ..limits()
+        };
+        let record = run_to_end_with_usage(&setup, runner.clone(), source, budgeted, usage).await;
+
+        assert_eq!(record.status, RunStatus::Done, "{:?}", record.error);
+        assert_eq!(runner.starts(), 2);
+        let results = record.result.clone().unwrap();
+        assert!(
+            results[2]
+                .as_str()
+                .unwrap()
+                .starts_with("refused: the run reached its cost budget"),
+            "{results}"
+        );
+        assert_eq!(record.usage.tokens, 100);
+        assert_eq!(record.usage.cost_usd, 2.0);
+        assert_eq!(record.usage.reported_by, 1);
+        assert_eq!(record.usage.workers, 2);
+        assert_eq!(
+            record.limit_hit.as_deref(),
+            Some("the run reached its cost budget of $2.00")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_budget_does_not_interrupt_workers_already_running() {
+        let setup = setup();
+        let runner = Fake::echo();
+        let usage: Arc<UsageReader> = Arc::new(|ids| ThreadsUsage {
+            tokens: ids.len() as i64 * 100,
+            ..ThreadsUsage::default()
+        });
+        let budgeted = Limits {
+            token_budget: Some(100),
+            ..limits()
+        };
+        let record = run_to_end_with_usage(
+            &setup,
+            runner.clone(),
+            r#"return await parallel([() => agent("one"), () => agent("two")]);"#,
+            budgeted,
+            usage,
+        )
+        .await;
+        assert_eq!(record.status, RunStatus::Done, "{:?}", record.error);
+        assert_eq!(runner.starts(), 2);
+        assert_eq!(runner.abandoned.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            record.result,
+            Some(json!(["answer to: one", "answer to: two"]))
+        );
+        assert_eq!(record.limit_hit.as_deref(), Some(TOKEN_BUDGET_HIT));
     }
 
     #[tokio::test]

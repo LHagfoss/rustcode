@@ -54,12 +54,26 @@ pub(super) struct LogLine {
     pub text: String,
 }
 
-/// The limits a run started with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The limits a run started with. A missing spend budget means no limit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(super) struct Limits {
     pub concurrency: usize,
     pub call_budget: usize,
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub token_budget: Option<u64>,
+    #[serde(default)]
+    pub cost_budget_usd: Option<f64>,
+}
+
+/// The workers' usage last read from the data store, for `workflow_status`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub(super) struct Usage {
+    pub tokens: i64,
+    pub cost_usd: f64,
+    /// Workers whose harness reported a cost, out of `workers`.
+    pub reported_by: usize,
+    pub workers: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +86,12 @@ pub(super) struct RunRecord {
     pub status: RunStatus,
     pub args: Value,
     pub limits: Limits,
+    /// A snapshot of what the workers have spent; shown in every status.
+    #[serde(default)]
+    pub usage: Usage,
+    /// Which budget stopped new workers, once it was reached.
+    #[serde(default)]
+    pub limit_hit: Option<String>,
     pub started_at: i64,
     pub updated_at: i64,
     pub finished_at: Option<i64>,
@@ -321,7 +341,11 @@ mod tests {
                 concurrency: 2,
                 call_budget: 10,
                 timeout_secs: 60,
+                token_budget: None,
+                cost_budget_usd: None,
             },
+            usage: Usage::default(),
+            limit_hit: None,
             started_at: 1,
             updated_at: 1,
             finished_at: None,

@@ -130,8 +130,8 @@ The workflow tools are three: `run_workflow`, `workflow_status` and
 
 **`run_workflow`** takes `script` (inline, at most 64 KiB) or `name` (the file
 `.rustcode/workflows/<name>.js` in the thread's project: letters, digits `-`,
-`_` and `.`), and optionally `args`, `concurrency`, `call_budget` and
-`timeout_minutes`. It answers at once with `{ run_id, status: "running", limits }`
+`_` and `.`), and optionally `args`, `concurrency`, `call_budget`,
+`timeout_minutes`, `token_budget` and `cost_budget_usd`. It answers at once with `{ run_id, status: "running", limits }`
 and the run goes on in the background.
 
 **`workflow_status`** takes a `run_id` and answers the run in full, or with no
@@ -145,6 +145,12 @@ to end and answers sooner when it does (at most 25 minutes). The answer holds:
   session_id, link_id, started_at, finished_at, error }`, so a worker's thread
   can be opened, read or interrupted like any delegate;
 - `calls` (counts), `limits`, `elapsed_ms`, `resumes`, the last 20 `logs`;
+- `usage`: `{ tokens, cost_usd, cost_reported_by, workers }`, for every run.
+  `cost_reported_by` is `n/m workers`: `n` workers had at least one turn whose
+  harness reported a USD cost, out of `m` workers the run started. Tokens are
+  input plus output as the data store recorded them; no cost is guessed for a
+  harness that reported none. `limit_hit` names the budget that stopped new
+  workers, or is null;
 - `result`, the script's return value. One over 96 KiB is not inlined: the
   answer says `result_truncated` and names `result_file`.
 
@@ -169,9 +175,10 @@ or `args`), or **Retry** on the run's card in the app
 (`_rustcode/workflows/retry`). The run goes back to `running` under the same id
 with its saved script; its finished calls are answered from `calls.jsonl` with
 no thread started and no budget spent, and only failed or missing calls start
-workers. `concurrency`, `call_budget` and `timeout_minutes` may lower its
-limits, the timeout counts from the retry, and the thread is told once when it
-ends. A `done` or still `running` run is refused.
+workers. `concurrency`, `call_budget`, `timeout_minutes`, `token_budget` and
+`cost_budget_usd` may lower its limits, the timeout counts from the retry, and
+the thread is told once when it ends. A `done` or still `running` run is
+refused.
 
 ## Durability
 
@@ -237,7 +244,7 @@ orchestration, and then only a thread at Full access starts workers.
 
 ## Limits
 
-Four settings, read when a run starts (server settings, `settings.json`, with
+Six settings, read when a run starts (server settings, `settings.json`, with
 the usual defaults when unset):
 
 | Setting | Default | Most | What it limits |
@@ -245,10 +252,19 @@ the usual defaults when unset):
 | `workflow-concurrency` | 3 | 8 | Workers running at once. More calls wait for a permit. |
 | `workflow-call-budget` | 40 | 500 | Distinct `agent()` calls in a run's whole life. A replayed call is not charged again. The call that goes over rejects in the script. |
 | `workflow-timeout-minutes` | 60 | 1440 | How long a run may take, counted from each (re)start. When it passes, the run is `timed_out`, its waits stop and its unfinished workers are interrupted. |
+| `workflow-token-budget` | unset | — | Tokens a run's workers may spend, summed from their turns in the data store. Unset means no limit. |
+| `workflow-cost-budget-usd` | unset | — | USD a harness reported for those turns. Turns with no reported cost add none. Unset means no limit. |
 | `workflow-kept-runs` | 20 | 200 | Settled runs a thread keeps. When a run starts, older settled runs past this count are deleted; running runs are always kept. A listing names the newest 20. |
 
-`run_workflow`'s `concurrency`, `call_budget` and `timeout_minutes` can lower a
-run's limits, never raise them past the settings.
+`run_workflow`'s `concurrency`, `call_budget`, `timeout_minutes`,
+`token_budget` and `cost_budget_usd` can lower a run's limits, never raise them
+past the settings. A call may set a budget the settings left unset. Before each
+new worker starts, the run re-reads its workers' turns: once a spend budget is
+reached, no further `agent()` call starts a worker and the call rejects with
+`the run reached its token budget` or the cost-budget reason. Workers already
+running finish naturally; they are not interrupted (unlike a timeout or a
+stop). The status keeps reporting usage and `limit_hit` for every run, budget or
+not.
 
 ## The app
 
@@ -279,8 +295,9 @@ access, where nobody could approve that turn; then the agent reads the run
 with `workflow_status` and `wait_ms`.
 
 **Limits in Settings.** A Workflows group under Orchestration in Settings has
-the four settings in *Limits*, per machine like the delegate limits. A run
-reads them when it starts.
+the settings in *Limits*, per machine like the delegate limits. A run reads
+them when it starts. The two spend limits are optional and have no desktop
+input yet: set them in `settings.json` or pass them to `run_workflow`.
 
 ## Not yet
 
