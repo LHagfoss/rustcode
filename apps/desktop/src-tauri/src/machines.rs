@@ -20,7 +20,6 @@ use crate::engine::EngineEvent;
 use crate::machine_link::Link;
 use anyhow::Error;
 use lifecycle::{joins, stop};
-use lifecycle::{joins, stop};
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
