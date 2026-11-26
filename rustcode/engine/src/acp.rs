@@ -43,6 +43,7 @@ mod share;
 pub(crate) mod steer;
 mod stop;
 mod streaming;
+mod switch_to_builtin;
 mod telemetry;
 mod themes;
 pub(crate) mod usage;

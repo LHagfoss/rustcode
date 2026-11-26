@@ -1073,10 +1073,14 @@ pub(super) async fn dispatch_request(
         "_rustcode/session/harness" => {
             let server = server.clone();
             let request: harnesses::SwitchHarnessRequest = parse_params(params)?;
-
-            let server = server.clone();
             let peer = server.clients.peer(client_id, &connection);
             connection.spawn(async move {
+                if switch_to_builtin::wanted(&request) {
+                    return match switch_to_builtin::switch(&server, request).await {
+                        Ok(value) => responder.respond(value),
+                        Err(error) => responder.respond_with_error(error),
+                    };
+                }
                 let session_id = request.session_id.clone();
                 let builtin = if harnesses::get(&server.external, &session_id)
                     .await

@@ -1122,12 +1122,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     return chips;
   };
 
-  // The harnesses worth listing: RustCode turned off in Settings › Harnesses leaves the list, and a
-  // thread moves only to an external harness (RustCode cannot take one over yet).
-  const providers = (harnesses?.harnesses ?? []).filter((h) =>
-    isNew ? !h.builtin || h.enabled || h.id === effective.harness : !h.builtin || h.id === harness?.id,
-  );
+  // The harnesses worth listing: RustCode turned off in Settings › Harnesses leaves the list unless
+  // the thread is on it already.
   const providerId = isNew ? effective.harness : (harness?.id ?? "rustcode");
+  const providers = (harnesses?.harnesses ?? []).filter(
+    (h) => !h.builtin || h.enabled || h.id === providerId,
+  );
   const canSwitch = isNew || !isRunning(thread);
   // The current harness first, then the rest in the order Settings lists them.
   const ordered = [

@@ -748,7 +748,7 @@ fn switch_origin(
 
 /// A handoff must read the transcript independently of listing/resume filters.
 /// Refuse a damaged file before changing the harness record or closing a thread.
-fn handoff_history(
+pub(super) fn handoff_history(
     session_id: &str,
 ) -> Result<Vec<rustcode_core::ChatMessage>, agent_client_protocol::Error> {
     crate::sessions::flush_history();
@@ -792,12 +792,6 @@ pub(crate) async fn switch(
     let session_id = request.session_id.clone();
     let reason = request.reason.clone();
     let to = request.harness.trim().to_owned();
-    if to == harness::BUILTIN_ID {
-        return Err(failure(
-            "RustCode cannot take over a thread from another harness yet; start a new thread on it"
-                .to_owned(),
-        ));
-    }
     if let Some(reason) = switch_refusal(&session_id) {
         return Err(failure(reason.to_owned()));
     }
