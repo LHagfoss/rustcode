@@ -229,7 +229,7 @@ fn a_previous_builtin_copy_is_upgraded_in_a_temp_dir() {
         ThemeSource::Builtin,
         "an upgraded copy is the built-in, not a user theme"
     );
-    assert_eq!(themes["rustcode"].desktop.tokens.surface, "#1d1d20");
+    assert_eq!(themes["rustcode"].desktop.tokens.surface, "#1a1a1d");
     // A copy the user edited at some point is theirs: it never byte-matched a
     // built-in, so it is neither upgraded nor counted as one.
     let (_, old) = PREVIOUS_BUILTINS
