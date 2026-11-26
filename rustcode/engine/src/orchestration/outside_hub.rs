@@ -460,6 +460,7 @@ mod tests {
                 online: true,
                 last_seen_at: now,
                 queued: 0,
+                deliveries: Vec::new(),
             },
             crate::remote_gateway::hub_link::HubMember {
                 host_id: "laptop-id".into(),
@@ -469,6 +470,7 @@ mod tests {
                 online: false,
                 last_seen_at: now,
                 queued: 2,
+                deliveries: Vec::new(),
             },
         ];
         add_members(&mut listed, &members);

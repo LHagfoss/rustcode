@@ -204,7 +204,25 @@ pub struct HubMember {
     /// Calls waiting for it.
     #[serde(default)]
     pub queued: usize,
+    /// Queued calls delivered to it lately, newest first, with how they ended.
+    #[serde(default)]
+    pub deliveries: Vec<Delivery>,
 }
+
+/// How a queued call ended once the member received it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delivery {
+    pub tool: String,
+    pub at: DateTime<Utc>,
+    pub success: bool,
+    /// The start of the member's answer, so a refusal says why.
+    pub outcome: String,
+}
+
+/// How much of a member's answer a delivery record keeps.
+const OUTCOME_LIMIT: usize = 200;
+/// The most delivery records the hub keeps per member.
+const DELIVERIES_PER_MACHINE: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KnownMember {
@@ -224,6 +242,13 @@ struct Mail {
     arguments: Value,
     caller: String,
     queued_at: DateTime<Utc>,
+    /// The link it was last sent on; a newer link resends it only once that
+    /// link is gone.
+    #[serde(default)]
+    in_flight: Option<u64>,
+    /// Set once the member answered it; kept, bounded, as a record.
+    #[serde(default)]
+    delivered: Option<Delivery>,
 }
 
 /// A call on its way to a connected member.
@@ -243,6 +268,8 @@ struct Link {
 struct Inner {
     links: HashMap<String, Link>,
     next_epoch: u64,
+    /// Every link still being served, including one a newer link replaced.
+    live: std::collections::HashSet<u64>,
 }
 
 /// How a forwarded call ended.
@@ -311,9 +338,13 @@ impl Members {
         mail
     }
 
-    fn save_mail(&self, mail: &[Mail]) {
-        if let Err(error) = publish_private_json(&self.dir.join(MAILBOX_FILE), &mail) {
-            crate::dbg_log!("hub: mailbox not saved: {error:#}");
+    fn save_mail(&self, mail: &[Mail]) -> bool {
+        match publish_private_json(&self.dir.join(MAILBOX_FILE), &mail) {
+            Ok(()) => true,
+            Err(error) => {
+                crate::dbg_log!("hub: mailbox not saved: {error:#}");
+                false
+            }
         }
     }
 
@@ -374,11 +405,15 @@ impl Members {
             .into_iter()
             .map(|member| {
                 let online = online.contains(&member.host_id);
+                let theirs = mail.iter().filter(|item| item.host_id == member.host_id);
+                let mut deliveries: Vec<Delivery> = theirs
+                    .clone()
+                    .filter_map(|item| item.delivered.clone())
+                    .collect();
+                deliveries.sort_by_key(|delivery| std::cmp::Reverse(delivery.at));
                 HubMember {
-                    queued: mail
-                        .iter()
-                        .filter(|item| item.host_id == member.host_id)
-                        .count(),
+                    queued: theirs.filter(|item| item.delivered.is_none()).count(),
+                    deliveries,
                     host_id: member.host_id,
                     name: member.name,
                     access: member.access,
@@ -464,11 +499,13 @@ impl Members {
             ));
         }
         let mut mail = self.mail();
+        let waiting = |item: &&Mail| item.delivered.is_none();
         let theirs = mail
             .iter()
+            .filter(waiting)
             .filter(|item| item.host_id == member.host_id)
             .count();
-        if theirs >= MAILBOX_PER_MACHINE || mail.len() >= MAILBOX_TOTAL {
+        if theirs >= MAILBOX_PER_MACHINE || mail.iter().filter(waiting).count() >= MAILBOX_TOTAL {
             return HubCallAnswer::failure(format!(
                 "error: {} is offline (last seen {last_seen}) and the hub already holds as many calls for it as it keeps. Nothing was sent.",
                 member.name
@@ -494,8 +531,15 @@ impl Members {
             arguments,
             caller: caller.to_owned(),
             queued_at: Utc::now(),
+            in_flight: None,
+            delivered: None,
         });
-        self.save_mail(&mail);
+        if !self.save_mail(&mail) {
+            return HubCallAnswer::failure(format!(
+                "error: {} is offline (last seen {last_seen}), and the hub could not save the call to deliver later. Nothing was queued.",
+                member.name
+            ));
+        }
         HubCallAnswer::Answered {
             success: true,
             content: json!({
@@ -525,6 +569,7 @@ impl Members {
         let mut inner = self.inner();
         inner.next_epoch += 1;
         let epoch = inner.next_epoch;
+        inner.live.insert(epoch);
         inner
             .links
             .insert(host_id.to_owned(), Link { epoch, calls });
@@ -533,6 +578,7 @@ impl Members {
 
     fn leave(&self, host_id: &str, epoch: u64) {
         let mut inner = self.inner();
+        inner.live.remove(&epoch);
         if inner
             .links
             .get(host_id)
@@ -544,20 +590,62 @@ impl Members {
         }
     }
 
-    fn take_mail(&self, host_id: &str) -> Vec<Mail> {
-        self.mail()
-            .into_iter()
-            .filter(|item| item.host_id == host_id)
-            .collect()
-    }
-
-    fn delivered(&self, id: &str) {
+    /// The calls waiting for `host_id` that no live link is already
+    /// delivering, marked as sent on link `epoch`.
+    fn take_mail(&self, host_id: &str, epoch: u64) -> Vec<Mail> {
+        let live = self.inner().live.clone();
         let mut mail = self.mail();
-        let before = mail.len();
-        mail.retain(|item| item.id != id);
-        if mail.len() != before {
+        let mut taken = Vec::new();
+        for item in mail.iter_mut() {
+            let busy = item.in_flight.is_some_and(|sent| live.contains(&sent));
+            if item.host_id == host_id && item.delivered.is_none() && !busy {
+                item.in_flight = Some(epoch);
+                taken.push(item.clone());
+            }
+        }
+        if !taken.is_empty() {
             self.save_mail(&mail);
         }
+        taken
+    }
+
+    /// Record how the member answered queued call `id`, keeping the newest
+    /// records per member.
+    fn delivered(&self, id: &str, success: bool, content: &str) {
+        let mut mail = self.mail();
+        let Some(item) = mail.iter_mut().find(|item| item.id == id) else {
+            return;
+        };
+        let mut outcome = content.trim().to_owned();
+        if outcome.len() > OUTCOME_LIMIT {
+            let mut end = OUTCOME_LIMIT;
+            while !outcome.is_char_boundary(end) {
+                end -= 1;
+            }
+            outcome.truncate(end);
+            outcome.push('…');
+        }
+        item.in_flight = None;
+        item.delivered = Some(Delivery {
+            tool: item.tool.clone(),
+            at: Utc::now(),
+            success,
+            outcome,
+        });
+        let host = item.host_id.clone();
+        let mut records: Vec<(DateTime<Utc>, String)> = mail
+            .iter()
+            .filter(|item| item.host_id == host)
+            .filter_map(|item| item.delivered.as_ref().map(|d| (d.at, item.id.clone())))
+            .collect();
+        records.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        let dropped: Vec<String> = records
+            .into_iter()
+            .skip(DELIVERIES_PER_MACHINE)
+            .map(|(_, id)| id)
+            .collect();
+        mail.retain(|item| !dropped.contains(&item.id));
+        self.save_mail(&mail);
     }
 }
 
@@ -612,7 +700,7 @@ pub(super) async fn serve<W, R>(
         {
             break 'link;
         }
-        for item in members.take_mail(&joined.host_id) {
+        for item in members.take_mail(&joined.host_id, epoch) {
             next_call += 1;
             waiting.insert(next_call, Waiting::Mail(item.id));
             let frame = HubFrame::HubCall {
@@ -676,7 +764,7 @@ pub(super) async fn serve<W, R>(
                                     joined.name,
                                     if success { "ok" } else { "refused" }
                                 );
-                                members.delivered(&id);
+                                members.delivered(&id, success, &content);
                             }
                             None => {}
                         }
@@ -963,6 +1051,74 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "never delivered");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    #[test]
+    fn a_call_in_flight_on_a_live_link_is_not_sent_again_and_its_outcome_is_kept() {
+        let dir = hub_dir();
+        let members = Members::new(dir.path());
+        members.remember("h", "laptop", Scope::Delegate, false);
+        let member = members.known().remove(0);
+        let answer = members.offline(
+            &member,
+            crate::orchestration::MESSAGE_SESSION,
+            json!({}),
+            "x",
+        );
+        assert!(matches!(
+            answer,
+            HubCallAnswer::Answered { success: true, .. }
+        ));
+        let (old, _old_calls) = members.join("h", "laptop", Scope::Delegate, false);
+        let sent = members.take_mail("h", old);
+        assert_eq!(sent.len(), 1);
+        let (new, _new_calls) = members.join("h", "laptop", Scope::Delegate, false);
+        assert!(
+            members.take_mail("h", new).is_empty(),
+            "the old link still delivers it"
+        );
+        members.leave("h", old);
+        let (newer, _newer_calls) = members.join("h", "laptop", Scope::Delegate, false);
+        assert_eq!(
+            members.take_mail("h", newer).len(),
+            1,
+            "resent once that link is gone"
+        );
+        members.delivered(
+            &sent[0].id,
+            false,
+            "error: approval needed and no app is open",
+        );
+        let listed = &members.list()[0];
+        assert_eq!(listed.queued, 0);
+        assert_eq!(listed.deliveries.len(), 1);
+        assert!(!listed.deliveries[0].success);
+        assert!(listed.deliveries[0].outcome.contains("approval needed"));
+        assert!(
+            members.take_mail("h", newer).is_empty(),
+            "a delivered call is never resent"
+        );
+    }
+
+    #[test]
+    fn a_call_the_hub_cannot_save_is_not_reported_as_queued() {
+        let dir = hub_dir();
+        std::fs::create_dir_all(dir.path().join(MAILBOX_FILE)).unwrap();
+        let members = Members::new(dir.path());
+        members.remember("h", "laptop", Scope::Delegate, false);
+        let member = members.known().remove(0);
+        let HubCallAnswer::Answered { success, content } = members.offline(
+            &member,
+            crate::orchestration::MESSAGE_SESSION,
+            json!({}),
+            "x",
+        ) else {
+            panic!()
+        };
+        assert!(
+            !success && content.contains("Nothing was queued"),
+            "{content}"
+        );
     }
 
     #[tokio::test]
