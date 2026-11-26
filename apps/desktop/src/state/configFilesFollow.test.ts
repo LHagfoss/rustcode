@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { JsonObject } from "../acp/jsonrpc";
+import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockConfigFiles } from "../acp/mockConfigFiles";
 import { copyFiles, describeCopy, planCopy } from "./configFilesFollow";
 
@@ -59,7 +59,7 @@ describe("copyFiles", () => {
   test("an engine without the methods reads as too old", async () => {
     const report = await copyFiles(
       async () => {
-        throw new Error("Method not found");
+        throw new RpcError(-32601, "Method not found");
       },
       "main",
       "follower",
@@ -68,6 +68,57 @@ describe("copyFiles", () => {
     );
     expect(report).toBeNull();
     expect(describeCopy(report, "VPS", "MacBook")).toContain("too old");
+  });
+
+  test("any other listing failure is thrown, not read as too old", async () => {
+    const failing = copyFiles(
+      async () => {
+        throw new Error("connection closed");
+      },
+      "main",
+      "follower",
+      "gw-main",
+      ["skills"],
+    );
+    await expect(failing).rejects.toThrow("connection closed");
+  });
+
+  test("an entry the follower already holds is recorded as a copy and pruned later", async () => {
+    const main = new MockConfigFiles({ "skills/shared": "same" });
+    const follower = new MockConfigFiles({ "skills/shared": "same" });
+    const first = await copyFiles(
+      async (host, method, params) => (host === "main" ? main : follower).answer(method, params),
+      "main",
+      "follower",
+      "gw-main",
+      ["skills"],
+    );
+    expect(first?.written).toEqual([]);
+    const emptyMain = new MockConfigFiles({});
+    const after = await copyFiles(
+      async (host, method, params) => (host === "main" ? emptyMain : follower).answer(method, params),
+      "main",
+      "follower",
+      "gw-main",
+      ["skills"],
+    );
+    expect(after?.removed).toEqual(["skills/shared"]);
+  });
+
+  test("a failed cleanup is reported and does not lose the copies", async () => {
+    const { main, follower } = machines();
+    const report = await copyFiles(
+      async (host, method, params) => {
+        if (method === "_rustcode/config/files/prune") throw new Error("disk full");
+        return (host === "main" ? main : follower).answer(method, params);
+      },
+      "main",
+      "follower",
+      "gw-main",
+      ["skills"],
+    );
+    expect(report?.written).toEqual(["skills/github-voice"]);
+    expect(report?.skipped).toEqual(["skills cleanup (disk full)"]);
   });
 
   test("a copy with nothing to do says so", () => {

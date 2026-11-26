@@ -5,9 +5,11 @@ import {
   fleetNameUpdates,
   fleetSignature,
   knownOnly,
+  ownHostId,
   parseFleetEntry,
   parseFleetView,
   reconcileLocalName,
+  useFleet,
   viaName,
   wireEntry,
 } from "./fleet";
@@ -208,4 +210,33 @@ test("a machine's capacity travels in a fleet entry and reads with its age", () 
   expect(capacityRow(entry!.capacity, now + 10 * 60_000)?.stale).toBe(true);
   expect(parseFleetEntry({ hostId: "gw-2", name: "Old" })?.capacity).toBeUndefined();
   expect(capacityRow(undefined)).toBeNull();
+});
+
+describe("ownHostId", () => {
+  test("asks this computer's engine while the first sync has not answered", async () => {
+    useFleet.setState({ host: null });
+    let asked = 0;
+    const askLocal = async () => {
+      asked += 1;
+      return { host: entry({ hostId: "gw-self" }), osName: null, entries: [] };
+    };
+    expect(await ownHostId(askLocal)).toBe("gw-self");
+    expect(asked).toBe(1);
+    expect(await ownHostId(async () => null)).toBeUndefined();
+    expect(
+      await ownHostId(async () => {
+        throw new Error("engine not connected");
+      }),
+    ).toBeUndefined();
+  });
+
+  test("uses the id the last sync learned without asking", async () => {
+    useFleet.setState({ host: entry({ hostId: "gw-known" }) });
+    expect(
+      await ownHostId(async () => {
+        throw new Error("should not ask");
+      }),
+    ).toBe("gw-known");
+    useFleet.setState({ host: null });
+  });
 });

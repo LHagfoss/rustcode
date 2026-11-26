@@ -270,6 +270,19 @@ async function ask(connection: AcpConnection | null, params: JsonObject): Promis
   return parseFleetView(await connection.request<Json>(FLEET_SYNC_METHOD, params, SYNC_TIMEOUT_MS));
 }
 
+/**
+ * This computer's fleet id: the one the last sync learned, else asked of its engine now, for work
+ * that starts before the first sync has answered.
+ */
+export async function ownHostId(
+  askLocal: () => Promise<FleetView | null> = () => ask(connectionFor(LOCAL_HOST), {}),
+): Promise<string | undefined> {
+  const known = useFleet.getState().host?.hostId;
+  if (known) return known;
+  const view = await askLocal().catch(() => null);
+  return view?.host.hostId || undefined;
+}
+
 async function syncOnce(): Promise<void> {
   const local = connectionFor(LOCAL_HOST);
   let view = await ask(local, {});
