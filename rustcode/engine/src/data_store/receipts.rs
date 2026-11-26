@@ -91,7 +91,8 @@ pub fn record_receipt(receipt: &ReceiptRow) -> Result<(), String> {
 /// Claim a retry key before creating a thread. Only the insert winner may start it.
 pub(crate) fn claim_start_receipt(receipt: &ReceiptRow) -> Result<bool, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
-    write_receipt(&open(&path)?, receipt)
+    let connection = open(&path)?;
+    write_receipt(&connection, receipt)
 }
 
 /// Advance a claimed start from unknown outcome to known thread, then to an

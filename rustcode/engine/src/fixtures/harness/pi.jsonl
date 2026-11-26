@@ -1,0 +1,9 @@
+{"adapter":"pi","recorded":false,"source":"hand-written from the shapes harness/transcript.rs documents; replace with a recording (docs/harnesses.md, Replay fixtures)"}
+{"dir":"client","method":"session/prompt","params":{"sessionId":"session-2","prompt":[{"type":"text","text":"Run the tests"}]}}
+{"dir":"agent","method":"session/update","params":{"sessionId":"session-2","update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"bash","kind":"execute","status":"in_progress","_meta":{"terminal_info":{"terminal_id":"call-1"}}}}}
+{"dir":"agent","method":"session/update","params":{"sessionId":"session-2","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","title":"npm test","_meta":{"terminal_output":{"terminal_id":"call-1","data":"1 passing\n"}}}}}
+{"dir":"agent","method":"session/update","params":{"sessionId":"session-2","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","_meta":{"terminal_output":{"terminal_id":"call-1","data":"1 failing\n"}}}}}
+{"dir":"agent","method":"session/update","params":{"sessionId":"session-2","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"failed","_meta":{"terminal_exit":{"terminal_id":"call-1","exit_code":1,"signal":null}}}}}
+{"dir":"agent","method":"session/update","params":{"sessionId":"session-2","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"One test fails."}}}}
+{"dir":"agent","response":"session/prompt","result":{"stopReason":"end_turn"}}
+{"expect":[{"role":"user","contains":"Run the tests"},{"role":"assistant","calls":["npm test"]},{"role":"tool","tool":"execute","success":false,"pending":false,"exit_code":1,"command":"npm test","contains":"1 passing\n1 failing"},{"role":"assistant","contains":"One test fails."}],"permissions":0}

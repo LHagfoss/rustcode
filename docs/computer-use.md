@@ -82,3 +82,9 @@ This slice supports one page per thread and standard macOS/Linux Chrome
 locations. Calls time out, and a failed or cancelled call closes that thread's
 browser. Popups are blocked. No arbitrary JavaScript tool, desktop control,
 uploads, downloads UI or Windows integration is provided.
+
+## OS computer use
+
+RustCode does not drive the operating system (screen, mouse, keyboard, other
+apps) yet. How it will, per platform, and its safety model are decided in
+[ADR 0011](adr/0011-os-computer-use.md).
