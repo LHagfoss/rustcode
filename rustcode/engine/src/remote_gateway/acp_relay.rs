@@ -289,7 +289,12 @@ pub(super) async fn relay(
                 .await;
             match read {
                 Ok(0) => return None,
-                Ok(_) if bytes.len() > MAX_FRAME_BYTES => return Some(ErrorCode::FrameTooLarge),
+                Ok(_) if bytes.len() > MAX_FRAME_BYTES => {
+                    crate::dbg_log!(
+                        "remote ACP: engine frame exceeded {MAX_FRAME_BYTES} bytes; closing relay"
+                    );
+                    return Some(ErrorCode::FrameTooLarge);
+                }
                 Err(_) => return None,
                 _ => {}
             }

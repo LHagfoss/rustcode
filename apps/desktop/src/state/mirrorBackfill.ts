@@ -11,7 +11,7 @@
 // out are skipped. A machine whose server predates the method is skipped. A pass ends when the
 // machine goes away or the switch is turned off, and the next connection picks up where it ended.
 
-import { type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
+import { type AcpConnection, type JsonObject, num, obj, RpcError, str } from "../acp/jsonrpc";
 import { parseSessionUpdate, type SessionSummary } from "../acp/types";
 import type { MirroredEntry } from "./machineMirror";
 import { applyUpdate, emptyThread, finishLoad, type ThreadState } from "./thread";
@@ -21,6 +21,10 @@ import { LOCAL_HOST, threadKey } from "./threadKeys";
 export const REPLAY_METHOD = "_rustcode/session/replay";
 /** How long one replay may take; a long thread's history is read and sent in one answer. */
 const REPLAY_MS = 60_000;
+/** Hard upper bound on replay pages per thread so a misbehaving peer cannot loop forever. */
+export const MAX_REPLAY_PAGES = 200;
+/** Drops while replaying the same thread revision before skipping it for this app run. */
+export const MAX_DROP_RETRIES = 2;
 
 /** How long after a machine connects the first copy is read, so the user's own reads go first. */
 export const START_DELAY_MS = 15_000;
@@ -49,13 +53,19 @@ export function inProject(cwd: string, project: string): boolean {
 export function backfillCandidates(
   rows: readonly SessionSummary[],
   mirrored: readonly MirroredEntry[],
-  options: { held: (id: string) => boolean; excludedProjects: readonly string[]; limit?: number },
+  options: {
+    held: (id: string) => boolean;
+    excludedProjects: readonly string[];
+    skipped?: (row: SessionSummary) => boolean;
+    limit?: number;
+  },
 ): SessionSummary[] {
   const revisions = new Map(mirrored.map((entry) => [entry.session.id, entry.transcriptRevision]));
   return rows
     .filter((row) => {
       if (row.status === "running" || row.status === "needs_input") return false;
       if (options.held(row.id)) return false;
+      if (options.skipped?.(row)) return false;
       if (options.excludedProjects.some((project) => inProject(row.cwd, project))) return false;
       const revision = revisions.get(row.id);
       return revision === undefined || (row.updatedAt ?? 0) > revision;
@@ -63,6 +73,70 @@ export function backfillCandidates(
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, options.limit ?? MAX_PER_PASS);
 }
+
+/**
+ * Fetch a full thread replay across `nextCursor` pages so large transcripts never exceed the
+ * remote gateway's frame size cap.
+ */
+export async function fetchReplay(
+  connection: Pick<AcpConnection, "request">,
+  sessionId: string,
+  maxPages = MAX_REPLAY_PAGES,
+): Promise<JsonObject | null> {
+  const updates: unknown[] = [];
+  let meta: { sessionId?: string; cwd?: string; title?: string } | null = null;
+  let cursor: number | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const params: JsonObject = cursor === undefined ? { sessionId } : { sessionId, cursor };
+    const body = obj((await connection.request(REPLAY_METHOD, params, REPLAY_MS)) as JsonObject | undefined);
+    if (!body || !Array.isArray(body.updates)) return null;
+    if (!meta) {
+      meta = {
+        sessionId: str(body.sessionId),
+        cwd: str(body.cwd),
+        title: str(body.title),
+      };
+    }
+    updates.push(...body.updates);
+    const next = num(body.nextCursor);
+    if (next === undefined || !Number.isInteger(next) || next <= (cursor ?? 0)) break;
+    cursor = next;
+  }
+  if (!meta) return null;
+  return {
+    ...(meta.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
+    ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+    ...(meta.title !== undefined ? { title: meta.title } : {}),
+    updates: updates as JsonObject[],
+  };
+}
+
+/**
+ * Tracks threads whose replay dropped the connection (for example, an older server sending a
+ * single oversized frame) so a machine does not enter an endless reconnect-and-drop loop.
+ */
+export class ReplayDropGuard {
+  private readonly drops = new Map<string, { revision: number; count: number }>();
+
+  recordDrop(host: string, row: Pick<SessionSummary, "id" | "updatedAt">): void {
+    const key = threadKey(host, row.id);
+    const revision = row.updatedAt ?? 0;
+    const prev = this.drops.get(key);
+    const count = prev && prev.revision === revision ? prev.count + 1 : 1;
+    this.drops.set(key, { revision, count });
+  }
+
+  clear(host: string, sessionId: string): void {
+    this.drops.delete(threadKey(host, sessionId));
+  }
+
+  isSkipped(host: string, row: Pick<SessionSummary, "id" | "updatedAt">): boolean {
+    const entry = this.drops.get(threadKey(host, row.id));
+    return !!entry && entry.revision === (row.updatedAt ?? 0) && entry.count >= MAX_DROP_RETRIES;
+  }
+}
+
+const dropGuard = new ReplayDropGuard();
 
 /**
  * The thread a replay answer draws, as opening it would: each update folded in, then the load
@@ -105,6 +179,7 @@ async function backfill(host: string): Promise<void> {
     const candidates = backfillCandidates(rows, await mirror.loadMirroredEntries(host), {
       held,
       excludedProjects: status.excludedProjects,
+      skipped: (row) => dropGuard.isSkipped(host, row),
     });
     let failures = 0;
     for (const row of candidates) {
@@ -114,13 +189,18 @@ async function backfill(host: string): Promise<void> {
       if (held(row.id)) continue;
       let answer: unknown;
       try {
-        answer = await connection.request(REPLAY_METHOD, { sessionId: row.id }, REPLAY_MS);
+        answer = await fetchReplay(connection, row.id);
       } catch (error) {
+        if (connection.isClosed) {
+          dropGuard.recordDrop(host, row);
+          return;
+        }
         // A machine on an older release cannot answer (or its relay refuses the method); one
         // thread that fails is tried on the next pass.
         if ((error instanceof RpcError && error.isMethodNotFound) || ++failures >= MAX_FAILURES) return;
         continue;
       }
+      dropGuard.clear(host, row.id);
       failures = 0;
       const key = threadKey(host, row.id);
       const thread = threadFromReplay(key, answer, row);

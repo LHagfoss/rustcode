@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import type { JsonObject } from "../acp/jsonrpc";
 import type { SessionSummary } from "../acp/types";
-import { backfillCandidates, inProject, threadFromReplay } from "./mirrorBackfill";
+import {
+  backfillCandidates,
+  fetchReplay,
+  inProject,
+  MAX_DROP_RETRIES,
+  ReplayDropGuard,
+  threadFromReplay,
+} from "./mirrorBackfill";
 
 const row = (id: string, updatedAt: number, extra: Partial<SessionSummary> = {}): SessionSummary =>
   ({ id, cwd: "/srv/app", title: id, updatedAt, ...extra }) as SessionSummary;
@@ -70,5 +78,79 @@ describe("a replay drawn as a thread", () => {
   test("is nothing when the answer is not a replay", () => {
     expect(threadFromReplay("vps/t1", null, fallback)).toBeNull();
     expect(threadFromReplay("vps/t1", { cwd: "/x" }, fallback)).toBeNull();
+  });
+});
+
+describe("paginated replay fetching", () => {
+  test("follows nextCursor until the final page and merges all updates", async () => {
+    const calls: JsonObject[] = [];
+    const pages: JsonObject[] = [
+      {
+        sessionId: "t1",
+        cwd: "/srv/app",
+        title: "Long thread",
+        updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "hi" } }],
+        nextCursor: 1,
+      },
+      {
+        sessionId: "t1",
+        cwd: "/srv/app",
+        title: "Long thread",
+        updates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } }],
+      },
+    ];
+    const connection = {
+      async request<T = unknown>(_method: string, params?: JsonObject): Promise<T> {
+        calls.push(params ?? {});
+        return pages[calls.length - 1] as T;
+      },
+    };
+    const replay = await fetchReplay(connection, "t1");
+    expect(calls).toEqual([{ sessionId: "t1" }, { sessionId: "t1", cursor: 1 }]);
+    expect(replay).not.toBeNull();
+    const thread = threadFromReplay("vps/t1", replay, row("t1", 1));
+    expect(thread?.title).toBe("Long thread");
+    expect(thread?.items.map((item) => item.kind)).toEqual(["user", "assistant"]);
+  });
+
+  test("stops when nextCursor does not advance", async () => {
+    let calls = 0;
+    const connection = {
+      async request<T = unknown>(): Promise<T> {
+        calls += 1;
+        return {
+          sessionId: "t1",
+          cwd: "/srv/app",
+          title: "Stuck",
+          updates: [{ sessionUpdate: "user_message_chunk", content: { type: "text", text: "hi" } }],
+          nextCursor: 0,
+        } as T;
+      },
+    };
+    const replay = await fetchReplay(connection, "t1");
+    expect(calls).toBe(1);
+    expect(Array.isArray(replay?.updates)).toBe(true);
+  });
+});
+
+describe("replay drop guard", () => {
+  test("skips a thread after repeated disconnects on the same revision and retries when updated", () => {
+    const guard = new ReplayDropGuard();
+    const t1 = row("t1", 100);
+    for (let i = 0; i < MAX_DROP_RETRIES - 1; i++) {
+      guard.recordDrop("vps", t1);
+      expect(guard.isSkipped("vps", t1)).toBe(false);
+    }
+    guard.recordDrop("vps", t1);
+    expect(guard.isSkipped("vps", t1)).toBe(true);
+    expect(
+      backfillCandidates([t1, row("t2", 50)], [], {
+        ...none,
+        skipped: (r) => guard.isSkipped("vps", r),
+      }).map((r) => r.id),
+    ).toEqual(["t2"]);
+    expect(guard.isSkipped("vps", row("t1", 200))).toBe(false);
+    guard.clear("vps", "t1");
+    expect(guard.isSkipped("vps", t1)).toBe(false);
   });
 });

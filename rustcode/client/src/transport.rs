@@ -622,12 +622,21 @@ impl AcpChannel {
 
     /// The next ACP frame as the machine wrote it, for a relay that passes
     /// frames on without reading them: checked to be JSON, never built into a
-    /// tree and written out again. Waits like [`Self::next`].
+    /// tree and written out again. Waits like [`Self::next`]. A gateway close
+    /// error frame is returned as a typed refusal so the caller reports why the
+    /// channel closed instead of seeing an unexplained EOF.
     pub async fn next_text(&mut self) -> Result<Option<String>> {
         let Some(text) = self.text_by(None).await? else {
             return Ok(None);
         };
         serde_json::from_str::<serde::de::IgnoredAny>(&text).context(NOT_JSON)?;
+        if !text.contains("\"jsonrpc\"")
+            && text.contains("\"error\"")
+            && let Ok(response @ HandshakeResponse::Error { .. }) =
+                serde_json::from_str::<HandshakeResponse>(&text)
+        {
+            return Err(crate::machine::handshake_failure("acp", response));
+        }
         Ok(Some(text))
     }
 
@@ -1000,6 +1009,38 @@ mod tests {
         channel.send_text(frame).await.unwrap();
         let error = channel.next_text().await.unwrap_err();
         assert!(error.to_string().contains("not JSON"), "{error}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acp_channel_surfaces_gateway_close_error_frames() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let closing = HandshakeResponse::Error {
+            code: crate::protocol::ErrorCode::FrameTooLarge,
+            message: "frame is too large".into(),
+            retry_after_secs: None,
+        }
+        .to_text();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert!(matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+            socket
+                .send(Message::text(r#"{"type":"acp_opened"}"#))
+                .await
+                .unwrap();
+            socket.send(Message::text(closing)).await.unwrap();
+            let _ = socket.close(None).await;
+        });
+        let mut channel = Connection::open(&addr.to_string())
+            .await
+            .unwrap()
+            .acp_open()
+            .await
+            .unwrap();
+        let error = channel.next_text().await.unwrap_err();
+        assert!(error.to_string().contains("frame is too large"), "{error}");
         server.await.unwrap();
     }
 
