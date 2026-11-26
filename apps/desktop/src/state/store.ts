@@ -199,6 +199,7 @@ import { announce, mountAnnouncer } from "../lib/announce";
 import { parseChatWidth } from "../lib/chatWidth";
 import { capServerLogLine } from "../lib/diagnostics";
 import { parseOverrides } from "../lib/keys";
+import { parseNotifySoundTone, parseNotifySoundVolume } from "../lib/notifySound";
 import { setShellTransport } from "../lib/shell";
 import { ThemeMethod } from "../lib/themes";
 import {
@@ -481,6 +482,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
+  notificationSound: storedFlag(STORAGE.notificationSound, SETTINGS_DEFAULTS.notificationSound),
+  notificationSoundTone: parseNotifySoundTone(stored(STORAGE.notificationSoundTone)),
+  notificationSoundVolume: parseNotifySoundVolume(stored(STORAGE.notificationSoundVolume)),
   chatRecaps: storedFlag(STORAGE.chatRecaps, SETTINGS_DEFAULTS.chatRecaps),
   recapMinutes: parseRecapMinutes(stored(STORAGE.recapMinutes)),
   recaps: {},

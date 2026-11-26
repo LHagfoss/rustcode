@@ -10,6 +10,7 @@ import {
   commandHint,
   type KeyEventLike,
 } from "../lib/keys";
+import { clampNotifySoundVolume, type NotifySoundTone, parseNotifySoundTone } from "../lib/notifySound";
 import type { AppState } from "./appState";
 import { SETTINGS_DEFAULTS, STORAGE, store, stored } from "./appState";
 import { HEADER_BUTTON_IDS, type HeaderButtonId } from "./headerButtons";
@@ -43,6 +44,23 @@ export function setSystemNotifications(on: boolean) {
 export function setNotificationsBackgroundOnly(on: boolean) {
   set({ notificationsBackgroundOnly: on });
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
+}
+
+export function setNotificationSound(on: boolean) {
+  set({ notificationSound: on });
+  store(STORAGE.notificationSound, on ? "1" : "0");
+}
+
+export function setNotificationSoundTone(tone: NotifySoundTone) {
+  const kept = parseNotifySoundTone(tone);
+  set({ notificationSoundTone: kept });
+  store(STORAGE.notificationSoundTone, kept);
+}
+
+export function setNotificationSoundVolume(volume: number) {
+  const kept = clampNotifySoundVolume(volume);
+  set({ notificationSoundVolume: kept });
+  store(STORAGE.notificationSoundVolume, String(kept));
 }
 
 export function setChatRecaps(on: boolean) {
