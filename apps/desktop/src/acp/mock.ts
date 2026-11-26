@@ -15,7 +15,6 @@ import {
   withoutSkillContent,
 } from "./mockFixtures";
 import { mockGit, mockQrRows } from "./mockGit";
-import { setMockAccess } from "./mockRemoteAccess";
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
@@ -64,7 +63,7 @@ import {
   MOCK_VIZ,
   mockLinkMeta,
 } from "./mockSmartUi";
-import { handleMockTransfer, isMockTransferMethod } from "./mockTransfer";
+import { handleMockTransfer, isMockTransferMethod, setMockAccess } from "./mockTransfer";
 import { mockAntigravityPlan, mockSharedPlans, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
@@ -865,6 +864,7 @@ export class MockEngine {
     if (method.startsWith("_rustcode/memory/")) return this.memory.answer(method, obj(params) ?? {});
     if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
       return this.connections.answer(method, obj(params) ?? {});
+    if (method === "_rustcode/remote/access") return setMockAccess(this.remote.devices, params);
     if (isMockTransferMethod(method)) {
       return handleMockTransfer(method, params, {
         getThread: (id) => this.thread(id),
@@ -2077,8 +2077,6 @@ export class MockEngine {
           revoked: { deviceId: str(device.id) ?? deviceId, deviceName: str(device.name) ?? deviceId },
         };
       }
-      case "_rustcode/remote/access":
-        return setMockAccess(this.remote.devices, params);
       case "_rustcode/outside/list":
       case "_rustcode/outside/create":
       case "_rustcode/outside/update":
