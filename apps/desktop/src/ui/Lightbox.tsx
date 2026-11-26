@@ -1,8 +1,8 @@
 import { zoomGestureModifier } from "../lib/platform";
 
 // A picture opened from the composer or the transcript: over a dimmed, blurred
-// backdrop, fit to the window. Esc or a click outside closes it, ←→ step through
-// the message's pictures. Pinch or primary-modifier scroll zooms at the pointer, a click on the
+// backdrop, fit to the window. Esc or a click outside closes it, ←→ and the
+// filmstrip step through every picture the chat has on screen. Pinch or primary-modifier scroll zooms at the pointer, a click on the
 // picture toggles 2× there, + − 0 zoom from the keyboard, and a zoomed picture
 // pans by dragging or scrolling.
 //
@@ -11,7 +11,7 @@ import { zoomGestureModifier } from "../lib/platform";
 // requestAnimationFrame. Only the toolbar's percentage, and the classes that
 // depend on zoom, go through state, throttled.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronLeft, ChevronRight, Minus, Plus, X } from "./icons";
 import { cx, Pill } from "./primitives";
 
@@ -29,6 +29,60 @@ const emit = () => {
 export function openLightbox(images: LightboxImage[], index = 0) {
   if (!images.length) return;
   state = { images, index: Math.max(0, Math.min(index, images.length - 1)) };
+  emit();
+}
+
+/** Marks an element as holding these pictures, so a chat-wide lightbox can find them in order. */
+export const PICTURES_ATTR = "data-rc-pictures";
+
+export function picturesAttr(images: readonly LightboxImage[]): Record<string, string> {
+  return { [PICTURES_ATTR]: JSON.stringify(images) };
+}
+
+function readPictures(el: Element): LightboxImage[] {
+  try {
+    const parsed: unknown = JSON.parse(el.getAttribute(PICTURES_ATTR) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((p): p is LightboxImage => typeof p?.src === "string" && typeof p?.alt === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Every picture marked with `PICTURES_ATTR` under `root`, in reading order, and where the pictures of
+ * `own` start among them (-1 when `own` is not under `root`).
+ */
+export function collectPictures(
+  root: ParentNode,
+  own: Element | null,
+): { images: LightboxImage[]; start: number } {
+  const images: LightboxImage[] = [];
+  let start = -1;
+  for (const el of root.querySelectorAll(`[${PICTURES_ATTR}]`)) {
+    if (el === own) start = images.length;
+    images.push(...readPictures(el));
+  }
+  return { images, start };
+}
+
+/**
+ * Opens `images[index]` among every picture of the chat `from` sits in, so ←→ go on past its own
+ * message. Outside a chat it opens just `images`.
+ */
+export function openChatLightbox(from: Element, images: LightboxImage[], index = 0) {
+  const own = from.closest(`[${PICTURES_ATTR}]`);
+  const chat = from.closest('[role="log"]');
+  if (!own || !chat) return openLightbox(images, index);
+  const all = collectPictures(chat, own);
+  if (all.start < 0 || all.images.length <= images.length) return openLightbox(images, index);
+  openLightbox(all.images, all.start + index);
+}
+
+function goTo(index: number) {
+  if (!state || index === state.index) return;
+  state = { ...state, index };
   emit();
 }
 
@@ -99,6 +153,12 @@ export function Lightbox() {
   const zoomSyncedAt = useRef(0);
   const zoomIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const index = current?.index;
+  const strip = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (index === undefined) return;
+    strip.current?.children[index]?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [index]);
 
   // Writes the live view onto the picture. Runs once per frame, at most.
   const paint = useCallback(() => {
@@ -238,7 +298,10 @@ export function Lightbox() {
     >
       <div
         ref={stage}
-        className="absolute inset-0 flex items-center justify-center overflow-hidden p-12"
+        className={cx(
+          "absolute inset-0 flex items-center justify-center overflow-hidden p-12",
+          many && "pb-32",
+        )}
         onMouseDown={(e) => e.target === e.currentTarget && close()}
       >
         <img
@@ -312,6 +375,31 @@ export function Lightbox() {
       </div>
       {many && (
         <>
+          <div
+            ref={strip}
+            role="tablist"
+            aria-label="Pictures"
+            className="absolute bottom-[68px] left-1/2 flex max-w-[min(720px,80%)] -translate-x-1/2 gap-1.5 overflow-x-auto rounded-xl bg-surface-2 p-1.5 shadow-1 [scrollbar-width:none]"
+          >
+            {current.images.map((picture, i) => (
+              <button
+                key={`${i}:${picture.src.slice(0, 64)}`}
+                type="button"
+                role="tab"
+                aria-selected={i === current.index}
+                aria-label={picture.alt || `Picture ${i + 1}`}
+                onClick={() => goTo(i)}
+                className={cx(
+                  "size-11 shrink-0 overflow-hidden rounded-md outline-offset-1 transition-opacity",
+                  i === current.index
+                    ? "opacity-100 outline-2 outline-accent"
+                    : "opacity-55 hover:opacity-100",
+                )}
+              >
+                <img src={picture.src} alt="" draggable={false} className="size-full object-cover" />
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             aria-label="Previous picture"

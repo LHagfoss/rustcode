@@ -16,6 +16,7 @@ import {
 } from "./mockFixtures";
 import { mockGit, mockGitRun, mockQrRows } from "./mockGit";
 import { mockIssuesList } from "./mockIssues";
+import { mockPortsCall } from "./mockPorts";
 // A fake `rustcode --acp` engine with canned traffic, for tests and for
 // running the UI without an engine (`bun run dev:mock`, or `?transport=mock`).
 // It speaks the same JSON-RPC lines as the real engine, including the
@@ -1423,6 +1424,9 @@ export class MockEngine {
         return { list: { provider: "github", hasMore: false, pulls: MOCK_PULLS } };
       case "_rustcode/issues":
         return mockIssuesList(obj(params) ?? {});
+      case "_rustcode/ports/list":
+      case "_rustcode/ports/kill":
+        return mockPortsCall(method, obj(params) ?? {});
       case "_rustcode/project/read": {
         // The engine's `_rustcode/project/read`: a folder's git facts.
         const path = str(obj(params)?.path) || "/Users/me/code/rustcode";

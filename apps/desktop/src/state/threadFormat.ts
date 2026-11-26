@@ -487,6 +487,31 @@ export function startedLinks(items: readonly TranscriptItem[], links: readonly L
   return out;
 }
 
+/**
+ * The failed `start_session` calls a later call retried with the same prompt or title and
+ * started: the thread they meant to start has its own card, so the failure says nothing more.
+ */
+export function retriedStarts(items: readonly TranscriptItem[]): Set<string> {
+  const starts = items.filter(
+    (item): item is ToolItem => item.kind === "tool" && orchestrationTool(item.title) === "start_session",
+  );
+  const asked = (item: ToolItem): string[] => {
+    const input =
+      item.input && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : {};
+    return [input.prompt, input.title].filter((v): v is string => typeof v === "string" && v.trim() !== "");
+  };
+  const out = new Set<string>();
+  starts.forEach((item, i) => {
+    if (item.status !== "failed") return;
+    const keys = asked(item);
+    const retried = starts
+      .slice(i + 1)
+      .some((later) => later.status !== "failed" && asked(later).some((k) => keys.includes(k)));
+    if (retried) out.add(item.id);
+  });
+  return out;
+}
+
 /** A step's one-line label: `Running <command>` for a shell, else its summary or title. */
 export function stepLabel(item: ToolItem): string {
   const label = displayTool(item.title, item.input, item.status);

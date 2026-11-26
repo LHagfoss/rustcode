@@ -576,6 +576,18 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for github_issues::IssuesRequest"
     );
     assert!(
+        <ports::ListRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/ports/list"
+        ),
+        "method mismatch for ports::ListRequest"
+    );
+    assert!(
+        <ports::KillRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/ports/kill"
+        ),
+        "method mismatch for ports::KillRequest"
+    );
+    assert!(
         <PullViewRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/pulls/view"
         ),

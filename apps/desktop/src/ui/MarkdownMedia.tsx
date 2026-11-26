@@ -23,7 +23,7 @@ import { readImage } from "../state/attachmentTransfer";
 import { connectionForThread, useApp } from "../state/store";
 import { isRemoteThread, splitThreadKey } from "../state/threadKeys";
 import { CircleAlert, ImageOff } from "./icons";
-import { openLightbox } from "./Lightbox";
+import { openChatLightbox, openLightbox, picturesAttr } from "./Lightbox";
 import { cx, Pill } from "./primitives";
 
 // ---------------------------------------------------------------- pictures
@@ -249,7 +249,8 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   return (
     <button
       type="button"
-      onClick={() => openLightbox([{ src: url, alt: alt ?? "" }])}
+      {...picturesAttr([{ src: url, alt: alt ?? "" }])}
+      onClick={(e) => openChatLightbox(e.currentTarget, [{ src: url, alt: alt ?? "" }])}
       className="block max-w-full cursor-pointer rounded-xl"
       aria-label={alt ? `Open picture: ${alt}` : "Open picture"}
     >

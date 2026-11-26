@@ -27,7 +27,7 @@ pub(crate) struct IssuesRequest {
     pub limit: Option<usize>,
 }
 
-/// Dispatch GitHub issue methods, forwarding anything else to `memory::dispatch`.
+/// Dispatch GitHub issue methods, forwarding anything else to `ports::dispatch`.
 pub(super) fn dispatch(
     method: String,
     params: Value,
@@ -54,6 +54,6 @@ pub(super) fn dispatch(
                 Ok(())
             })
         }
-        _ => super::config_files::dispatch(method, params, responder, connection, unhandled),
+        _ => super::ports::dispatch(method, params, responder, connection, unhandled),
     }
 }
