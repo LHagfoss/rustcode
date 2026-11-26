@@ -110,6 +110,17 @@ describe("shorthand catalog", () => {
     const heat = expandShorthand(":: heatmap\nday | 0h | 6h\nMon | 3 | 12");
     expect(heat).toContain('style="--rc-heat:52%">12</td>');
     expect(heat).toContain('style="--rc-heat:6%">3</td>');
+    const inlineCompare = expandShorthand(":: compare Feature | A | B\nStreaming | yes | partial slow");
+    expect(inlineCompare).toBe(
+      '<table class="rc-table rc-compare"><thead><tr><th>Feature</th><th>A</th><th>B</th></tr></thead><tbody>' +
+        '<tr><td><b>Streaming</b></td><td><span class="rc-mark rc-ok" aria-label="yes">✓</span></td><td><span class="rc-mark rc-warn" aria-label="partial">◐</span> <span class="rc-muted">slow</span></td></tr>' +
+        "</tbody></table>",
+    );
+    const inlineHeat = expandShorthand(":: heatmap day | 0h | 6h\nMon | 3 | 12");
+    expect(inlineHeat).toContain(
+      '<thead><tr><th>day</th><th class="rc-num">0h</th><th class="rc-num">6h</th></tr></thead>',
+    );
+    expect(inlineHeat).not.toContain("<h3>");
     expect(expandShorthand(":: timeline\n- 10:02 | Deploy | started {info}")).toBe(
       '<ol class="rc-steps rc-timeline"><li class="rc-step rc-info"><span class="rc-time">10:02</span><b>Deploy</b><p>started</p></li></ol>',
     );

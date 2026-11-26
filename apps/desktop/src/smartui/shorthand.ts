@@ -51,12 +51,26 @@ const DIVIDER = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const escapeAttr = (text: string) => escapeHtml(text).replace(/"/g, "&quot;");
 
-/** `code` and **bold** in a line of text; HTML in it is kept as written. */
+/** `code`, **bold** and `[label](url)` links in a line of text; HTML in it is kept as written. */
 export function inline(text: string): string {
   const code = (value: string) =>
     value.replace(/`([^`]+)`/g, (_, body: string) => `<code>${escapeHtml(body)}</code>`);
-  return text.replace(/`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*/g, (match, literal, bold) =>
-    literal === undefined ? `<b>${code(bold)}</b>` : code(match),
+  const styled = (value: string) =>
+    value.replace(/`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*/g, (match, literal, bold) =>
+      literal === undefined ? `<b>${code(bold)}</b>` : code(match),
+    );
+  const link = (value: string) =>
+    value.replace(
+      /\[([^\]]+)\]\(((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\)/gi,
+      (_, label: string, href: string) => `<a href="${escapeAttr(href)}">${styled(label)}</a>`,
+    );
+  return text.replace(
+    /`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*|\[([^\]]+)\]\(((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\)/gi,
+    (match, literal, bold, label, href) => {
+      if (literal !== undefined) return code(match);
+      if (bold !== undefined) return `<b>${link(code(bold))}</b>`;
+      return `<a href="${escapeAttr(href)}">${styled(label)}</a>`;
+    },
   );
 }
 
@@ -240,44 +254,126 @@ function tableCell(cell: string): string {
   return inline(cell);
 }
 
-function table(block: Block): string {
-  const raw = block.text
-    .filter((line) => !DIVIDER.test(line))
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .replace(/^\|/, "")
-        .replace(/(?<!\\)\|$/, ""),
-    );
+function stripRow(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "");
+}
+
+/** A table-like block's heading, header cells and body rows. Accepts column headers on the `::` line too. */
+function tableParts(block: Block): { title: string; head: string[]; body: string[][] } {
+  const lines = [...block.text, ...block.items];
+  const argLine = stripRow(block.arg);
+  const argCells = argLine ? cells(argLine) : [];
+  const raw = lines.filter((line) => !DIVIDER.test(line)).map(stripRow);
+  const firstRow = raw[0] === undefined ? [] : cells(raw[0]);
+  const hasHeaderDivider = lines.length >= 2 && !DIVIDER.test(lines[0]!) && DIVIDER.test(lines[1]!);
+  const firstIsItem = lines[0] !== undefined && ITEM.test(lines[0]);
+  const firstIsTinted = firstRow.some((cell) => extractTint(cell)[1] !== "");
+  const argIsHeader =
+    argCells.length > 1 &&
+    !hasHeaderDivider &&
+    (raw.length === 0 ||
+      DIVIDER.test(lines[0] ?? "") ||
+      firstIsItem ||
+      firstIsTinted ||
+      firstRow.length === argCells.length ||
+      raw.some((line) => cells(line).length === argCells.length));
+  if (argIsHeader) {
+    const cols = argCells.length;
+    return { title: "", head: argCells, body: raw.map((line) => cells(line, cols)) };
+  }
   const [headLine, ...bodyLines] = raw;
-  const head = headLine === undefined ? [] : cells(headLine);
+  if (headLine === undefined) return { title: block.arg, head: [], body: [] };
+  if (!hasHeaderDivider && firstIsTinted) {
+    const cols = firstRow.length || Infinity;
+    return { title: block.arg, head: [], body: raw.map((line) => cells(line, cols)) };
+  }
+  const head = cells(headLine);
   const cols = head.length || Infinity;
-  const body = bodyLines.map((line) => cells(line, cols));
-  const sort = body.length > SORT_ROWS ? " data-rc-sort" : "";
-  const th = head.map((cell) => `<th>${inline(cell)}</th>`).join("");
+  return { title: block.arg, head, body: bodyLines.map((line) => cells(line, cols)) };
+}
+
+function table(block: Block): string {
+  const { title, head, body } = tableParts(block);
+  const sort = head.length > 0 && body.length > SORT_ROWS ? " data-rc-sort" : "";
+  const thead = head.length
+    ? `<thead><tr>${head.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = body
     .map((row) => `<tr>${row.map((cell) => `<td>${tableCell(cell)}</td>`).join("")}</tr>`)
     .join("");
-  return `${heading(block.arg)}<table class="rc-table"${sort}><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table"${sort}>${thead}<tbody>${tr}</tbody></table>`;
 }
 
 function callout(block: Block): string {
-  const [first = "", ...rest] = block.arg.split(/\s+/);
-  const tint = TINTS.has(first) ? ` rc-${first}` : "";
-  const title = tint ? rest.join(" ") : block.arg;
-  const text = [...block.items, ...block.text].map(inline).join(" ");
+  const [argBody, argTint] = tinted(block.arg);
+  const [first = "", ...rest] = argBody.split(/\s+/);
+  const leadTint = TINTS.has(first) ? ` rc-${first}` : "";
+  const title = leadTint ? rest.join(" ") : argBody;
+  let found = leadTint || argTint;
+  const text = [...block.items, ...block.text]
+    .map((line) => {
+      const [clean, own] = tinted(line);
+      if (own && !found) found = own;
+      return inline(own ? clean : line);
+    })
+    .join(" ");
   const lead = title ? `<b>${inline(title)}</b> ` : "";
-  return `<div class="rc-callout${tint}">${lead}${text}</div>`;
+  return `<div class="rc-callout${found}">${lead}${text}</div>`;
+}
+
+const LINK_URL = /^(?:https?:\/\/|mailto:)/i;
+const SOURCES_HEADING = /^sources?(?:\s*[:·-]?\s*\(?\d+\)?)?$/i;
+const MD_SOURCE =
+  /^\[([^\]]+)\]\(\s*((?:https?:\/\/|mailto:)(?:[^\s()]|\([^\s()]*\))+)\s*\)(?:\s*(?:\||—|–|-)\s*(.*))?$/i;
+
+function stripUrl(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
+}
+
+function sourceItem(item: string): string {
+  const trimmed = item.trim();
+  if (!trimmed) return "";
+  if (/^<a\b[^>]*\bhref\s*=/i.test(trimmed)) return `<li>${inline(trimmed)}</li>`;
+  const md = MD_SOURCE.exec(trimmed);
+  if (md) {
+    const note = md[3]?.trim() ? ` <span class="rc-muted">${inline(md[3].trim())}</span>` : "";
+    return `<li><a href="${escapeAttr(md[2]!)}">${inline(md[1]!)}</a>${note}</li>`;
+  }
+  const [first = "", second, third] = cells(trimmed, 3);
+  if (second !== undefined) {
+    const url = stripUrl(second);
+    if (LINK_URL.test(url)) {
+      const note = third ? ` <span class="rc-muted">${inline(third)}</span>` : "";
+      return `<li><a href="${escapeAttr(url)}">${inline(first || url)}</a>${note}</li>`;
+    }
+    const firstUrl = stripUrl(first);
+    if (LINK_URL.test(firstUrl)) {
+      const label = third ? `${second} — ${third}` : second;
+      return `<li><a href="${escapeAttr(firstUrl)}">${inline(label)}</a></li>`;
+    }
+    const rest = third ? `${second} — ${third}` : second;
+    return `<li>${inline(first)} <span class="rc-muted">${inline(rest)}</span></li>`;
+  }
+  const onlyUrl = stripUrl(first);
+  if (LINK_URL.test(onlyUrl)) return `<li><a href="${escapeAttr(onlyUrl)}">${escapeHtml(onlyUrl)}</a></li>`;
+  return `<li>${inline(first)}</li>`;
 }
 
 function sources(block: Block): string {
-  const out = block.items.map((item) => {
-    const [title = "", url] = cells(item, 2);
-    const href = url || title;
-    return `<li><a href="${escapeAttr(href)}">${inline(title)}</a></li>`;
-  });
-  const summary = block.arg ? inline(block.arg) : "Sources";
+  const entries = [...block.text.map((line) => line.replace(/^\d+[.)]\s+/, "")), ...block.items];
+  const out = entries.map(sourceItem).filter(Boolean);
+  const [rawSummary = ""] = cells(block.arg, 2);
+  const summary =
+    rawSummary && !SOURCES_HEADING.test(rawSummary)
+      ? inline(rawSummary)
+      : /^source\b/i.test(rawSummary) && !/^sources\b/i.test(rawSummary)
+        ? "Source"
+        : "Sources";
   return `<details class="rc-details rc-sources"><summary>${summary}</summary><ol>${out.join("")}</ol></details>`;
 }
 
@@ -302,15 +398,7 @@ function measure(cell: string): number | null {
 
 /** A `:: table`-style block's rows: dividers dropped, outer pipes trimmed, split into cells. */
 function rows(block: Block): string[][] {
-  const lines = [...block.text, ...block.items]
-    .filter((line) => !DIVIDER.test(line))
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .replace(/^\|/, "")
-        .replace(/(?<!\\)\|$/, ""),
-    );
+  const lines = [...block.text, ...block.items].filter((line) => !DIVIDER.test(line)).map(stripRow);
   const [headLine, ...bodyLines] = lines;
   if (headLine === undefined) return [];
   const head = cells(headLine);
@@ -460,13 +548,15 @@ function chart(block: Block): string {
 
 /** A table block's cells: a number in a heatmap gets a shade from where it falls between the smallest and largest. */
 function heatmap(block: Block): string {
-  const [header = [], ...data] = rows(block);
+  const { title, head: header, body: data } = tableParts(block);
   const values = data
     .flatMap((row) => row.slice(1).map((cell) => measure(cell)))
     .filter((v): v is number => v !== null);
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const th = header.map((cell, i) => `<th${i ? ' class="rc-num"' : ""}>${inline(cell)}</th>`).join("");
+  const thead = header.length
+    ? `<thead><tr>${header.map((cell, i) => `<th${i ? ' class="rc-num"' : ""}>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = data
     .map((row) => {
       const tds = row.map((cell, i) => {
@@ -478,7 +568,7 @@ function heatmap(block: Block): string {
       return `<tr>${tds.join("")}</tr>`;
     })
     .join("");
-  return `${heading(block.arg)}<table class="rc-table rc-heatmap"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table rc-heatmap">${thead}<tbody>${tr}</tbody></table>`;
 }
 
 const MARKS: Record<string, [string, string]> = {
@@ -509,15 +599,17 @@ function compareCell(cell: string): string {
 }
 
 function compare(block: Block): string {
-  const [header = [], ...data] = rows(block);
-  const th = header.map((cell) => `<th>${inline(cell)}</th>`).join("");
+  const { title, head: header, body: data } = tableParts(block);
+  const thead = header.length
+    ? `<thead><tr>${header.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = data
     .map(
       (row) =>
         `<tr>${row.map((cell, i) => (i ? `<td>${compareCell(cell)}</td>` : `<td><b>${inline(cell)}</b></td>`)).join("")}</tr>`,
     )
     .join("");
-  return `${heading(block.arg)}<table class="rc-table rc-compare"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table rc-compare">${thead}<tbody>${tr}</tbody></table>`;
 }
 
 function kv(block: Block): string {
@@ -637,6 +729,10 @@ function detailsOpen(arg: string): string {
 }
 
 function details(block: Block): string {
+  const [summary = "", aside] = cells(block.arg, 2);
+  if (SOURCES_HEADING.test(summary) && (!aside || /^\d+$/.test(aside))) {
+    return sources({ ...block, arg: summary });
+  }
   const items = block.items.length ? list({ ...block, arg: "" }) : "";
   const text = block.text.length ? `<p>${inline(block.text.join(" "))}</p>` : "";
   return `${detailsOpen(block.arg)}${text}${items}</details>`;
@@ -934,9 +1030,15 @@ export function expandShorthand(source: string): string {
       const arg = directive[2]!.trim();
       const emptyDetails =
         block !== null && block.name === "details" && block.items.length === 0 && block.text.length === 0;
-      if (emptyDetails && name === "sources" && !arg) {
-        block = { name: "sources", arg: block!.arg, items: [], text: [] };
-        continue;
+      if (emptyDetails && name === "sources") {
+        if (!arg) {
+          block = { name: "sources", arg: block!.arg, items: [], text: [] };
+          continue;
+        }
+        if (SOURCES_HEADING.test(cells(block!.arg, 2)[0] ?? "")) {
+          block = { name: "sources", arg, items: [], text: [] };
+          continue;
+        }
       }
       if (
         emptyDetails &&

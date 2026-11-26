@@ -420,7 +420,9 @@ describe("smart ui", () => {
   test("a table's long code and links wrap cleanly so it fits the reply", () => {
     // Inline code wraps at path/identifier boundaries (<wbr> + break-word) before splitting mid-word,
     // keys and raw URLs break anywhere, and headings wrap at spaces.
-    expect(BASE_CSS).toContain(".rc-table .rc-badge { max-width: min(28ch, 100%); white-space: normal;");
+    expect(BASE_CSS).toContain(
+      ".rc-table .rc-badge { max-width: 100%; padding: 2px 8px; line-height: 16px; border-radius: min(var(--rc-radius-pill), 9px); white-space: normal;",
+    );
     expect(BASE_CSS).toContain(".rc-table :is(kbd, a) { overflow-wrap: anywhere; }");
     expect(BASE_CSS).toContain(".rc-table { overflow-wrap: normal;");
     expect(BASE_CSS).toContain(".rc-table-box { overflow-x: auto;");
@@ -1204,8 +1206,11 @@ describe("smart ui", () => {
       "t",
       pageTheme("dark", () => ""),
     );
+    expect(script).toContain("const isSourceFold =");
+    expect(script).toContain("const unwrapSourceItems =");
     expect(script).toContain('next.matches("ol.rc-sources, ul.rc-sources")');
     expect(script).toContain('list.classList.remove("rc-sources")');
+    expect(() => new Function(script)).not.toThrow();
     expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
     expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");
   });
