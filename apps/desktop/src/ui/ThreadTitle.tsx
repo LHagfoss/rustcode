@@ -16,7 +16,7 @@ export function ThreadTitle({ thread, title }: { thread?: ThreadState; title: st
   const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
-  if (!session) return <h1 className="min-w-0 truncate font-medium text-body text-fg">{title}</h1>;
+  if (!session) return <h1 className="-mx-1 min-w-0 truncate px-2 font-medium text-body text-fg">{title}</h1>;
   const startRename = () => {
     setDraft(session.title ?? title);
     setTimeout(() => setRenaming(true), 0);
