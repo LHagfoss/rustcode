@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use tokio_util::sync::CancellationToken;
 
+use super::clients::ClientId;
+use crate::computer_use::panel::ScreencastFrame;
+
 /// Notification method pushed whenever a new screencast JPEG frame arrives.
 pub(crate) const FRAME_NOTIFICATION: &str = "_rustcode/browser/frame";
 
@@ -145,69 +148,131 @@ pub(crate) struct StreamRequest {
     pub active: bool,
 }
 
-type StreamMap = Mutex<HashMap<String, CancellationToken>>;
+type StreamKey = (String, ClientId);
 
-fn active_streams() -> &'static StreamMap {
-    static STREAMS: OnceLock<StreamMap> = OnceLock::new();
-    STREAMS.get_or_init(Default::default)
+#[derive(Default)]
+struct StreamRegistry {
+    next: u64,
+    entries: HashMap<StreamKey, (u64, CancellationToken)>,
 }
 
-fn stop_stream_task(session_id: &str) {
-    if let Some(token) = active_streams()
+impl StreamRegistry {
+    fn insert(&mut self, key: StreamKey, token: CancellationToken) -> u64 {
+        self.next += 1;
+        if let Some((_, previous)) = self.entries.insert(key, (self.next, token)) {
+            previous.cancel();
+        }
+        self.next
+    }
+
+    fn remove(&mut self, key: &StreamKey) -> usize {
+        if let Some((_, token)) = self.entries.remove(key) {
+            token.cancel();
+        }
+        self.watchers(&key.0)
+    }
+
+    fn finished(&mut self, key: &StreamKey, generation: u64) {
+        if self
+            .entries
+            .get(key)
+            .is_some_and(|(current, _)| *current == generation)
+        {
+            self.entries.remove(key);
+        }
+    }
+
+    fn drop_client(&mut self, client_id: ClientId) {
+        self.entries.retain(|(_, owner), (_, token)| {
+            let keep = *owner != client_id;
+            if !keep {
+                token.cancel();
+            }
+            keep
+        });
+    }
+
+    fn watchers(&self, session_id: &str) -> usize {
+        self.entries
+            .keys()
+            .filter(|(session, _)| session == session_id)
+            .count()
+    }
+}
+
+fn active_streams() -> std::sync::MutexGuard<'static, StreamRegistry> {
+    static STREAMS: OnceLock<Mutex<StreamRegistry>> = OnceLock::new();
+    STREAMS
+        .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(session_id)
-    {
-        token.cancel();
-    }
+}
+
+fn stop_stream_task(session_id: &str, client_id: ClientId) -> usize {
+    active_streams().remove(&(session_id.to_owned(), client_id))
+}
+
+/// Cancel every frame stream the closed connection `client_id` subscribed to.
+pub(super) fn client_closed(client_id: ClientId) {
+    active_streams().drop_client(client_id);
 }
 
 async fn start_stream_task(
     session_id: String,
+    client_id: ClientId,
     connection: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
 ) {
-    stop_stream_task(&session_id);
     let Some((mut rx, latest)) = crate::computer_use::subscribe_frames(&session_id).await else {
+        stop_stream_task(&session_id, client_id);
         return;
     };
     let token = CancellationToken::new();
-    active_streams()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id.clone(), token.clone());
+    let key = (session_id.clone(), client_id);
+    let generation = active_streams().insert(key.clone(), token.clone());
     tokio::spawn(async move {
-        if let Some(frame) = latest
-            && let Ok(msg) = UntypedMessage::new(
-                FRAME_NOTIFICATION,
-                json!({ "sessionId": session_id, "frame": frame }),
-            )
-            && connection.send_notification(msg).is_err()
-        {
-            return;
-        }
-        loop {
-            tokio::select! {
-                _ = token.cancelled() => break,
-                received = rx.recv() => {
-                    match received {
-                        Ok(frame) => {
-                            let Ok(msg) = UntypedMessage::new(
-                                FRAME_NOTIFICATION,
-                                json!({ "sessionId": session_id, "frame": frame }),
-                            ) else {
-                                continue;
-                            };
-                            if connection.send_notification(msg).is_err() {
-                                break;
-                            }
+        forward_frames(&session_id, &token, &mut rx, latest, &connection).await;
+        active_streams().finished(&key, generation);
+    });
+}
+
+async fn forward_frames(
+    session_id: &str,
+    token: &CancellationToken,
+    rx: &mut tokio::sync::broadcast::Receiver<ScreencastFrame>,
+    latest: Option<ScreencastFrame>,
+    connection: &agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
+) {
+    if let Some(frame) = latest
+        && let Ok(msg) = UntypedMessage::new(
+            FRAME_NOTIFICATION,
+            json!({ "sessionId": session_id, "frame": frame }),
+        )
+        && connection.send_notification(msg).is_err()
+    {
+        return;
+    }
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => break,
+            received = rx.recv() => {
+                match received {
+                    Ok(frame) => {
+                        let Ok(msg) = UntypedMessage::new(
+                            FRAME_NOTIFICATION,
+                            json!({ "sessionId": session_id, "frame": frame }),
+                        ) else {
+                            continue;
+                        };
+                        if connection.send_notification(msg).is_err() {
+                            break;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
-    });
+    }
 }
 
 fn format_response(outcome: Result<Value, String>) -> Value {
@@ -219,6 +284,7 @@ fn format_response(outcome: Result<Value, String>) -> Value {
 
 /// Dispatch browser preview panel requests, forwarding everything else to `memory::dispatch`.
 pub(super) fn dispatch(
+    client_id: ClientId,
     method: String,
     params: Value,
     responder: agent_client_protocol::Responder,
@@ -237,7 +303,7 @@ pub(super) fn dispatch(
                 )
                 .await;
                 if outcome.is_ok() {
-                    start_stream_task(request.session_id, stream_conn).await;
+                    start_stream_task(request.session_id, client_id, stream_conn).await;
                 }
                 responder.respond(format_response(outcome))?;
                 Ok(())
@@ -329,17 +395,20 @@ pub(super) fn dispatch(
             let request: StreamRequest = super::parse_params(params)?;
             let stream_conn = connection.clone();
             connection.spawn(async move {
-                if !request.active {
-                    stop_stream_task(&request.session_id);
-                }
-                let outcome = crate::computer_use::run_panel_action(
-                    &request.session_id,
-                    "panel_stream",
-                    json!({ "active": request.active }),
-                )
-                .await;
+                let others = if request.active {
+                    0
+                } else {
+                    stop_stream_task(&request.session_id, client_id)
+                };
+                let (action, args) = if others > 0 {
+                    ("panel_state", json!({}))
+                } else {
+                    ("panel_stream", json!({ "active": request.active }))
+                };
+                let outcome =
+                    crate::computer_use::run_panel_action(&request.session_id, action, args).await;
                 if request.active && outcome.is_ok() {
-                    start_stream_task(request.session_id, stream_conn).await;
+                    start_stream_task(request.session_id, client_id, stream_conn).await;
                 }
                 responder.respond(format_response(outcome))?;
                 Ok(())
@@ -365,5 +434,57 @@ mod tests {
         assert_eq!(pick.session_id, "t1");
         assert_eq!(pick.x, 120.5);
         assert_eq!(pick.y, 88.0);
+    }
+
+    #[test]
+    fn two_clients_stream_one_session_without_cancelling_each_other() {
+        let mut streams = StreamRegistry::default();
+        let first = CancellationToken::new();
+        let second = CancellationToken::new();
+        streams.insert(("t1".into(), 1), first.clone());
+        streams.insert(("t1".into(), 2), second.clone());
+        assert!(!first.is_cancelled());
+        assert_eq!(streams.watchers("t1"), 2);
+
+        assert_eq!(streams.remove(&("t1".into(), 1)), 1);
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        assert_eq!(streams.remove(&("t1".into(), 2)), 0);
+        assert!(second.is_cancelled());
+    }
+
+    #[test]
+    fn restarting_a_client_stream_replaces_only_its_own_task() {
+        let mut streams = StreamRegistry::default();
+        let old = CancellationToken::new();
+        let other = CancellationToken::new();
+        let stale = streams.insert(("t1".into(), 1), old.clone());
+        streams.insert(("t1".into(), 2), other.clone());
+        let fresh = CancellationToken::new();
+        let current = streams.insert(("t1".into(), 1), fresh.clone());
+        assert!(old.is_cancelled());
+        assert!(!other.is_cancelled());
+
+        streams.finished(&("t1".into(), 1), stale);
+        assert_eq!(streams.watchers("t1"), 2);
+        streams.finished(&("t1".into(), 1), current);
+        assert_eq!(streams.watchers("t1"), 1);
+        assert!(!fresh.is_cancelled());
+    }
+
+    #[test]
+    fn a_closed_client_drops_only_its_own_streams() {
+        let mut streams = StreamRegistry::default();
+        let gone_a = CancellationToken::new();
+        let gone_b = CancellationToken::new();
+        let kept = CancellationToken::new();
+        streams.insert(("t1".into(), 7), gone_a.clone());
+        streams.insert(("t2".into(), 7), gone_b.clone());
+        streams.insert(("t1".into(), 8), kept.clone());
+        streams.drop_client(7);
+        assert!(gone_a.is_cancelled() && gone_b.is_cancelled());
+        assert!(!kept.is_cancelled());
+        assert_eq!(streams.watchers("t1"), 1);
+        assert_eq!(streams.watchers("t2"), 0);
     }
 }

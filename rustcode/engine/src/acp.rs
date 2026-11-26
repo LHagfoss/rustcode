@@ -804,6 +804,7 @@ impl AcpServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.clients.disconnect(id);
+        browser_panel::client_closed(id);
         self.refresh_presence();
         self.refresh_thread_host();
     }
@@ -1664,6 +1665,10 @@ async fn dispatch_request(
                 Ok(())
             });
             Ok(())
+        }
+
+        _ if method.starts_with("_rustcode/browser/") => {
+            browser_panel::dispatch(client_id, method, params, responder, connection, unhandled)
         }
 
         _ => {
