@@ -513,6 +513,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   finished: {},
   failed: {},
   grants: [],
+  browserGrants: {},
   resolvedApprovals: {},
   remote: null,
   pairing: { phase: "idle" },

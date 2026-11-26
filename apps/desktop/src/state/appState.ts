@@ -16,7 +16,7 @@ import type { HarnessCommands } from "./commands";
 import type { ComposeExtras } from "./compose";
 import type { ConnectCode } from "./connectRequests";
 import type { EngineState } from "./engine";
-import type { TimedGrant } from "./grants";
+import type { BrowserGrants, TimedGrant } from "./grants";
 import { DEFAULT_HEADER_BUTTONS, type HeaderButtonId } from "./headerButtons";
 import type { InboxDismissals } from "./inboxDismissed";
 import type { InternetWait } from "./internetWait";
@@ -378,6 +378,8 @@ export interface AppState {
   inboxDismissed: InboxDismissals;
   /** Timed approvals still in force ("Allow for 1 hour"), from `_rustcode/permissions`. */
   grants: TimedGrant[];
+  /** The sites each thread may use the browser on without a card, by thread id. */
+  browserGrants: BrowserGrants;
   /**
    * The approval each thread just answered, by thread id: its card folds into
    * this one settled line for a moment instead of vanishing (ui/AttentionCards.tsx).

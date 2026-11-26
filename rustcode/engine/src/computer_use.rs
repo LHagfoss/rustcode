@@ -1,4 +1,5 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
+pub mod grants;
 mod proxy;
 mod snapshot;
 use crate::orchestration::{
@@ -31,6 +32,8 @@ pub struct Settings {
     pub enabled: bool,
     pub allowed_domains: Vec<String>,
     pub executable: Option<PathBuf>,
+    /// A thread's site grant also covers clicks and typing, not only reads.
+    pub grant_covers_actions: bool,
 }
 impl Settings {
     pub fn load() -> Self {
@@ -93,6 +96,7 @@ fn current_settings() -> Settings {
 pub(crate) fn settings_value() -> Value {
     let settings = Settings::load();
     json!({"enabled": settings.enabled, "allowed_domains": settings.allowed_domains,
+        "grant_covers_actions": settings.grant_covers_actions,
         "browser_available": executable(&settings).is_some()})
 }
 
@@ -121,6 +125,9 @@ pub(crate) fn save_settings(value: &Value) -> Result<(), String> {
     file["computer_use"]["enabled"] = toml::Value::Boolean(enabled);
     file["computer_use"]["allowed_domains"] =
         toml::Value::Array(domains.into_iter().map(toml::Value::String).collect());
+    if let Some(actions) = value.get("grant_covers_actions").and_then(Value::as_bool) {
+        file["computer_use"]["grant_covers_actions"] = toml::Value::Boolean(actions);
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let temporary = path.with_extension("toml.tmp");
     std::fs::write(
@@ -216,11 +223,98 @@ fn browsers() -> &'static Browsers {
     static ALL: OnceLock<Browsers> = OnceLock::new();
     ALL.get_or_init(Default::default)
 }
+/// Close a thread's browser and drop its site grants.
 pub fn unregister(id: &str) {
     browsers()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
+    grants::revoke(id);
+}
+
+/// The internal job that answers the page's current URL.
+const LOCATION: &str = "location";
+
+/// The URL the thread's browser shows, when one is open and idle.
+async fn current_url(session_id: &str) -> Option<String> {
+    let slot = browsers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(session_id)?
+        .clone();
+    let browser = slot.try_lock().ok()?;
+    let browser = browser.as_ref().filter(|browser| !browser.stopped())?;
+    let (tx, rx) = oneshot::channel();
+    browser
+        .sender
+        .send((LOCATION.to_owned(), Value::Null, tx))
+        .await
+        .ok()?;
+    let url = tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .ok()?
+        .ok()?
+        .ok()?;
+    url.as_str().map(str::to_owned)
+}
+
+/// Show the card for one browser call: "Allow once", "Allow <host> for this
+/// thread" when the origin is known, and "Deny".
+async fn ask(
+    request: &CallRequest,
+    asker: Asker,
+    origin: Option<&str>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), String> {
+    let mut preview = request.args.clone();
+    if let Some(text) = preview.get_mut("text") {
+        *text = json!("[redacted]");
+    }
+    let mut options = vec![PermissionOption::new(
+        "allow",
+        "Allow once",
+        PermissionOptionKind::AllowOnce,
+    )];
+    if let Some(host) = origin.and_then(grants::host) {
+        options.push(PermissionOption::new(
+            grants::SITE_OPTION,
+            format!("Allow {host} for this thread"),
+            PermissionOptionKind::AllowAlways,
+        ));
+    }
+    options.push(PermissionOption::new(
+        "deny",
+        "Deny",
+        PermissionOptionKind::RejectOnce,
+    ));
+    let permission = RequestPermissionRequest::new(
+        request.session_id.clone(),
+        ToolCallUpdate::new(
+            format!("computer-use-{:016x}", rand::random::<u64>()),
+            ToolCallUpdateFields::new()
+                .title(format!("{}: {}", request.tool, preview))
+                .raw_input(preview),
+        ),
+        options,
+    );
+    let revoked = grants::revoked(&request.session_id);
+    let response = tokio::select! {
+        _ = cancel.cancelled() => return Err("Cancelled".into()),
+        _ = revoked.cancelled() => return Err("Browser access was revoked; nothing was run".into()),
+        response = asker(permission) => response,
+    };
+    let choice = response.and_then(|response| match response.outcome {
+        RequestPermissionOutcome::Selected(choice) => Some(choice.option_id.to_string()),
+        _ => None,
+    });
+    match (choice.as_deref(), origin) {
+        (Some("allow"), _) => Ok(()),
+        (Some(grants::SITE_OPTION), Some(origin)) => {
+            grants::grant(&request.session_id, origin);
+            Ok(())
+        }
+        _ => Err("Browser action denied".into()),
+    }
 }
 
 pub async fn answer(
@@ -230,25 +324,48 @@ pub async fn answer(
 ) -> CallAnswer {
     let result = async {
         let settings = Settings::load();
-        if !settings.enabled { return Err("Computer use is disabled".to_owned()) }
-        let text = |key: &str| request.args.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("Missing string: {key}"));
+        if !settings.enabled {
+            return Err("Computer use is disabled".to_owned());
+        }
+        let text = |key: &str| {
+            request
+                .args
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| format!("Missing string: {key}"))
+        };
         match request.tool.as_str() {
-            "browser_open" => { if !settings.allows(&text("url")?) { return Err("URL is outside computer_use.allowed_domains".into()) } },
+            "browser_open" => {
+                if !settings.allows(&text("url")?) {
+                    return Err("URL is outside computer_use.allowed_domains".into());
+                }
+            }
             _ => check_arguments(&request.tool, &request.args)?,
         }
         let asker = asker.ok_or("No approval channel is attached; nothing was run")?;
-        let mut preview = request.args.clone();
-        if let Some(text) = preview.get_mut("text") { *text = json!("[redacted]"); }
-        let permission = RequestPermissionRequest::new(request.session_id.clone(), ToolCallUpdate::new(
-            format!("computer-use-{:016x}", rand::random::<u64>()),
-            ToolCallUpdateFields::new().title(format!("{}: {}", request.tool, preview)).raw_input(preview),
-        ), vec![PermissionOption::new("allow", "Allow once", PermissionOptionKind::AllowOnce), PermissionOption::new("deny", "Deny", PermissionOptionKind::RejectOnce)]);
-        let approved = tokio::select! { _ = cancel.cancelled() => return Err("Cancelled".into()), response = asker(permission) => response };
-        if !approved.is_some_and(|r| matches!(r.outcome, RequestPermissionOutcome::Selected(ref choice) if choice.option_id.to_string() == "allow")) { return Err("Browser action denied".into()) }
-        // Recheck the switch after the user answers the card.
-        if !Settings::load().enabled { return Err("Computer use is disabled".into()) }
+        let origin = match request.tool.as_str() {
+            "browser_open" => grants::origin(&text("url")?),
+            _ => current_url(&request.session_id)
+                .await
+                .as_deref()
+                .and_then(grants::origin),
+        };
+        if !grants::skips_card(
+            &request.session_id,
+            &request.tool,
+            origin.as_deref(),
+            settings.grant_covers_actions,
+        ) {
+            ask(request, asker, origin.as_deref(), cancel).await?;
+            // Recheck the switch after the user answers the card.
+            if !Settings::load().enabled {
+                return Err("Computer use is disabled".into());
+            }
+        }
         run_approved(&request.session_id, &request.tool, &request.args, cancel).await
-    }.await;
+    }
+    .await;
     match result {
         Ok(content) => CallAnswer {
             success: true,
@@ -609,6 +726,9 @@ impl Cdp {
         Ok(snapshot::read_result(&page, elements, omitted))
     }
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
+        if tool == LOCATION {
+            return Ok(self.main_frame().await?["url"].clone());
+        }
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
             if !current_settings().allows(url) {
