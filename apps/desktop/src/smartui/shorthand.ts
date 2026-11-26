@@ -240,26 +240,58 @@ function tableCell(cell: string): string {
   return inline(cell);
 }
 
-function table(block: Block): string {
-  const raw = block.text
-    .filter((line) => !DIVIDER.test(line))
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .replace(/^\|/, "")
-        .replace(/(?<!\\)\|$/, ""),
-    );
+function stripRow(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "");
+}
+
+/** A table-like block's heading, header cells and body rows. Accepts column headers on the `::` line too. */
+function tableParts(block: Block): { title: string; head: string[]; body: string[][] } {
+  const lines = [...block.text, ...block.items];
+  const argLine = stripRow(block.arg);
+  const argCells = argLine ? cells(argLine) : [];
+  const raw = lines.filter((line) => !DIVIDER.test(line)).map(stripRow);
+  const firstRow = raw[0] === undefined ? [] : cells(raw[0]);
+  const hasHeaderDivider = lines.length >= 2 && !DIVIDER.test(lines[0]!) && DIVIDER.test(lines[1]!);
+  const firstIsItem = lines[0] !== undefined && ITEM.test(lines[0]);
+  const firstIsTinted = firstRow.some((cell) => extractTint(cell)[1] !== "");
+  const argIsHeader =
+    argCells.length > 1 &&
+    !hasHeaderDivider &&
+    (raw.length === 0 ||
+      DIVIDER.test(lines[0] ?? "") ||
+      firstIsItem ||
+      firstIsTinted ||
+      firstRow.length === argCells.length ||
+      raw.some((line) => cells(line).length === argCells.length));
+  if (argIsHeader) {
+    const cols = argCells.length;
+    return { title: "", head: argCells, body: raw.map((line) => cells(line, cols)) };
+  }
   const [headLine, ...bodyLines] = raw;
-  const head = headLine === undefined ? [] : cells(headLine);
+  if (headLine === undefined) return { title: block.arg, head: [], body: [] };
+  if (!hasHeaderDivider && firstIsTinted) {
+    const cols = firstRow.length || Infinity;
+    return { title: block.arg, head: [], body: raw.map((line) => cells(line, cols)) };
+  }
+  const head = cells(headLine);
   const cols = head.length || Infinity;
-  const body = bodyLines.map((line) => cells(line, cols));
-  const sort = body.length > SORT_ROWS ? " data-rc-sort" : "";
-  const th = head.map((cell) => `<th>${inline(cell)}</th>`).join("");
+  return { title: block.arg, head, body: bodyLines.map((line) => cells(line, cols)) };
+}
+
+function table(block: Block): string {
+  const { title, head, body } = tableParts(block);
+  const sort = head.length > 0 && body.length > SORT_ROWS ? " data-rc-sort" : "";
+  const thead = head.length
+    ? `<thead><tr>${head.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = body
     .map((row) => `<tr>${row.map((cell) => `<td>${tableCell(cell)}</td>`).join("")}</tr>`)
     .join("");
-  return `${heading(block.arg)}<table class="rc-table"${sort}><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table"${sort}>${thead}<tbody>${tr}</tbody></table>`;
 }
 
 function callout(block: Block): string {
@@ -302,15 +334,7 @@ function measure(cell: string): number | null {
 
 /** A `:: table`-style block's rows: dividers dropped, outer pipes trimmed, split into cells. */
 function rows(block: Block): string[][] {
-  const lines = [...block.text, ...block.items]
-    .filter((line) => !DIVIDER.test(line))
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .replace(/^\|/, "")
-        .replace(/(?<!\\)\|$/, ""),
-    );
+  const lines = [...block.text, ...block.items].filter((line) => !DIVIDER.test(line)).map(stripRow);
   const [headLine, ...bodyLines] = lines;
   if (headLine === undefined) return [];
   const head = cells(headLine);
@@ -460,13 +484,15 @@ function chart(block: Block): string {
 
 /** A table block's cells: a number in a heatmap gets a shade from where it falls between the smallest and largest. */
 function heatmap(block: Block): string {
-  const [header = [], ...data] = rows(block);
+  const { title, head: header, body: data } = tableParts(block);
   const values = data
     .flatMap((row) => row.slice(1).map((cell) => measure(cell)))
     .filter((v): v is number => v !== null);
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const th = header.map((cell, i) => `<th${i ? ' class="rc-num"' : ""}>${inline(cell)}</th>`).join("");
+  const thead = header.length
+    ? `<thead><tr>${header.map((cell, i) => `<th${i ? ' class="rc-num"' : ""}>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = data
     .map((row) => {
       const tds = row.map((cell, i) => {
@@ -478,7 +504,7 @@ function heatmap(block: Block): string {
       return `<tr>${tds.join("")}</tr>`;
     })
     .join("");
-  return `${heading(block.arg)}<table class="rc-table rc-heatmap"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table rc-heatmap">${thead}<tbody>${tr}</tbody></table>`;
 }
 
 const MARKS: Record<string, [string, string]> = {
@@ -509,15 +535,17 @@ function compareCell(cell: string): string {
 }
 
 function compare(block: Block): string {
-  const [header = [], ...data] = rows(block);
-  const th = header.map((cell) => `<th>${inline(cell)}</th>`).join("");
+  const { title, head: header, body: data } = tableParts(block);
+  const thead = header.length
+    ? `<thead><tr>${header.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead>`
+    : "";
   const tr = data
     .map(
       (row) =>
         `<tr>${row.map((cell, i) => (i ? `<td>${compareCell(cell)}</td>` : `<td><b>${inline(cell)}</b></td>`)).join("")}</tr>`,
     )
     .join("");
-  return `${heading(block.arg)}<table class="rc-table rc-compare"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+  return `${heading(title)}<table class="rc-table rc-compare">${thead}<tbody>${tr}</tbody></table>`;
 }
 
 function kv(block: Block): string {

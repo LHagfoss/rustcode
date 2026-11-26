@@ -79,6 +79,45 @@ describe("shorthand", () => {
     expect(expandShorthand(`:: table\nName | N\n${rows}`)).toContain('<table class="rc-table" data-rc-sort>');
   });
 
+  test("a table accepts column headers on the directive line and never eats tinted rows as headers", () => {
+    const inlineHead = expandShorthand(
+      ":: table PR | Til | Status | Hva | Vurdering\n" +
+        "#207 | live | draft | Flytter nøkler | Samme feil, må ikke merges {bad}\n" +
+        "#206 | live | draft | Flytter annen nøkkel | Samme mønster {warn}",
+    );
+    expect(inlineHead).toBe(
+      '<table class="rc-table"><thead><tr><th>PR</th><th>Til</th><th>Status</th><th>Hva</th><th>Vurdering</th></tr></thead><tbody>' +
+        '<tr><td>#207</td><td>live</td><td>draft</td><td>Flytter nøkler</td><td><span class="rc-badge rc-bad">Samme feil, må ikke merges</span></td></tr>' +
+        '<tr><td>#206</td><td>live</td><td>draft</td><td>Flytter annen nøkkel</td><td><span class="rc-badge rc-warn">Samme mønster</span></td></tr>' +
+        "</tbody></table>",
+    );
+    expect(
+      expandShorthand(":: table PR | Til | Problem\n- #231 | staging | Må ikke merges før #368 {warn}"),
+    ).toBe(
+      '<table class="rc-table"><thead><tr><th>PR</th><th>Til</th><th>Problem</th></tr></thead><tbody>' +
+        '<tr><td>#231</td><td>staging</td><td><span class="rc-badge rc-warn">Må ikke merges før #368</span></td></tr>' +
+        "</tbody></table>",
+    );
+    expect(expandShorthand(":: table PR | Til | Problem")).toBe(
+      '<table class="rc-table"><thead><tr><th>PR</th><th>Til</th><th>Problem</th></tr></thead><tbody></tbody></table>',
+    );
+    expect(expandShorthand(":: table Open PRs\n- #207 | live | Samme feil {bad}")).toBe(
+      '<h3>Open PRs</h3><table class="rc-table"><tbody>' +
+        '<tr><td>#207</td><td>live</td><td><span class="rc-badge rc-bad">Samme feil</span></td></tr>' +
+        "</tbody></table>",
+    );
+    expect(expandShorthand(":: table Builds | 24h\n| Name | Status |\n|---|---|\n| ci | ready {ok} |")).toBe(
+      '<h3>Builds | 24h</h3><table class="rc-table"><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td>ci</td><td><span class="rc-badge rc-ok">ready</span></td></tr>' +
+        "</tbody></table>",
+    );
+    expect(expandShorthand(":: table `a|b` runs\nName | Status\nci | ready {ok}")).toBe(
+      '<h3><code>a|b</code> runs</h3><table class="rc-table"><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td>ci</td><td><span class="rc-badge rc-ok">ready</span></td></tr>' +
+        "</tbody></table>",
+    );
+  });
+
   test("callout, paragraph, heading, title and sources", () => {
     expect(expandShorthand(":: callout warn Careful.\nThe cap is `5|10` s.")).toBe(
       '<div class="rc-callout rc-warn"><b>Careful.</b> The cap is <code>5|10</code> s.</div>',
