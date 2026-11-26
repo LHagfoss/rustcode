@@ -150,7 +150,7 @@ fn the_last_window_to_leave_ends_the_link() {
     assert!(!link.detach("window-2"));
     assert!(!link.detach("window-2"));
     assert!(link.detach("main"));
-    assert!(link.is_empty());
+    assert!(!link.has("main"));
     assert_eq!(link.send(open()), Err(NoWindow));
 }
 

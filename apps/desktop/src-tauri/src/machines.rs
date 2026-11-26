@@ -19,6 +19,8 @@
 use crate::engine::EngineEvent;
 use crate::machine_link::Link;
 use anyhow::Error;
+use lifecycle::{joins, stop};
+use lifecycle::{joins, stop};
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
@@ -35,6 +37,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tokio::sync::Notify;
+
+#[path = "machine_lifecycle.rs"]
+mod lifecycle;
 
 /// How long Bonjour listens when Settings › Machines asks for the machines on
 /// this network.
@@ -504,20 +509,13 @@ impl Machines {
                 entry.link.attach(window, channel);
                 return Ok(());
             }
-            if let Some(task) = entry.task.take() {
-                task.abort();
+            if entry.task.is_some() {
                 emit_closed(&entry.link, "Connecting again.");
             }
-            entry.link.end();
+            stop(entry);
             entry.link.attach(window, channel);
             entry.outbox = Some(outbox);
             entry.state = MachineState::Connecting;
-            entry.route = None;
-            entry.answered = None;
-            entry.cause = None;
-            entry.detail = None;
-            entry.hint = None;
-            entry.retry_in_secs = None;
             // A fresh wake: a permit left by a wake nobody waited for must not
             // cut the new supervisor's first backoff short.
             entry.wake = Arc::new(Notify::new());
@@ -535,6 +533,20 @@ impl Machines {
             entry.task = Some(task);
         }
         Ok(())
+    }
+
+    /// A window leaves one machine, or every machine when it closed. A
+    /// machine no window is left on is stopped.
+    pub fn detach_window(&self, window: &str, id: Option<&str>) {
+        let mut live = self.live.lock().unwrap();
+        for (_, entry) in live
+            .iter_mut()
+            .filter(|(key, _)| id.is_none_or(|id| id == key.as_str()))
+        {
+            if entry.link.detach(window) {
+                stop(entry);
+            }
+        }
     }
 }
 
@@ -2351,11 +2363,7 @@ pub fn machine_detach(
     machines: tauri::State<'_, Arc<Machines>>,
     id: String,
 ) {
-    if let Some(entry) = machines.live.lock().unwrap().get_mut(&id) {
-        if entry.link.detach(window.label()) || entry.link.is_empty() {
-            stop(entry);
-        }
-    }
+    machines.detach_window(window.label(), Some(&id));
 }
 
 /// Stop trying to reach one machine. Nothing is forgotten: connecting again

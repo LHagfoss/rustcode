@@ -258,7 +258,7 @@ pub fn build_window(app: &tauri::AppHandle, label: &str) -> tauri::Result<tauri:
         }
         if let tauri::WindowEvent::Destroyed = event {
             if let Some(machines) = handle.try_state::<Arc<crate::machines::Machines>>() {
-                machines.detach_window(&window_label);
+                machines.detach_window(&window_label, None);
             }
             let next_primary = handle
                 .try_state::<Arc<crate::engine::Engine>>()

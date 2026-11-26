@@ -93,10 +93,6 @@ impl<S: Sink> Link<S> {
         windows.open = None;
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.windows.lock().unwrap().attached.is_empty()
-    }
-
     /// Whether `window` is attached.
     pub fn has(&self, window: &str) -> bool {
         self.windows
