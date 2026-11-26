@@ -50,6 +50,7 @@ mod telemetry;
 mod themes;
 pub(crate) mod usage;
 pub(crate) mod workflows;
+mod worktree_scripts;
 pub(crate) use builtin_open::*;
 pub(crate) use session_load::*;
 mod extensions;

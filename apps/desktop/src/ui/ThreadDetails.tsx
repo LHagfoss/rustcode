@@ -44,6 +44,7 @@ import { useStoredTurns, withStoredTurns } from "./storedTurns";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
 import { contextTone, costTotal, threadBilling, threadTotals, turnCost } from "./threadTotals";
+import { WorktreeScriptsSection } from "./WorktreeScriptsSection";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -219,6 +220,7 @@ export function ThreadDetails() {
           </Property>
         )}
       </div>
+      <WorktreeScriptsSection cwd={host ? undefined : thread.cwd} />
       {pullsOn && (
         <PullsSection
           cwd={worktree?.repo || thread.cwd}

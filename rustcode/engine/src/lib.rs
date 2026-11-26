@@ -77,6 +77,7 @@ pub mod update;
 mod usage_days;
 mod workflow;
 mod workspace_intelligence;
+mod worktree_scripts;
 mod worktrees;
 
 // Declared apart from the list above so it cannot collide with `remote`, the

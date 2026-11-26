@@ -498,6 +498,7 @@ pub(crate) fn create(request: &CreateRequest) -> Result<Worktree, WorktreeError>
         worktree: worktree.clone(),
         session_ids: Vec::new(),
     });
+    crate::worktree_scripts::on_worktree_created(&worktree.repo, &worktree.path);
     Ok(worktree)
 }
 
@@ -947,6 +948,7 @@ pub(crate) fn remove(path: &Path, force: bool) -> Result<Value, WorktreeError> {
             });
         }
     }
+    crate::worktree_scripts::on_worktree_removing(&repo, &path);
     let path_text = path.to_string_lossy().into_owned();
     let mut args = vec!["worktree", "remove"];
     if force {
@@ -1706,6 +1708,7 @@ pub(crate) fn cleanup(
     }
     let path_text = path.to_string_lossy().into_owned();
     if path.exists() {
+        crate::worktree_scripts::on_worktree_removing(&repo, &path);
         git(&repo, &["worktree", "remove", &path_text]).map_err(|message| {
             WorktreeError::failed(format!("git worktree remove failed: {message}"))
         })?;

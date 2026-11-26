@@ -1993,6 +1993,6 @@ pub(super) async fn dispatch_request(
             crate::connections::cancel_github_login();
             responder.respond(serde_json::Value::Null)
         }
-        _ => memory::dispatch(method, params, responder, connection, unhandled),
+        _ => worktree_scripts::dispatch(method, params, responder, connection, unhandled),
     }
 }
