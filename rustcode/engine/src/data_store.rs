@@ -40,6 +40,7 @@ use migrations::MIGRATIONS;
 mod links;
 pub use links::*;
 mod receipts;
+pub mod run_usage;
 mod shared;
 pub use receipts::*;
 pub use shared::Store;

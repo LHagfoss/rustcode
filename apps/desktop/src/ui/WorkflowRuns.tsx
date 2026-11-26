@@ -11,6 +11,7 @@ import { useNow } from "../lib/useNow";
 import { selectThread } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
+import { runUsageText } from "../state/workflowBudgets";
 import {
   canRetry,
   elapsedMs,
@@ -288,6 +289,11 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
         <PhaseSteps run={run} />
       </div>
       <p className="px-2 text-caption text-fg-muted">{progressText(run)}</p>
+      {run.usage && (
+        <p className={cx("px-2 text-caption", run.usage.reached ? "text-warning" : "text-fg-faint")}>
+          {runUsageText(run.usage)}
+        </p>
+      )}
       {note && (
         <p className={cx("truncate px-2 text-caption", note.bad ? "text-danger" : "text-fg-faint")}>
           {note.text}
