@@ -99,7 +99,7 @@ pub(super) async fn dispatch_request(
         "_rustcode/session/replay" => {
             let request: session_replay::ReplaySessionRequest = parse_params(params)?;
 
-            match session_replay::replay_session(&request.session_id) {
+            match session_replay::replay_session(&request.session_id, request.cursor) {
                 Ok(answer) => responder.respond(answer),
                 Err(error) => responder.respond_with_error(error),
             }
