@@ -1363,7 +1363,7 @@ fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) ->
 /// a key or a digest. `connected` is
 /// `None` where the answer cannot tell.
 fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
-    json!({
+    let mut value = json!({
         "id": device.id,
         "name": device.name,
         "kind": device.kind,
@@ -1372,8 +1372,11 @@ fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
         "lastSeenAt": device.last_seen_at,
         "connected": connected,
         "signsInWithKey": device.signs_with_key,
-        "access": device.access.map(crate::remote_gateway::access::Access::name),
-    })
+    });
+    if let Some(access) = device.access {
+        value["access"] = json!(access.name());
+    }
+    value
 }
 
 /// A pairing challenge for the machine, with no thread named: Settings ›
