@@ -94,11 +94,11 @@ pub(super) fn schema_properties() -> [(&'static str, Value); 2] {
     [
         (
             "token_budget",
-            json!({"type": "integer", "minimum": 1, "maximum": MAX_TOKEN_BUDGET, "description": "Stop starting agent() calls once the run's workers have used this many tokens (input plus output, as their harnesses reported); running workers finish. The user's setting is the most"}),
+            json!({"type": "integer", "minimum": 1, "maximum": MAX_TOKEN_BUDGET, "description": "Start no agent() call once workers used this many tokens; at most the user's setting"}),
         ),
         (
             "cost_budget_usd",
-            json!({"type": "number", "exclusiveMinimum": 0, "maximum": MAX_COST_BUDGET_USD, "description": "Stop starting agent() calls once the USD the run's workers' harnesses reported reaches this; harnesses that report no cost count nothing. The user's setting is the most"}),
+            json!({"type": "number", "exclusiveMinimum": 0, "maximum": MAX_COST_BUDGET_USD, "description": "The same for USD the harnesses reported"}),
         ),
     ]
 }
