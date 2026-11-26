@@ -722,15 +722,20 @@ function code(block: Block): string {
   return `<pre${label}><code>${escapeHtml(block.text.join("\n"))}</code></pre>`;
 }
 
+function detailsOpen(arg: string): string {
+  const [summary = "", aside] = cells(arg, 2);
+  const asideHtml = aside ? `<span class="rc-muted">${inline(aside)}</span>` : "";
+  return `<details class="rc-details"><summary><span>${inline(summary || "Details")}</span>${asideHtml}</summary>`;
+}
+
 function details(block: Block): string {
   const [summary = "", aside] = cells(block.arg, 2);
   if (SOURCES_HEADING.test(summary) && (!aside || /^\d+$/.test(aside))) {
     return sources({ ...block, arg: summary });
   }
-  const asideHtml = aside ? `<span class="rc-muted">${inline(aside)}</span>` : "";
   const items = block.items.length ? list({ ...block, arg: "" }) : "";
   const text = block.text.length ? `<p>${inline(block.text.join(" "))}</p>` : "";
-  return `<details class="rc-details"><summary><span>${inline(summary || "Details")}</span>${asideHtml}</summary>${text}${items}</details>`;
+  return `${detailsOpen(block.arg)}${text}${items}</details>`;
 }
 
 /** Option separators: `|`, or a comma outside parentheses and brackets, so `waves (faster, more usage)` stays one option. */
@@ -882,6 +887,84 @@ export const hasShorthand = (source: string) => /^\s*::\s*[a-z]+\b/m.test(source
 
 type TabSet = { slot: number; names: string[]; id: number };
 
+const HTML_VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+const HTML_OPEN_LINE = /^\s*<(?!(?:script|style|title)\b)[a-zA-Z][a-zA-Z0-9-]*(?=[\s/>])/i;
+
+/** Update an open-tag stack across one HTML line so a `:: details` fold closes after its element. */
+function advanceHtmlTags(line: string, stack: string[]) {
+  let i = 0;
+  while (i < line.length) {
+    const lt = line.indexOf("<", i);
+    if (lt < 0) break;
+    if (line.startsWith("<!--", lt)) {
+      const end = line.indexOf("-->", lt + 4);
+      if (end < 0) break;
+      i = end + 3;
+      continue;
+    }
+    const closing = line[lt + 1] === "/";
+    const nameAt = lt + (closing ? 2 : 1);
+    const name = /^[a-zA-Z][a-zA-Z0-9-]*/.exec(line.slice(nameAt, nameAt + 48))?.[0]?.toLowerCase();
+    if (!name) {
+      i = lt + 1;
+      continue;
+    }
+    let quote = "";
+    let end = -1;
+    for (let j = nameAt + name.length; j < line.length; j++) {
+      const char = line[j];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") quote = char;
+      else if (char === ">") {
+        end = j;
+        break;
+      }
+    }
+    if (end < 0) break;
+    const selfClosing = line[end - 1] === "/";
+    i = end + 1;
+    if (closing) {
+      const at = stack.lastIndexOf(name);
+      if (at >= 0) stack.length = at;
+    } else if (!HTML_VOID_TAGS.has(name) && !selfClosing) {
+      stack.push(name);
+    }
+  }
+}
+
+/** Count `:: end` directives ahead that are not paired with a nested `:: tab` set. */
+function countTrailingEnds(lines: string[], from: number): number {
+  let ends = 0;
+  let inTab = false;
+  for (let j = from; j < lines.length; j++) {
+    const match = DIRECTIVE.exec(lines[j]!);
+    if (!match || !BLOCKS.has(match[1]!)) continue;
+    if (match[1] === "tab") inTab = true;
+    else if (match[1] === "end") {
+      if (inTab) inTab = false;
+      else ends++;
+    }
+  }
+  return ends;
+}
+
 /**
  * A view's source with its shorthand blocks written out as kit HTML. A view without any
  * is returned as is. A block that is still arriving is drawn with the items it has, so
@@ -895,6 +978,8 @@ export function expandShorthand(source: string): string {
   let raw: string | null = null;
   let tabs: TabSet | null = null;
   let tabSets = 0;
+  let detailsHtml: string[] | null = null;
+  let openDetails = 0;
   const closeTabs = () => {
     const set = tabs;
     if (!set) return;
@@ -904,29 +989,75 @@ export function expandShorthand(source: string): string {
       .join("")}</div>`;
     tabs = null;
   };
+  const closeDetailsHtml = () => {
+    if (detailsHtml === null) return;
+    out.push("</details>");
+    detailsHtml = null;
+  };
   const flush = () => {
     if (block) out.push(render(block));
     block = null;
   };
-  for (const line of source.split("\n")) {
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     if (raw) {
       out.push(line);
       if (new RegExp(`</${raw}\\s*>`, "i").test(line)) raw = null;
       continue;
     }
+    if (detailsHtml !== null) {
+      if (detailsHtml.length > 0) {
+        out.push(line);
+        advanceHtmlTags(line, detailsHtml);
+        continue;
+      }
+      const directiveAfterHtml = DIRECTIVE.exec(line);
+      if (directiveAfterHtml && directiveAfterHtml[1] === "end") {
+        closeDetailsHtml();
+        continue;
+      }
+      if (HTML_OPEN_LINE.test(line)) {
+        out.push(line);
+        advanceHtmlTags(line, detailsHtml);
+        continue;
+      }
+      closeDetailsHtml();
+    }
     const directive = DIRECTIVE.exec(line);
     if (directive && BLOCKS.has(directive[1]!)) {
       const name = directive[1]!;
       const arg = directive[2]!.trim();
-      const emptySourcesWrapper =
-        name === "sources" &&
-        block?.name === "details" &&
-        block.items.length === 0 &&
-        block.text.length === 0 &&
-        SOURCES_HEADING.test(cells(block.arg, 2)[0] ?? "");
-      if (emptySourcesWrapper) block = null;
-      else flush();
+      const emptyDetails =
+        block !== null && block.name === "details" && block.items.length === 0 && block.text.length === 0;
+      if (emptyDetails && name === "sources") {
+        if (!arg) {
+          block = { name: "sources", arg: block!.arg, items: [], text: [] };
+          continue;
+        }
+        if (SOURCES_HEADING.test(cells(block!.arg, 2)[0] ?? "")) {
+          block = { name: "sources", arg, items: [], text: [] };
+          continue;
+        }
+      }
+      if (
+        emptyDetails &&
+        name !== "tab" &&
+        name !== "end" &&
+        name !== "title" &&
+        countTrailingEnds(lines, i + 1) > (tabs ? 1 : 0) + openDetails
+      ) {
+        out.push(detailsOpen(block!.arg));
+        openDetails++;
+        block = null;
+      } else {
+        flush();
+      }
       if (name === "tab") {
+        while (openDetails > 0) {
+          out.push("</details>");
+          openDetails--;
+        }
         let set = tabs as TabSet | null;
         if (set) out.push("</section>");
         else {
@@ -939,7 +1070,12 @@ export function expandShorthand(source: string): string {
         continue;
       }
       if (name === "end") {
-        closeTabs();
+        if (openDetails > 0) {
+          out.push("</details>");
+          openDetails--;
+        } else {
+          closeTabs();
+        }
         continue;
       }
       const next: Block = { name, arg, items: [], text: [] };
@@ -948,6 +1084,28 @@ export function expandShorthand(source: string): string {
       continue;
     }
     const current = block as Block | null;
+    if (current && current.name === "details" && current.items.length === 0 && current.text.length === 0) {
+      if (HTML_OPEN_LINE.test(line)) {
+        out.push(detailsOpen(current.arg));
+        block = null;
+        detailsHtml = [];
+        out.push(line);
+        advanceHtmlTags(line, detailsHtml);
+        continue;
+      }
+      if (!line.trim()) {
+        let nextIndex = i + 1;
+        while (nextIndex < lines.length && !lines[nextIndex]!.trim()) nextIndex++;
+        const nextLine = lines[nextIndex] ?? "";
+        const nextDirective = DIRECTIVE.exec(nextLine);
+        if (
+          HTML_OPEN_LINE.test(nextLine) ||
+          (nextDirective && nextDirective[1] === "sources" && !nextDirective[2]!.trim())
+        ) {
+          continue;
+        }
+      }
+    }
     if (current && RAW_BLOCKS.has(current.name) && line.trim()) {
       current.text.push(current.name === "code" ? line : line.trim());
       continue;
@@ -968,6 +1126,11 @@ export function expandShorthand(source: string): string {
       raw = opened[1]!.toLowerCase();
   }
   flush();
+  closeDetailsHtml();
+  while (openDetails > 0) {
+    out.push("</details>");
+    openDetails--;
+  }
   closeTabs();
   return out.join("\n");
 }

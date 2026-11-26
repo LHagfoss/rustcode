@@ -1164,7 +1164,15 @@ describe("smart ui", () => {
   test("cards, stats, bars and pressable blocks stay calm monochrome with title status dots", () => {
     // Cards and stats share the same neutral surface; status tints sit on the title/label dot
     // rather than washing or outlining the whole tile.
-    expect(BASE_CSS).toContain(".rc-card > .rc-badge { margin-left: auto; }");
+    expect(BASE_CSS).toContain(
+      ".rc-card > :is(b, strong):first-child { font-weight: 600; flex: 1 1 min(100%, 11ch); overflow-wrap: break-word; }",
+    );
+    expect(BASE_CSS).toContain(
+      ".rc-card > .rc-badge { max-width: 100%; white-space: normal; overflow-wrap: break-word; }",
+    );
+    expect(BASE_CSS).toContain(
+      ".rc-kv .rc-badge { max-width: 100%; white-space: normal; overflow-wrap: break-word; }",
+    );
     expect(BASE_CSS).toContain(
       ":is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before,",
     );
@@ -1193,12 +1201,15 @@ describe("smart ui", () => {
     expect(BASE_CSS).toMatch(/\ndetails > summary \{[^}]*cursor: pointer;/);
     expect(BASE_CSS).toContain("details > summary::-webkit-details-marker { display: none; }");
     expect(BASE_CSS).toContain(".rc-sources > summary > .rc-sources-count {");
+    expect(BASE_CSS).toContain("details:not([open]) > :not(summary) { display: none; }");
     const script = runtimeScript(
       "t",
       pageTheme("dark", () => ""),
     );
     expect(script).toContain("const isSourceFold =");
     expect(script).toContain("const unwrapSourceItems =");
+    expect(script).toContain('next.matches("ol.rc-sources, ul.rc-sources")');
+    expect(script).toContain('list.classList.remove("rc-sources")');
     expect(() => new Function(script)).not.toThrow();
     expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
     expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");

@@ -191,14 +191,14 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
   padding: 12px 14px; background: var(--rc-surface); border-radius: var(--rc-radius); }
 .rc-card > * { flex: 0 0 100%; min-width: 0; margin: 0; }
 .rc-card > :is(b, strong, .rc-badge, .rc-chip) { flex: 0 1 auto; }
-.rc-card > :is(b, strong):first-child { font-weight: 600; flex: 1 1 0; }
+.rc-card > :is(b, strong):first-child { font-weight: 600; flex: 1 1 min(100%, 11ch); overflow-wrap: break-word; }
 /* A tinted card, stat or titled item leads with a dot in its tint, so status reads on the title
    while the surface stays calm monochrome. */
 :is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before,
 .rc-stat:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > .rc-stat-label::before {
   content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%;
   background: var(--rc-tint); vertical-align: middle; }
-.rc-card > .rc-badge { margin-left: auto; }
+.rc-card > .rc-badge { max-width: 100%; white-space: normal; overflow-wrap: break-word; }
 .rc-card > .rc-badge:not(.rc-ok, .rc-warn, .rc-bad, .rc-info) { --rc-tint: initial; }
 .rc-card > :is(p, .rc-lead) { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
 .rc-card > .rc-stat-value { font-size: var(--rc-text-size-value); font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -242,8 +242,8 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-stats > :not(.rc-stat) > :is(.rc-label, .rc-stat-label) { order: -1; }
 .rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 
-.rc-badge { display: inline-block; padding: 0 7px; font-size: var(--rc-text-size-xs); line-height: 18px; font-weight: 500; white-space: nowrap;
-  border-radius: var(--rc-radius-pill); color: var(--rc-tint, var(--rc-muted));
+.rc-badge { display: inline-block; padding: 1px 7px; font-size: var(--rc-text-size-xs); line-height: 16px; font-weight: 500; white-space: nowrap;
+  border-radius: min(var(--rc-radius-pill), 9px); color: var(--rc-tint, var(--rc-muted));
   background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 13%, transparent); }
 .rc-callout { padding: 8px 12px; border-radius: var(--rc-radius);
   background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 10%, transparent); }
@@ -403,6 +403,7 @@ details > summary:hover::before { border-color: var(--rc-text); }
 .rc-sources > summary > .rc-sources-count { min-width: 18px; padding: 0 5px; font-size: var(--rc-text-size-xs); line-height: 16px; text-align: center;
   color: var(--rc-muted); font-variant-numeric: tabular-nums; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
 .rc-sources :is(ol, ul) { display: grid; gap: 4px; margin: 2px 0 4px; padding-left: 24px; color: var(--rc-muted); }
+details:not([open]) > :not(summary) { display: none; }
 .rc-sources li::marker { font-variant-numeric: tabular-nums; color: var(--rc-faint); }
 .rc-sources a { text-decoration: none; overflow-wrap: anywhere; }
 .rc-sources a:hover { text-decoration: underline; }
@@ -448,6 +449,7 @@ pre.rc-term { white-space: pre-wrap; }
 .rc-kv > dt, .rc-kv > dd { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--rc-separator); min-width: 0; }
 .rc-kv > dt { padding-right: 16px; color: var(--rc-muted); }
 .rc-kv > dd { font-variant-numeric: tabular-nums; }
+.rc-kv .rc-badge { max-width: 100%; white-space: normal; overflow-wrap: break-word; }
 .rc-kv > :nth-last-child(-n+2) { border-bottom: 0; }
 .rc-timeline .rc-step::before { background: var(--rc-tint, var(--rc-faint)); }
 .rc-timeline .rc-step > b { font-weight: 500; }
@@ -947,6 +949,16 @@ ${KIT_SCRIPT}
       link.classList.add("rc-github-chip");
     }
     // Coalesce adjacent bibliography folds, including :: details Sources and raw HTML forms.
+    for (const fold of document.querySelectorAll("details")) {
+      if (fold.children.length !== 1 || !fold.firstElementChild.matches("summary")) continue;
+      if (Array.from(fold.childNodes).some((node) => node.nodeType === 3 && node.textContent.trim())) continue;
+      const next = fold.nextElementSibling;
+      if (next && next.matches("ol.rc-sources, ul.rc-sources")) {
+        next.classList.remove("rc-sources");
+        fold.classList.add("rc-sources");
+        fold.append(next);
+      }
+    }
     const SOURCE_TITLE = /^sources?(?:\\s*[:·-]?\\s*\\(?\\d+\\)?)?$/i;
     const summaryLabel = (summary) => Array.from(summary.childNodes)
       .filter((node) => !(node instanceof Element && node.matches(".rc-sources-count, .rc-muted, .rc-label")))
@@ -957,7 +969,15 @@ ${KIT_SCRIPT}
       if (!fold || !fold.matches("details")) return false;
       const summary = fold.firstElementChild;
       if (!summary || !summary.matches("summary")) return false;
-      return fold.classList.contains("rc-sources") || SOURCE_TITLE.test(summaryLabel(summary));
+      if (fold.classList.contains("rc-sources") || SOURCE_TITLE.test(summaryLabel(summary))) return true;
+      if (fold.children.length !== 2 || !fold.children[1].matches("ol, ul")) return false;
+      const list = fold.children[1];
+      if (list.classList.contains("rc-sources")) return true;
+      const rows = Array.from(list.children);
+      return rows.length > 0 && rows.every((row) =>
+        row.matches("li") && row.querySelectorAll("a[href]").length === 1 &&
+        row.textContent.trim() === row.querySelector("a[href]").textContent.trim()
+      );
     };
     const unwrapSourceItems = (fold) => {
       const rows = [];
@@ -1017,6 +1037,7 @@ ${KIT_SCRIPT}
         primary.append(list);
       } else {
         list.classList.remove("rc-list");
+        list.classList.remove("rc-sources");
       }
       for (const child of Array.from(primary.children).slice(1)) {
         if (child !== list) child.remove();
