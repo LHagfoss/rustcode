@@ -1536,6 +1536,11 @@ impl ExternalSession {
                 .map(|account| account.resolved_dir())
                 .as_deref(),
         );
+        let skills_note = if orchestrator.is_some() {
+            crate::orchestration::memory_tools::with_note(skills_note, &self.cwd)
+        } else {
+            skills_note
+        };
         Ok(StartOptions {
             resume: record.native_session_id.clone(),
             account,

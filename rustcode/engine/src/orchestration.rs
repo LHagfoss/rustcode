@@ -32,6 +32,7 @@ pub(crate) mod local_threads;
 pub(crate) mod local_wake;
 mod mcp_names;
 pub mod mcp_server;
+pub(crate) mod memory_tools;
 pub mod outside;
 pub mod outside_http;
 pub mod outside_hub;
