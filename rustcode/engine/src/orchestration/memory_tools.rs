@@ -16,7 +16,8 @@ use super::tool_socket::CallAnswer;
 pub(super) const TOOL_NAMES: [&str; 3] = ["remember", "recall_memory", "forget_memory"];
 
 /// The most the memory line adds to an external thread's instructions.
-pub(crate) const MAX_NOTE_BYTES: usize = 240;
+#[cfg(test)]
+const MAX_NOTE_BYTES: usize = 240;
 
 pub(super) fn is_tool(tool: &str) -> bool {
     TOOL_NAMES.contains(&tool)
