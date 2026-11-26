@@ -406,7 +406,7 @@ pub fn parse_port_labels_json(raw: &str) -> BTreeMap<u16, String> {
 
 fn load_project_port_labels(cwd: &Path) -> BTreeMap<u16, String> {
     let mut roots = vec![cwd.to_path_buf()];
-    if let Ok(repo) = crate::worktrees::repo_root(cwd)
+    if let Some(repo) = crate::worktrees::repo_of(cwd)
         && repo != cwd
     {
         roots.push(repo);
