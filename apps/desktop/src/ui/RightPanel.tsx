@@ -2,14 +2,12 @@
 // views it opens, Changes, Pull requests and the beside thread, each with a way
 // back. Every tab and every thread share one width,
 // so switching tabs or threads never moves the card's edge or the chat beside
-// it. Every view draws on one surface, the chat's own dark ground with a
-// hairline edge, the window's whole height: on a wide window it rises over the
-// header's right end and carries the panel's toggle itself (ui/PanelToggle.tsx),
-// and the header's controls stand clear of it. The card floats over the chat's row: the
-// transcript keeps the row's full width (its scrollbar stays at the window's
-// edge) and pads its lane by the room the card takes, published on the row as
-// `--rc-panel-room`, so the lane stays centred in what is left. A narrow window
-// opens it as a sheet over a scrim instead.
+// it. The card is a second card beside the chat's, on the same ground with the
+// same edge and corners, the window's whole height: it renders into the slot
+// after the main card (`PANEL_SLOT_ID`, App.tsx), so the chat's card narrows
+// as it opens instead of being drawn over, and it carries the panel's toggle
+// itself (ui/PanelToggle.tsx). A narrow window opens it as a sheet over a
+// scrim instead.
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
@@ -28,15 +26,24 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
 import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
-import { ChevronLeft } from "./icons";
+import {
+  CircleDot,
+  GitCompareArrows,
+  GitPullRequest,
+  Globe,
+  Info,
+  type LucideIcon,
+  MessagesSquare,
+} from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
 import { PanelToggle, useCardOverHeader } from "./PanelToggle";
-import { cx, Segments, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -63,14 +70,12 @@ const STEP_LARGE = 96;
 export const SHEET_AT = PANEL_SHEET_AT;
 /** The width the card is kept under: one for every tab and thread. */
 const KEY = "rustcode.rightPanelWidth";
-/** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
-const CARD_GAP = 12;
-/** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
-const HANDLE = 8;
-/** The surface the right panel's card is drawn on, whichever tab it shows. */
-const CARD_SURFACE = "rc-panel-card rounded-2xl";
-/** The row is told when the card's width moves with it, so the lane's padding follows in step. */
-const MOVING = "rc-panel-moving";
+/** The gap the card keeps from the window's edges and from the chat's card: the main card's own margin. */
+const CARD_GAP = 8;
+/** The surface the right panel's card is drawn on, whichever tab it shows: the chat card's own. */
+const CARD_SURFACE = "rc-panel-card";
+/** The element after the main card the docked panel renders into (App.tsx). */
+export const PANEL_SLOT_ID = "rc-panel-slot";
 /**
  * A sheet is opaque: it opens over a scrim that is already blurred, and one filter never stacks on
  * another. It sits on the chat's own `bg-bg`, as the settings panel does, so a card or a picture
@@ -152,6 +157,39 @@ function headerToggle(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-panel-toggle]");
 }
 
+interface PanelTab {
+  kind: Kind;
+  label: string;
+  icon: LucideIcon;
+}
+
+/** One view's tab: its icon alone, and its name beside it while it is the one showing. */
+function PanelTabButton({ tab, active, onSelect }: { tab: PanelTab; active: boolean; onSelect: () => void }) {
+  const Icon = tab.icon;
+  if (active) {
+    return (
+      <Pill role="tab" aria-selected aria-label={tab.label} onClick={onSelect}>
+        <Icon size={14} />
+        <span className="truncate">{tab.label}</span>
+      </Pill>
+    );
+  }
+  return (
+    <Tooltip label={tab.label}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={false}
+        aria-label={tab.label}
+        onClick={onSelect}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+      >
+        <Icon size={14} />
+      </button>
+    </Tooltip>
+  );
+}
+
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
   // A side chat opened beside this thread gives its tab that name.
@@ -163,13 +201,11 @@ export function RightPanel() {
   const [shown, setShown] = useState<Kind | null>(panel);
   const [width, setWidth] = useState(storedWidth);
   const [viewport, setViewport] = useState(() => window.innerWidth);
-  // The row the card shares with the chat, measured on the column that holds it; 0
-  // until the first measurement, when the stored width stands as it is.
+  // The room the chat's card and this one share, measured on both; 0 until the first
+  // measurement, when the stored width stands as it is.
   const [row, setRow] = useState(0);
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
   const dock = useRef<HTMLDivElement>(null);
-  // The row the card floats over, which carries `--rc-panel-room` for the chat's lane.
-  const rowEl = useRef<HTMLElement | null>(null);
-  const stopRow = useRef<(() => void) | null>(null);
   // The surface that is showing, and the element that had the focus before it opened.
   const surface = useRef<HTMLElement>(null);
   const restoreTo = useRef<HTMLElement | null>(null);
@@ -179,6 +215,23 @@ export function RightPanel() {
   useEffect(() => {
     if (panel) setShown(panel);
   }, [panel]);
+
+  useEffect(() => setSlot(document.getElementById(PANEL_SLOT_ID)), []);
+
+  // The chat's card is the row's flexible part and this one's slot takes what the card asks, so
+  // together they are always the room the two share, whatever the card's width does.
+  useEffect(() => {
+    const main = slot?.previousElementSibling;
+    if (!slot || !(main instanceof HTMLElement)) return;
+    const measure = () => setRow(main.offsetWidth + slot.offsetWidth);
+    measure();
+    const stopMain = observeSize(main, measure);
+    const stopSlot = observeSize(slot, measure);
+    return () => {
+      stopMain();
+      stopSlot();
+    };
+  }, [slot]);
 
   useEffect(() => {
     const onResize = () => setViewport(window.innerWidth);
@@ -209,30 +262,11 @@ export function RightPanel() {
   // snap the card back to the width it started from.
   useLayoutEffect(() => {
     publish(drag.current?.live ?? card);
-    rowEl.current?.classList.toggle(MOVING, motion.enabled && !drag.current);
   });
 
-  // The card and the chat share the row: the panel draws no wider than the room
-  // the chat leaves it. The observer watches the row, which the card's own width
-  // never changes, so measuring and drawing cannot chase each other.
   const attachDock = useCallback((el: HTMLDivElement | null) => {
     dock.current = el;
-    stopRow.current?.();
-    stopRow.current = null;
-    // A sheet takes no room from the row: the lane gets its whole width back.
-    if (!el) {
-      rowEl.current?.style.removeProperty("--rc-panel-room");
-      rowEl.current?.parentElement?.style.removeProperty("--rc-panel-room");
-      rowEl.current?.classList.remove(MOVING);
-    }
-    const parent = el?.parentElement;
-    rowEl.current = parent ?? null;
-    if (!parent) return;
-    const measure = () => setRow(parent.clientWidth);
-    measure();
-    stopRow.current = observeSize(parent, measure);
   }, []);
-  useEffect(() => () => stopRow.current?.(), []);
 
   // Keyboard focus follows the panel, and never sits where it cannot be seen: a
   // shortcut opens it with nothing focused, a card closing takes the focus with
@@ -254,13 +288,8 @@ export function RightPanel() {
     restoreTo.current = null;
   }, [open, kind]);
 
-  // The card's width, and the room it takes from the chat's lane: the card, its gap and the strip
-  // its resize edge straddles, or nothing while it is closed.
   function publish(width: number) {
     dock.current?.style.setProperty("--rc-panel-width", `${width}px`);
-    const room = open ? `${width + HANDLE + CARD_GAP}px` : "0px";
-    rowEl.current?.style.setProperty("--rc-panel-room", room);
-    rowEl.current?.parentElement?.style.setProperty("--rc-panel-room", overHeader ? room : "0px");
   }
 
   const commit = (next: number) => {
@@ -284,7 +313,7 @@ export function RightPanel() {
     d.moved = d.moved || e.clientX !== d.startX;
     d.live = Math.min(Math.max(MIN, Math.round(card - (e.clientX - d.startX))), widest);
     // A drag is followed frame by frame, not eased after.
-    rowEl.current?.classList.remove(MOVING);
+    if (dock.current) dock.current.style.transition = "none";
     publish(d.live);
   };
 
@@ -293,6 +322,7 @@ export function RightPanel() {
     drag.current = null;
     if (!d) return;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (dock.current) dock.current.style.removeProperty("transition");
     if (d.moved) commit(d.live);
     else publish(card);
   };
@@ -335,52 +365,36 @@ export function RightPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, sheet]);
 
-  // Details is the panel's home: everything is on its one card. The full views it opens (the diff,
-  // the pull list, a thread beside this one) get a way back to it.
-  const titles: Record<Kind, string> = {
-    details: "Properties",
-    changes: "Changes",
-    pulls: "Pull requests",
-    issues: "Issues",
-    preview: "Preview",
-    peek: peekIsSideChat ? "Side chat" : "Thread",
-  };
-  const home = kind === "details";
+  // Every view has a tab, Thread info first; a thread opened beside this one gets one while it shows.
+  const tabs: PanelTab[] = [
+    { kind: "details", label: "Thread info", icon: Info },
+    { kind: "changes", label: "Changes", icon: GitCompareArrows },
+    { kind: "pulls", label: "Pull requests", icon: GitPullRequest },
+    { kind: "issues", label: "Issues", icon: CircleDot },
+    { kind: "preview", label: "Preview", icon: Globe },
+    ...(kind === "peek"
+      ? [{ kind: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread", icon: MessagesSquare }]
+      : []),
+  ];
 
   const contents = kind && (
     <>
-      <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-2">
-        {home ? (
-          <span className="truncate px-2 font-medium text-callout text-fg">{titles[kind]}</span>
-        ) : (
-          <>
-            <Tooltip label="Back to thread info">
-              <button
-                type="button"
-                aria-label="Back to thread info"
-                onClick={() => showPanel("details")}
-                className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
-              >
-                <ChevronLeft size={16} />
-              </button>
-            </Tooltip>
-            {kind === "pulls" || kind === "issues" ? (
-              <Segments
-                label="GitHub panel"
-                value={kind}
-                onChange={(next) => showPanel(next)}
-                options={[
-                  { value: "pulls", label: "Pull requests" },
-                  { value: "issues", label: "Issues" },
-                ]}
-              />
-            ) : (
-              <span className="truncate font-semibold text-body">{titles[kind]}</span>
-            )}
-          </>
-        )}
+      <div
+        data-tauri-drag-region
+        role="tablist"
+        aria-label="Side panel views"
+        className="flex h-11 shrink-0 items-center gap-0.5 border-separator border-b px-2"
+      >
+        {tabs.map((tab) => (
+          <PanelTabButton
+            key={tab.kind}
+            tab={tab}
+            active={tab.kind === kind}
+            onSelect={() => showPanel(tab.kind)}
+          />
+        ))}
         <span className="flex-1" data-tauri-drag-region />
-        <PanelToggle />
+        <PanelToggle iconOnly />
       </div>
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
@@ -434,20 +448,15 @@ export function RightPanel() {
     );
   }
 
-  return (
+  const docked = (
     <div
       ref={attachDock}
       aria-hidden={!open}
       inert={!open}
-      // The dock floats over the row's right edge and takes no pointer itself: the transcript under
-      // it still scrolls, and it carries no z-index, so the room above the card stays under the
-      // header (`z-10`, ui/MainHeader.tsx) and never takes a click meant for the header's
-      // right-hand controls. The card inside it is the part that rises and takes the pointer.
-      className="pointer-events-none absolute inset-y-0 right-0 flex min-h-0 justify-end overflow-clip"
+      className="flex h-full min-h-0 shrink-0 justify-end overflow-clip"
       style={
         {
-          // The card's width and the 12px gap and the strip its resize edge straddles.
-          width: open ? `calc(var(--rc-panel-width) + ${HANDLE + CARD_GAP}px)` : 0,
+          width: open ? `calc(var(--rc-panel-width) + ${CARD_GAP}px)` : 0,
           "--rc-panel-width": `${card}px`,
           ...(motion.enabled ? { transition: "width 200ms var(--ease-snappy)" } : null),
         } as CSSProperties
@@ -465,22 +474,14 @@ export function RightPanel() {
         }}
         className={cx(
           CARD_SURFACE,
-          // Every view takes the row's whole height, a floating sidebar: Details fills it (its
-          // Changes section takes what is left), and so do the diff, the pull list and a thread.
-          "self-stretch",
-          // Above the header's glass (`z-10`): the card rises over the header's right end, which
-          // stands its own controls clear of it (`--rc-panel-room`, ui/MainHeader.tsx).
-          "relative z-20 flex flex-col overflow-hidden outline-none transition-opacity duration-200",
-          open ? "pointer-events-auto opacity-100" : "opacity-0",
+          "relative flex shrink-0 flex-col self-stretch overflow-hidden outline-none transition-opacity duration-200",
+          open ? "opacity-100" : "opacity-0",
         )}
         style={{
           width: "var(--rc-panel-width)",
           marginTop: top,
           marginRight: CARD_GAP,
-          // Fit to the content, capped by the window alone: the card may run down to 12px above the
-          // window's bottom edge, whatever the composer or anything else in the chat is doing.
           marginBottom: CARD_GAP,
-          maxHeight: `calc(100% - ${top + CARD_GAP}px)`,
         }}
       >
         {contents}
@@ -502,15 +503,16 @@ export function RightPanel() {
             onLostPointerCapture={onResizeEnd}
             onDoubleClick={() => commit(panelWidth(DEFAULT_WIDTH, viewport, row))}
             onKeyDown={onResizeKey}
-            className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none select-none outline-none keyboard:focus-visible:bg-focus/20"
+            className="group absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize touch-none select-none outline-none keyboard:focus-visible:bg-focus/20"
           >
             <span
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover:bg-fill-strong keyboard:group-focus-visible:bg-focus"
+              className="pointer-events-none absolute inset-y-0 left-0 w-px bg-transparent group-hover:bg-fill-strong keyboard:group-focus-visible:bg-focus"
             />
           </div>
         )}
       </aside>
     </div>
   );
+  return slot ? createPortal(docked, slot) : docked;
 }

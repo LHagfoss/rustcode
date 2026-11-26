@@ -137,8 +137,8 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
 }
 
 /**
- * The side panel's toggle, "Thread info". While the panel is open the card rises over the header
- * and carries the toggle itself (ui/PanelToggle.tsx), so the header leaves it out.
+ * The side panel's toggle, "Thread info". While the panel is open its card carries the toggle at
+ * its own top (ui/PanelToggle.tsx), so the header leaves it out.
  */
 function DetailsHeaderButton() {
   const open = useApp((s) => !!s.panel);
@@ -721,10 +721,8 @@ export function ChatView() {
       {!showsBanner && (isNew || (showsPending && !thread)) && <NewThreadLight />}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
-        The right panel's card floats over the chat's row: the column keeps the row's whole
-        width, so the transcript's scrollbar stays at the window's edge, and the lane pads by
-        the room the card takes (`--rc-panel-room`) and re-centres in what is left.
-        The header floats above both, over the row.
+        The right panel draws as a card of its own beside this one (ui/RightPanel.tsx), so the
+        column keeps its card's whole width. The header floats above it, over the row.
       */}
       <div className="relative flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
