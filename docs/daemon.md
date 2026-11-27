@@ -244,6 +244,29 @@ login while named accounts exist.
   the command that signs it in, and the job pauses after that one run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
+### Director
+
+A Director is a job with `director` set (the editor's **Director** template
+or toggle) that keeps the project's other threads moving. Before each run the
+daemon asks the running app (`_rustcode/director/next`,
+`rustcode/engine/src/director.rs`) for one thread of the job's project that
+stopped: not working, not waiting on the user, not in review, settled,
+snoozed, a job's run, a delegate or a side chat; stopped at least 3 minutes
+and at most 24 hours ago; and changed since the Director last saw it. A
+thread whose first reply never came goes first, then the most recent stop.
+With none, or with the app closed, the run is quiet with no thread ("No
+thread stopped") and costs no tokens. Otherwise the thread's id, title, age
+and how often the Director checked it before are appended to the prompt.
+
+The template's prompt (`apps/desktop/src/state/director.ts`) reads the
+thread with `read_thread` and `thread_status`, sends one short message with
+`message_thread` when the next move is obvious, and leaves real decisions to
+the user. It runs hourly at full access, since a read-only run declines its
+messages. What it last saw of each thread is kept in `director.json` in the
+config folder for a week, so a thread is handed to it once per stop. A job
+that runs on another machine cannot be a Director: the daemon asks this
+computer's app, which lists only this computer's threads.
+
 ### Workflow jobs (the `workflow` action)
 
 A job can run a saved workflow instead of a prompt (#4443): wire action

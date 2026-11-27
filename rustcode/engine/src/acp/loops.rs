@@ -89,6 +89,11 @@ pub(crate) struct LoopsSaveRequest {
     /// Set from the app's editor only, never by an agent's `create_loop`.
     #[serde(default)]
     pub script: Option<String>,
+    /// A Director: each run checks one stopped thread of the project
+    /// (`crate::director`), and none starts no agent turn. Set from the
+    /// app's editor only.
+    #[serde(default)]
+    pub director: bool,
     /// Start a run when the Loop's webhook URL is called. Set from the app's
     /// editor only, never by an agent's `create_loop`.
     #[serde(default)]
@@ -250,6 +255,7 @@ pub(crate) fn loop_json_with_usage(
         read_only,
         thread_id,
         script,
+        director,
         webhook,
         webhook_events,
         machine,
@@ -272,6 +278,7 @@ pub(crate) fn loop_json_with_usage(
         "readOnly": read_only,
         "threadId": thread_id,
         "script": script,
+        "director": director,
         "webhook": webhook.is_some(),
         "webhookEvents": webhook_events,
         "machine": machine,
@@ -504,6 +511,11 @@ pub(crate) fn job_from(
                     "a Loop that runs on {machine} takes no script: the script would run on this computer"
                 ));
             }
+            if request.director {
+                return Err(format!(
+                    "a Director checks this computer's threads, so it cannot run on {machine}"
+                ));
+            }
         }
         None if !workspace.is_absolute() || !workspace.is_dir() => {
             return Err(format!("{} is not a project folder", request.workspace));
@@ -521,6 +533,7 @@ pub(crate) fn job_from(
         read_only: request.read_only,
         thread_id: trimmed(request.thread_id),
         script,
+        director: request.director,
         webhook,
         webhook_events,
         machine,
@@ -782,6 +795,7 @@ pub(crate) async fn patch(
             read_only: old_read_only,
             thread_id: old_thread_id,
             script: old_script,
+            director: old_director,
             webhook: old_webhook,
             webhook_events: old_webhook_events,
             machine: old_machine,
@@ -830,6 +844,7 @@ pub(crate) async fn patch(
             read_only: read_only.unwrap_or(old_read_only),
             thread_id: next_thread,
             script: old_script,
+            director: old_director,
             webhook: old_webhook.is_some(),
             webhook_events: old_webhook_events,
             rotate_webhook: false,
@@ -923,6 +938,7 @@ mod tests {
             read_only: true,
             thread_id: None,
             script: None,
+            director: false,
             webhook: false,
             webhook_events: Vec::new(),
             rotate_webhook: false,

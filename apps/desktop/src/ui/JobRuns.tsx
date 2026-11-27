@@ -64,7 +64,7 @@ export function averageRunDuration(runs: readonly LoopRun[]): string | null {
 /** What one run did, in a few words. */
 export function runText(run: LoopRun): string {
   if (run.state === "succeeded") {
-    if (run.silent) return "Script printed nothing";
+    if (run.silent) return run.verdict ?? "Script printed nothing";
     if (run.queued) return `Waiting for ${run.machine ?? "its machine"} (offline)`;
     if (run.machine) return `Started on ${run.machine}`;
     if (run.quiet) return "Nothing to report";

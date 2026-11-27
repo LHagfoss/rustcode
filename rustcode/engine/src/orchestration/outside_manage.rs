@@ -170,6 +170,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         read_only: args["read_only"].as_bool().unwrap_or(true),
         thread_id,
         script: None,
+        director: false,
         // A webhook is turned on in the app, where its URL is shown once.
         webhook: false,
         webhook_events: Vec::new(),

@@ -1189,7 +1189,9 @@ composer's keys stay outside the table.
 - **Jobs**. The sidebar's *Jobs* row (and ⌘K › *Show Jobs*) opens
   `ui/Loops.tsx`: prompts the scheduler daemon runs once, on a schedule,
   manually, or from a webhook, each run in a fresh thread or one chosen thread
-  (`docs/daemon.md` › Jobs). Each card puts the job's name, project, schedule
+  (`docs/daemon.md` › Jobs). The **Director** template makes a job that checks
+  one stopped thread of its project each hour and messages it when the next
+  move is obvious (`docs/daemon.md` › Director). Each card puts the job's name, project, schedule
   and latest outcome/verdict first with calm next-run timing underneath, and
   expands across the full row header to show the prompt, pre-check script,
   agent/access/timezone chips and timestamped run history with durations;

@@ -263,6 +263,7 @@ export class MockLoops {
       account: str(params.account) ?? null,
       threadId: str(params.threadId) ?? null,
       script: str(params.script) ?? null,
+      director: params.director === true,
       model: str(params.model) ?? null,
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,

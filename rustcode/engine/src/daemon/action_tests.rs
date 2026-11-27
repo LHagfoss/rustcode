@@ -867,6 +867,7 @@ fn loop_action() -> JobAction {
         read_only: true,
         thread_id: None,
         script: None,
+        director: false,
         webhook: None,
         webhook_events: Vec::new(),
         machine: None,
@@ -1262,4 +1263,26 @@ fn a_workflow_job_run_ends_with_the_workflow_run() {
         })),
         RunOutcome::Permanent { error, .. } if error.contains("/p/.rustcode/workflows/triage.js")
     ));
+}
+
+#[test]
+fn a_director_with_no_stopped_thread_starts_no_turn() {
+    let value = serde_json::to_value(loop_action()).unwrap();
+    assert!(value.get("director").is_none(), "{value}");
+    let director: JobAction = serde_json::from_value(json!({
+        "type": "loop", "prompt": "Direct", "workspace": "/tmp", "director": true
+    }))
+    .unwrap();
+    assert!(matches!(director, JobAction::Loop { director: true, .. }));
+    let RunOutcome::Succeeded {
+        summary,
+        output: Some(output),
+    } = quiet_director_run()
+    else {
+        panic!("a quiet Director run succeeds");
+    };
+    assert_eq!(summary, NO_STOPPED_THREAD);
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["silent"], true);
+    assert_eq!(output["verdict"], NO_STOPPED_THREAD);
 }
