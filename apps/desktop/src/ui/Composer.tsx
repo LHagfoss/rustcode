@@ -94,7 +94,6 @@ import {
   PlusMenu,
   WorktreeToggle,
 } from "./ComposerFooter";
-import { ChangesChip, RunningNote } from "./ComposerStrip";
 import { UsageMeter } from "./ComposerUsage";
 import {
   ALL_MATCHES,
@@ -1392,11 +1391,7 @@ export const Composer = memo(function Composer({
             </Tooltip>
           )}
         </div>
-        <div className="flex min-w-0 flex-1 justify-center">
-          {thread && <RunningNote threadId={thread.id} />}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {thread && <ChangesChip threadId={thread.id} />}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <PermissionMenu threadId={thread?.id} cwd={thread ? undefined : cwd} compact={compact} />
           <span className="flex h-7 shrink-0 items-center empty:hidden">
             <UsageMeter threadId={thread?.id} />
