@@ -27,6 +27,7 @@ import {
   type Loop,
   type LoopHubMember,
   loadReviewed,
+  loopNeedsAttention,
   loopState,
   rememberLoops,
   reviewItems,
@@ -227,7 +228,7 @@ export function Loops() {
   const upcoming: Loop[] = [];
   const inactive: Loop[] = [];
   for (const loop of loops) {
-    if (loopState(loop) === "failing") attention.push(loop);
+    if (loopNeedsAttention(loop)) attention.push(loop);
     else if (
       loopState(loop) === "running" ||
       (!loop.paused && loop.nextDueAt !== undefined) ||

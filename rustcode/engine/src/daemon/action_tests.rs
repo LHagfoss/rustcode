@@ -953,11 +953,12 @@ async fn a_loop_run_reaches_the_backend_titled_with_the_loops_name() {
 
 #[test]
 fn a_loop_run_records_its_thread_and_skip_reason() {
-    use crate::orchestration::local_threads::LoopRunEnd;
+    use crate::orchestration::local_threads::{LoopRunEnd, VerdictKind};
     match loop_outcome(LoopRunEnd::Finished {
         thread_id: "t-1".into(),
         quiet: false,
         verdict: None,
+        outcome: None,
     }) {
         RunOutcome::Succeeded { output, .. } => {
             assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-1"}"#));
@@ -968,13 +969,38 @@ fn a_loop_run_records_its_thread_and_skip_reason() {
         thread_id: "t-5".into(),
         quiet: false,
         verdict: Some("CI broke on main: test_x fails.".into()),
+        outcome: Some(VerdictKind::Attention),
     }) {
         RunOutcome::Succeeded { summary, output } => {
             assert_eq!(summary, "CI broke on main: test_x fails.");
             let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
             assert_eq!(
                 output,
-                json!({"thread_id": "t-5", "verdict": "CI broke on main: test_x fails."})
+                json!({
+                    "thread_id": "t-5",
+                    "outcome": "attention",
+                    "verdict": "CI broke on main: test_x fails."
+                })
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match loop_outcome(LoopRunEnd::Finished {
+        thread_id: "t-7".into(),
+        quiet: false,
+        verdict: Some("daily-dev MCP is not connected".into()),
+        outcome: Some(VerdictKind::Blocked),
+    }) {
+        RunOutcome::Succeeded { summary, output } => {
+            assert_eq!(summary, "daily-dev MCP is not connected");
+            let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
+            assert_eq!(
+                output,
+                json!({
+                    "thread_id": "t-7",
+                    "outcome": "blocked",
+                    "verdict": "daily-dev MCP is not connected"
+                })
             );
         }
         other => panic!("{other:?}"),
@@ -983,6 +1009,7 @@ fn a_loop_run_records_its_thread_and_skip_reason() {
         thread_id: "t-3".into(),
         quiet: true,
         verdict: None,
+        outcome: None,
     }) {
         RunOutcome::Succeeded { summary, output } => {
             assert!(summary.contains("nothing"));

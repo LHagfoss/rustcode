@@ -10,6 +10,7 @@ import { projectName } from "../acp/types";
 import { runThreadKey } from "../state/fleetLoops";
 import {
   cancelLoopRun,
+  isBlockedRun,
   type Loop,
   loopState,
   nextRunText,
@@ -61,6 +62,9 @@ function OverviewStatusChip({ loop }: { loop: Loop }) {
   }
   if (state === "paused") {
     return <span className={cx(base, "bg-fill text-fg-muted")}>Paused</span>;
+  }
+  if (isBlockedRun(loop.runs[0])) {
+    return <span className={cx(base, "bg-warning/14 text-warning")}>Blocked</span>;
   }
   if (loop.schedule.kind === "manual" && loop.webhook) {
     return (

@@ -142,13 +142,29 @@ fn title_line(line: &str) -> &str {
     line.trim_start()
 }
 
+fn scheduled_job_title(line: &str) -> Option<&str> {
+    const PREFIX: &str = "This is a scheduled run of the job ";
+    let rest = line.strip_prefix(PREFIX)?;
+    let (inner, close) = if let Some(inner) = rest.strip_prefix('“') {
+        (inner, '”')
+    } else if let Some(inner) = rest.strip_prefix('"') {
+        (inner, '"')
+    } else {
+        return None;
+    };
+    let end = inner.find(close)?;
+    let name = inner[..end].trim();
+    (!name.is_empty()).then_some(name)
+}
+
 fn title_from_prompt(content: &str) -> String {
     let text = unwrap_title_paste_markers(content);
-    let title = text
+    let first = text
         .lines()
         .map(title_line)
         .find(|line| !line.is_empty())
         .unwrap_or("");
+    let title = scheduled_job_title(first).unwrap_or(first);
     if title.chars().count() > MAX_AUTOMATIC_TITLE_CHARS {
         let prefix: String = title.chars().take(MAX_AUTOMATIC_TITLE_CHARS - 3).collect();
         let prefix = prefix
@@ -2706,6 +2722,13 @@ mod tests {
         assert_eq!(
             store.load_session_title("fallback").as_deref(),
             Some("Explicit title")
+        );
+        assert_eq!(
+            SessionStore::session_title(&[message(
+                "user",
+                "This is a scheduled run of the job “Check ParalX Chats”. Nobody is watching it run.\n\nCheck chats"
+            )]),
+            "Check ParalX Chats"
         );
     }
 

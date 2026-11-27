@@ -1288,11 +1288,13 @@ async fn dispatch_request(
                 return connection.spawn(async move {
                     match harnesses::new_session(&external, request, asked, &peer, &remote).await {
                         Ok(response) => {
+                            let session_id = response.session_id.to_string();
+                            let title = crate::sessions::load_session_title(&session_id);
                             announced.announce_thread_created(ThreadCreatedNotification {
                                 meta: None,
-                                session_id: response.session_id.to_string(),
+                                session_id,
                                 cwd: cwd.clone(),
-                                title: None,
+                                title,
                                 harness,
                                 model: None,
                             });
@@ -1307,11 +1309,13 @@ async fn dispatch_request(
                 });
             }
             let response = create_builtin_session(&server, &peer, request).await?;
+            let session_id = response.session_id.to_string();
+            let title = crate::sessions::load_session_title(&session_id);
             server.announce_thread_created(ThreadCreatedNotification {
                 meta: None,
-                session_id: response.session_id.to_string(),
+                session_id,
                 cwd,
-                title: None,
+                title,
                 harness: Some(crate::harness::BUILTIN_ID.to_owned()),
                 model: None,
             });

@@ -10,11 +10,13 @@ import {
   formOfCron,
   formProblem,
   groupReview,
+  isBlockedRun,
   isJobRunThread,
   type Loop,
   type LoopRun,
   lastResult,
   loopIdsByThread,
+  loopNeedsAttention,
   loopRunThreads,
   loopState,
   loopThreadNames,
@@ -27,6 +29,7 @@ import {
   runTimestampText,
   saveParams,
   scheduleInWords,
+  stripInlineMarkdown,
   timeZoneChoices,
   webhookOf,
   withRunAccount,
@@ -261,6 +264,63 @@ describe("reviewItems", () => {
 
   test("a reviewed run leaves the list", () => {
     expect(reviewItems(loops, isOpen, new Set(["open"]), NOW).map((item) => item.run.id)).toEqual(["failed"]);
+  });
+
+  test("clear runs stay out of review while repeated blocked runs collapse into one row", () => {
+    const structured = [
+      loop({
+        id: "daily-dev",
+        runs: [
+          run("b2", "succeeded", 1, { outcome: "blocked", verdict: "daily-dev MCP unavailable" }),
+          run("b1", "succeeded", 25, { outcome: "blocked", verdict: "daily-dev MCP unavailable" }),
+          run("c1", "succeeded", 48, { outcome: "clear", verdict: "All checks green", threadId: "t-clear" }),
+        ],
+      }),
+    ];
+    const items = reviewItems(structured, () => true, new Set(), NOW);
+    expect(items.map((item) => [item.run.id, item.kind])).toEqual([
+      ["b2", "blocked"],
+      ["b1", "blocked"],
+    ]);
+    const grouped = groupReview(items);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.runIds).toEqual(["b2", "b1"]);
+    expect(isBlockedRun(structured[0]?.runs[0])).toBe(true);
+    expect(loopNeedsAttention(structured[0]!)).toBe(true);
+    expect(lastResult(structured[0]!, NOW)).toEqual({
+      text: "Blocked: daily-dev MCP unavailable · 1 h ago",
+      tone: "warn",
+    });
+  });
+
+  test("stripInlineMarkdown cleans legacy bold, code, and links in verdicts", () => {
+    expect(
+      stripInlineMarkdown("Two things: **HEI ads** failed on `prod.log` ([link](https://example.com))"),
+    ).toBe("Two things: HEI ads failed on prod.log (link)");
+    const parsed = parseLoops({
+      daemonRunning: true,
+      loops: [
+        {
+          id: "l1",
+          name: "Check",
+          runs: [
+            {
+              id: "r1",
+              state: "succeeded",
+              outcome: "attention",
+              verdict: "Budget hit **3M tokens** on `main`",
+              tokens: 3_000_000,
+              costUsd: 1.42,
+            },
+          ],
+        },
+      ],
+    });
+    const first = parsed.loops[0]?.runs[0];
+    expect(first?.verdict).toBe("Budget hit 3M tokens on main");
+    expect(first?.outcome).toBe("attention");
+    expect(first?.tokens).toBe(3_000_000);
+    expect(first?.costUsd).toBe(1.42);
   });
 });
 
