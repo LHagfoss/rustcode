@@ -270,6 +270,7 @@ export function PermissionMenu({
     <CardPopover
       role="menu"
       label="Permissions"
+      side="top"
       tooltip={`${current.label} · ${current.detail}${own ? "" : " (the default)"}`}
       onKeyDown={menuKeys}
       className="w-[280px]"
