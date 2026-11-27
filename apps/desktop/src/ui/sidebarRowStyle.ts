@@ -8,7 +8,8 @@ export const SIDEBAR_ROW_RADIUS = "rounded-lg";
 export const SIDEBAR_ROW_HOVER = "hover:bg-fill active:bg-fill-strong";
 
 /** The same hover fill, for a fill layer inside a `group` row. */
-export const SIDEBAR_ROW_GROUP_HOVER = "group-hover:bg-fill group-hover:glass-filter group-active:bg-fill-strong";
+export const SIDEBAR_ROW_GROUP_HOVER =
+  "group-hover:bg-fill group-hover:glass-filter group-active:bg-fill-strong";
 
 /** The fill of the row that is open: the current view or the selected thread. */
 export const SIDEBAR_ROW_CURRENT = "bg-fill-strong glass-filter";
