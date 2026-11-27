@@ -52,6 +52,7 @@ describe("the registry's overridable flag", () => {
       "default-permission-mode",
       "resume-after-restart",
       "continue-after-limit",
+      "merge-when-green",
       "auto-compact-mode",
       "auto-compact-threshold",
     ])

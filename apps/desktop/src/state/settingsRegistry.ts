@@ -117,6 +117,7 @@ export type ServerSettingKey =
   | "default-permission-mode"
   | "resume-after-restart"
   | "continue-after-limit"
+  | "merge-when-green"
   | "auto-compact-mode"
   | "auto-compact-threshold"
   | "orchestration"
@@ -160,6 +161,12 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
     label: "Continue threads on their own",
     type: "boolean",
     default: true,
+  },
+  {
+    key: "merge-when-green",
+    label: "Merge pull requests when checks pass",
+    type: "boolean",
+    default: false,
   },
   { key: "auto-compact-mode", label: "Auto-compact", type: "text", default: "size" },
   {
@@ -436,6 +443,7 @@ export const PROJECT_SETTING_KEYS = [
   "default-permission-mode",
   "resume-after-restart",
   "continue-after-limit",
+  "merge-when-green",
   "auto-compact-mode",
   "auto-compact-threshold",
 ] as const;

@@ -77,6 +77,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Merge pull requests when checks pass",
+    keywords: "merge auto-merge automerge green ci checks pull request pr squash settle worktree ship",
+  },
+  {
+    section: "general",
     title: "Auto-compact",
     keywords: "compact compaction context tokens threshold cache prompt cache idle claude codex",
   },

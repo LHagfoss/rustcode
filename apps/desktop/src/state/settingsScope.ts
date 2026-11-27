@@ -218,6 +218,7 @@ function localValues(): Record<ServerSettingKey, Json> {
     "default-permission-mode": state.defaultPermissionMode,
     "resume-after-restart": state.resumeAfterRestart,
     "continue-after-limit": state.continueAfterLimit,
+    "merge-when-green": false,
     "auto-compact-mode": state.autoCompact.mode,
     "auto-compact-threshold": state.autoCompact.threshold,
     orchestration: state.orchestration,

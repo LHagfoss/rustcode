@@ -50,6 +50,11 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("default-permission-mode", SettingType::Text, json!("ask")),
             ("resume-after-restart", SettingType::Boolean, json!(true)),
             ("continue-after-limit", SettingType::Boolean, json!(true)),
+            (
+                crate::pull_auto_merge::SETTING,
+                SettingType::Boolean,
+                json!(false),
+            ),
             ("auto-compact-mode", SettingType::Text, json!("size")),
             (
                 "auto-compact-threshold",
@@ -100,6 +105,7 @@ pub(crate) const PROJECT_KEYS: &[&str] = &[
     "default-permission-mode",
     "resume-after-restart",
     "continue-after-limit",
+    "merge-when-green",
     "auto-compact-mode",
     "auto-compact-threshold",
 ];
@@ -429,6 +435,10 @@ fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
         "default-permission-mode" => ("Default access", Some(&["ask", "edits", "full"])),
         "resume-after-restart" => ("Continue threads after a restart", None),
         "continue-after-limit" => ("Continue threads on their own after a usage limit", None),
+        "merge-when-green" => (
+            "Merge a worktree thread's pull request when its checks pass",
+            None,
+        ),
         "auto-compact-mode" => ("Auto-compact", Some(&["off", "size", "cache"])),
         "auto-compact-threshold" => ("Auto-compact threshold, in tokens", None),
         "orchestration" => ("Threads can start and message other threads", None),

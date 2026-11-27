@@ -1835,7 +1835,7 @@ pub(super) async fn dispatch_request(
                 )
             };
             responder.respond(match started {
-                Ok(watch) => serde_json::json!({ "watch": watch }),
+                Ok(watch) => crate::pull_auto_merge::linked(watch),
                 Err(message) => {
                     serde_json::json!({ "error": { "code": "failed", "message": message } })
                 }

@@ -120,6 +120,7 @@ export class MockEngine {
     "default-permission-mode": "ask",
     "resume-after-restart": true,
     "continue-after-limit": true,
+    "merge-when-green": false,
     "auto-compact-mode": "size",
     "auto-compact-threshold": 150_000,
     orchestration: true,

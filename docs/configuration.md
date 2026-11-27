@@ -615,7 +615,7 @@ accepts `"keys"` and also answers `"stored"`, the keys the file actually
 holds). The engine refuses a key outside its registry, so the file
 cannot become a general store over ACP. The keys are
 `default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
-`auto-compact-mode`, `auto-compact-threshold`, `orchestration`,
+`merge-when-green` (off by default; see below), `auto-compact-mode`, `auto-compact-threshold`, `orchestration`,
 `delegates-total`, `delegates-per-thread`, `read-across-projects`,
 `delegate-presets` (a list, see [orchestrator.md](orchestrator.md) › Delegate
 presets), `limit-fallback` (off by default), `limit-fallback-map` (a list,
@@ -656,8 +656,17 @@ with the project's `model`), `voice` (project-only: `{ "generator"?, "model"?,
 "language"?, "cleanup"? }` over the app's Voice settings; `"generator": null`
 turns dictation off there),
 `default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
-`auto-compact-mode` and `auto-compact-threshold` may be overridden; any other
-key is refused. A file written before projects existed reads unchanged.
+`merge-when-green`, `auto-compact-mode` and `auto-compact-threshold` may be
+overridden; any other key is refused.
+
+`merge-when-green` (Settings › General › *Merge pull requests when checks
+pass*): when a worktree thread opens a pull request and RustCode links it, the
+engine waits for every check except the advisory ones and squash-merges it, as
+`merge_when_green` does (`rustcode/engine/src/pull_auto_merge.rs`). The link
+tells the thread the outcome, and the merge settles the thread and removes its
+worktree. After a failing check it waits up to two hours for a new head (the
+thread's fix) and tries again, three times at most. A thread in the main
+checkout is never merged on its own. A file written before projects existed reads unchanged.
 
 The engine watches the file and sends `_rustcode/settings/changed` (the same
 answer as `get` with no keys) to every client that read or wrote settings when

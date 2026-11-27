@@ -15,6 +15,7 @@ export const MOCK_PROJECT_KEYS = [
   "default-permission-mode",
   "resume-after-restart",
   "continue-after-limit",
+  "merge-when-green",
   "auto-compact-mode",
   "auto-compact-threshold",
 ];
