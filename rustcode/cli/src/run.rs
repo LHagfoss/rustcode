@@ -965,6 +965,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Agent(command)) = cli_args.command.as_ref() {
+        std::process::exit(crate::agent_command::run(command).await);
+    }
     if let Some(crate::cli::Commands::McpConnect { token }) = cli_args.command.as_ref() {
         let token = token
             .clone()

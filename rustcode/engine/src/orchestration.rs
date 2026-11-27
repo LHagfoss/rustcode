@@ -24,6 +24,7 @@ use rustcode_core::ToolErrorKind;
 use rustcode_tools::ToolExecutionOutput;
 
 pub mod ask_user;
+pub mod cli_bridge;
 mod hub_receipts;
 pub mod local;
 mod local_interrupt;
@@ -430,7 +431,7 @@ pub const EXTRA_TOOL_NAMES: [&str; 14] = [
 
 /// What the MCP server adds to its instructions when it lists the core tools
 /// alone, so an agent asked for one of the others knows where it went.
-pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, edit/run/delete jobs (`update_job`, `run_job`, `delete_job`), workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
+pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, edit/run/delete jobs (`update_job`, `run_job`, `delete_job`), workflow runs and worktree handoff. Any of them, and every listed tool, can also be called from the shell with `rc tools call <name> '<json arguments>'` (`rc tools list` lists them, `rc tools show <name>` prints one's arguments); the call gets the same approval. Or, when the user asks, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
 
 /// Whether the user has every tool listed to threads ([`ALL_TOOLS_SETTING`]).
 pub fn lists_all_tools() -> bool {

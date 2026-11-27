@@ -6,7 +6,7 @@
 2400 harness/src/ui/history_cell.rs
 3300 harness/src/ui/selection.rs
 3200 harness/src/ui/tool_transcript.rs
-2800 rustcode/cli/src/cli.rs
+1600 rustcode/cli/src/cli.rs
 2500 rustcode/client/src/machine.rs
 2400 rustcode/client/src/registry.rs
 3700 rustcode/core/rustcode-session/src/lib.rs
