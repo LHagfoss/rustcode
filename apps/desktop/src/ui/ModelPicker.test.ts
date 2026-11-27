@@ -456,6 +456,6 @@ describe("model picker navigation", () => {
     expect(movePickerIndex(2, 1, 3)).toBe(2);
     expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
     expect(pillLabel(null)).toBe("Model");
-    expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
+    expect(pillLabel("tokmax-lhagfoss/Inkling 2 Mini")).toBe("Inkling 2 Mini");
   });
 });
