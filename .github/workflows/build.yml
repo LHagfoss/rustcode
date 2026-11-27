@@ -516,7 +516,7 @@ jobs:
                   cat <<EOF > Formula/rustcode.rb
                   class Rustcode < Formula
                       desc "RustCode orchestrator CLI (rc) and standalone terminal harness (rustcode)"
-                      homepage "https://github.com/${GH_USER}/rustcode"
+                      homepage "https://rustcode.lhagfoss.com"
                       url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rc-macos-aarch64.tar.gz"
                       sha256 "${RC_SHA256}"
                       depends_on arch: :arm64
