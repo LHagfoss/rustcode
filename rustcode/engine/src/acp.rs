@@ -1324,7 +1324,15 @@ async fn dispatch_request(
         "session/list" => {
             let request: ListSessionsRequest = parse_params(params)?;
 
-            respond_typed(responder, acp_list_sessions(request)?)
+            connection.spawn(async move {
+                match tokio::task::spawn_blocking(move || acp_list_sessions(request)).await {
+                    Ok(Ok(response)) => respond_typed(responder, response),
+                    Ok(Err(error)) => responder.respond_with_error(error),
+                    Err(error) => responder.respond_with_error(
+                        agent_client_protocol::Error::internal_error().data(error.to_string()),
+                    ),
+                }
+            })
         }
         "session/load" => {
             let server = server.clone();
