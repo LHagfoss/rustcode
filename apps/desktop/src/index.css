@@ -1519,6 +1519,12 @@ aside[aria-hidden="true"] + .rc-main-panel {
   background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
 }
 /* A toast rises into its corner and drops away. */
+@media (prefers-reduced-motion: reduce) {
+  .rc-toast {
+    translate: none !important;
+  }
+}
+
 @keyframes rc-toast-in {
   from {
     opacity: 0;

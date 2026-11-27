@@ -6,9 +6,10 @@ export const TOAST_FLICK_SPEED = 0.5;
 export const TOAST_FLICK_PX = 12;
 /** Less travel than this, end to end, is a click on the card rather than a drag. */
 export const TOAST_CLICK_PX = 4;
-export const TOAST_DRAG_MS = 160;
+export const TOAST_DRAG_MS = 200;
 
 export function dragState(dx: number, ms = Number.POSITIVE_INFINITY) {
+  dx = Math.min(0, dx);
   const away = Math.abs(dx);
   const flick = away >= TOAST_FLICK_PX && away / Math.max(ms, 1) > TOAST_FLICK_SPEED;
   return { dx, away, dismiss: away > TOAST_DISMISS_PX || flick };
@@ -17,11 +18,6 @@ export function dragState(dx: number, ms = Number.POSITIVE_INFINITY) {
 /** Opacity while dragging: it fades as it travels, never below 0.2. */
 export function dragOpacity(away: number): number {
   return Math.max(0.2, 1 - away / 200);
-}
-
-/** Where a dismissed card flies to: in the direction of the swipe. */
-export function toastExit(dx: number): string {
-  return `translateX(${Math.sign(dx) * 120}%)`;
 }
 
 /** A press and release this close together is a click on the card: it dismisses. */

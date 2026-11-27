@@ -8,18 +8,10 @@
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
-import {
-  dragOpacity,
-  dragState,
-  holdSelection,
-  isClick,
-  startsDrag,
-  TOAST_DRAG_MS,
-  toastExit,
-} from "../lib/toastDrag";
+import { dragOpacity, dragState, holdSelection, isClick, startsDrag, TOAST_DRAG_MS } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
 import { type ToastPosition, toastFromTop, useToastPosition } from "../state/toastPosition";
-import { nextExpiry } from "../state/toasts";
+import { nextExpiry, TOAST_EXIT_MS } from "../state/toasts";
 import { X } from "./icons";
 import { cx, Spinner } from "./primitives";
 
@@ -48,7 +40,8 @@ interface DragSession {
   y: number;
   /** When the press began, for a flick. */
   at: number;
-  dx: number;
+  offset: number;
+  moved: boolean;
   /** Puts the document back; safe to call twice. */
   release: () => void;
 }
@@ -85,16 +78,16 @@ function ToastCard({
         el.releasePointerCapture(session.pointerId);
       }
       if (flyOut && session && el) {
-        el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = toastExit(session.dx);
+        el.style.transition = `translate ${TOAST_EXIT_MS}ms var(--ease-snappy), opacity ${TOAST_EXIT_MS}ms var(--ease-snappy)`;
+        el.style.translate = `${(Number.parseFloat(el.style.translate) || 0) - 64}px`;
         el.style.opacity = "0";
         setFlung(true);
         dismissToast(toast.id);
         return;
       }
       if (el) {
-        el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = "";
+        el.style.transition = `translate ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms var(--ease-snappy)`;
+        el.style.translate = "";
         el.style.opacity = "";
       }
     },
@@ -110,19 +103,26 @@ function ToastCard({
   }, [dragging, end]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !startsDrag(e.target as HTMLElement)) return;
+    if (e.button !== 0 || drag.current || toast.leaving || !startsDrag(e.target as HTMLElement)) return;
     // No native drag and no text selection, even where the platform would
     // start one despite the document's `user-select: none`.
     e.preventDefault();
     window.getSelection()?.removeAllRanges();
     const el = e.currentTarget;
+    const style = getComputedStyle(el);
+    const offset = Number.parseFloat(style.translate) || 0;
+    const opacity = style.opacity;
+    el.style.transition = "none";
+    el.style.translate = `${offset}px`;
+    el.style.opacity = opacity;
     el.setPointerCapture(e.pointerId);
     drag.current = {
       pointerId: e.pointerId,
       x: e.clientX,
       y: e.clientY,
       at: e.timeStamp,
-      dx: 0,
+      offset,
+      moved: false,
       release: holdSelection(document),
     };
     setDragging(true);
@@ -133,28 +133,30 @@ function ToastCard({
     const session = drag.current;
     const el = ref.current;
     if (!session || !el || session.pointerId !== e.pointerId) return;
-    session.dx = e.clientX - session.x;
-    const state = dragState(session.dx);
-    el.style.transition = "none";
-    el.style.transform = `translateX(${state.dx}px)`;
+    const dx = e.clientX - session.x;
+    session.moved ||= !isClick(dx, e.clientY - session.y);
+    const state = dragState(dx + session.offset);
+    el.style.translate = `${state.dx}px`;
     el.style.opacity = String(dragOpacity(state.away));
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const session = drag.current;
     if (!session || session.pointerId !== e.pointerId) return;
-    session.dx = e.clientX - session.x;
+    const dx = e.clientX - session.x;
     const dy = e.clientY - session.y;
-    if (isClick(session.dx, dy)) {
+    if (!session.moved && isClick(dx, dy)) {
       // A click on the card's body (not its buttons, which never start a drag) dismisses it.
       end(false);
       dismissToast(toast.id);
       return;
     }
-    end(dragState(session.dx, e.timeStamp - session.at).dismiss);
+    end(dragState(dx, e.timeStamp - session.at).dismiss);
   };
 
-  const onPointerCancel = () => end(false);
+  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (drag.current?.pointerId === e.pointerId) end(false);
+  };
   const onLostPointerCapture = () => {
     if (drag.current) end(false);
   };

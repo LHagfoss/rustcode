@@ -8,21 +8,24 @@ import {
   startsDrag,
   TOAST_DISMISS_PX,
   TOAST_FLICK_PX,
-  toastExit,
 } from "./toastDrag";
 
 describe("toast drag", () => {
-  test.each([-1, 1])("swipes dismiss past 48px in direction %i", (sign) => {
-    expect(dragState(sign * TOAST_DISMISS_PX).dismiss).toBe(false);
-    expect(dragState(sign * (TOAST_DISMISS_PX + 1)).dismiss).toBe(true);
-    expect(dragState(sign * 40)).toMatchObject({ dx: sign * 40, away: 40 });
-    expect(toastExit(sign * 40)).toBe(`translateX(${sign * 120}%)`);
+  test("left swipes dismiss past 48px", () => {
+    expect(dragState(-TOAST_DISMISS_PX).dismiss).toBe(false);
+    expect(dragState(-(TOAST_DISMISS_PX + 1)).dismiss).toBe(true);
+    expect(dragState(-40)).toMatchObject({ dx: -40, away: 40 });
   });
 
-  test.each([-1, 1])("a fast horizontal flick dismisses in direction %i", (sign) => {
-    expect(dragState(sign * 30, 40).dismiss).toBe(true);
-    expect(dragState(sign * 30, 400).dismiss).toBe(false);
-    expect(dragState(sign * (TOAST_FLICK_PX - 1), 5).dismiss).toBe(false);
+  test("a fast left flick dismisses", () => {
+    expect(dragState(-30, 40).dismiss).toBe(true);
+    expect(dragState(-30, 400).dismiss).toBe(false);
+    expect(dragState(-(TOAST_FLICK_PX - 1), 5).dismiss).toBe(false);
+  });
+
+  test("right swipes and flicks leave the toast in place", () => {
+    expect(dragState(100)).toEqual({ dx: 0, away: 0, dismiss: false });
+    expect(dragState(30, 40)).toEqual({ dx: 0, away: 0, dismiss: false });
   });
 
   test("no horizontal travel leaves the toast in place", () => {
