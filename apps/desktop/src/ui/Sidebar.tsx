@@ -1187,7 +1187,7 @@ export function Sidebar() {
     );
   };
   const rows = (items: SessionSummary[]) => (
-    <div className={cx("flex flex-col", !compact && "gap-0.5")}>
+    <div className={cx("flex flex-col", compact ? "gap-px" : "gap-0.5")}>
       {items.map((s) => (
         <Fragment key={s.id}>
           {pendingById[s.id] ? (
