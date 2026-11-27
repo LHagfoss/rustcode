@@ -3,6 +3,7 @@ import type { HiddenKind } from "../state/sidebarRows";
 import { ChevronDown, Folder, FolderOpen, SquarePen } from "./icons";
 import { cx, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { SIDEBAR_ROW_HOVER, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
 
 /** A small icon button in a row's hover slot: 24px, so three of them take the 80px slot. */
 export function RowAction({
@@ -77,13 +78,17 @@ export function ProjectHeader({
   onNew?: () => void;
 }) {
   return (
-    <div className="group/p relative flex h-8 items-center">
+    <div className="group/p relative flex h-[34px] items-center">
       <button
         type="button"
         onClick={onToggle}
         data-project-handle
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
+        className={cx(
+          "flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-left font-medium text-body text-fg/90",
+          SIDEBAR_ROW_RADIUS,
+          SIDEBAR_ROW_HOVER,
+        )}
       >
         {open ? (
           <FolderOpen size={14} className="shrink-0 text-fg-muted" />

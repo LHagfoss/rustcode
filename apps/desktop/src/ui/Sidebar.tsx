@@ -1322,7 +1322,7 @@ export function Sidebar() {
                                 const projectOpen = isOpen(`project:${p.key}`);
                                 const onNew = p.project ? () => startNewThread(p.project) : undefined;
                                 return (
-                                  <div key={p.key} data-project-id={p.key} className="relative mb-1">
+                                  <div key={p.key} data-project-id={p.key} className="relative mb-2">
                                     <ProjectHeader
                                       label={p.label}
                                       count={p.items.length}
@@ -1341,7 +1341,7 @@ export function Sidebar() {
                                     />
                                     {/* Only delegates are indented; project threads keep the full row width. */}
                                     <Fold open={projectOpen}>
-                                      <div className={cx(!compact && "pt-0.5")}>{rows(p.items)}</div>
+                                      <div className="pt-1">{rows(p.items)}</div>
                                     </Fold>
                                   </div>
                                 );
