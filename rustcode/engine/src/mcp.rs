@@ -12,6 +12,10 @@ use tokio::sync::{Mutex, Notify, mpsc};
 
 mod client_metadata;
 mod login_lock;
+mod oauth_refresh;
+mod startup_retry;
+
+use oauth_refresh::{RefreshError, refresh_access_token};
 
 pub struct McpClient {
     pub name: String,
@@ -182,6 +186,9 @@ struct OAuthToken {
     token_endpoint: Option<String>,
     #[serde(default)]
     expires_at: Option<u64>,
+    /// The MCP server URL the grant was issued for (RFC 8707), sent again on refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
 }
 
 impl OAuthToken {
@@ -278,9 +285,18 @@ pub async fn start_deferred_servers() {
     };
     let started = std::time::Instant::now();
     let warnings = futures_util::future::join_all(servers.iter().map(|server| async move {
-        let warnings = start_enabled_servers(std::slice::from_ref(server), |name| async move {
-            start_server_by_name(&name).await
-        })
+        let warnings = start_enabled_servers_with_timeout(
+            std::slice::from_ref(server),
+            startup_retry::STARTUP_BUDGET,
+            |name| async move {
+                startup_retry::launch_until_reachable(
+                    &name,
+                    &startup_retry::STARTUP_RETRIES,
+                    || start_server_by_name(&name),
+                )
+                .await
+            },
+        )
         .await;
         CONNECTING_SERVERS
             .lock()
@@ -802,20 +818,7 @@ fn save_oauth_token_to_dir(
 }
 
 fn write_oauth_token_file(path: &std::path::Path, token: &OAuthToken) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
-    }
-    let contents = serde_json::to_string_pretty(token)
-        .map_err(|e| format!("failed to serialize OAuth token: {e}"))?;
-    std::fs::write(path, contents)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    oauth_refresh::write_token_file(path, token)
 }
 
 fn load_oauth_token(server: &str) -> Option<OAuthToken> {
@@ -895,10 +898,7 @@ async fn post_oauth_form(
 ) -> Result<Value, String> {
     let (status, json, text) = post_oauth_form_raw(http, endpoint, params).await?;
     if !status.is_success() {
-        let snippet = truncate_snippet(&text, 300);
-        return Err(format!(
-            "OAuth token request failed (HTTP {status}): {snippet}"
-        ));
+        return Err(oauth_refresh::token_request_refused(status, &text, params));
     }
     if json.is_null() {
         return Err("OAuth token response was not JSON".to_string());
@@ -932,6 +932,7 @@ fn oauth_token_from_response(
         client_id: client_id.map(str::to_string),
         token_endpoint: Some(token_endpoint.to_string()),
         expires_at,
+        resource: None,
     })
 }
 
@@ -1675,10 +1676,10 @@ impl McpClient {
         challenge: Option<&str>,
     ) -> Result<bool, String> {
         let name = self.name.clone();
-        let (http, mut stored) = match &self.transport {
+        let (http, mut stored, server_url) = match &self.transport {
             Transport::Remote { state } => {
                 let state = state.lock().await;
-                (state.http.clone(), state.auth.clone())
+                (state.http.clone(), state.auth.clone(), state.url.clone())
             }
             Transport::Stdio { .. } => return Err("MCP client is not a remote client".to_string()),
         };
@@ -1696,15 +1697,31 @@ impl McpClient {
             }
             if let (Some(refresh), Some(endpoint)) =
                 (token.refresh_token.clone(), token.token_endpoint.clone())
-                && let Ok(next) =
-                    refresh_access_token(&http, &endpoint, token.client_id.as_deref(), &refresh)
-                        .await
             {
-                self.store_auth_token(&next).await;
-                if let Err(error) = save_oauth_token(&name, &next) {
-                    crate::dbg_log!("[mcp:{name}] failed to persist refreshed token: {error}");
+                let resource = token.resource.as_deref().unwrap_or(&server_url);
+                let refreshed = refresh_access_token(
+                    &http,
+                    &endpoint,
+                    token.client_id.as_deref(),
+                    &refresh,
+                    Some(resource),
+                )
+                .await;
+                match refreshed {
+                    Ok(next) => {
+                        self.store_auth_token(&next).await;
+                        if let Err(error) = save_oauth_token(&name, &next) {
+                            crate::dbg_log!(
+                                "[mcp:{name}] failed to persist refreshed token: {error}"
+                            );
+                        }
+                        return Ok(true);
+                    }
+                    Err(RefreshError::Unreachable(error)) => return Err(error),
+                    Err(RefreshError::Refused(error)) => {
+                        crate::dbg_log!("[mcp:{name}] token refresh failed: {error}");
+                    }
                 }
-                return Ok(true);
             }
         }
         match self
@@ -1983,6 +2000,7 @@ impl McpClient {
             ));
         }
         let form_client_id = client_id.clone();
+        let resource = mcp_url.clone();
         let body = post_oauth_form(
             http,
             &token_endpoint,
@@ -1998,7 +2016,10 @@ impl McpClient {
             .collect::<Vec<_>>(),
         )
         .await?;
-        oauth_token_from_response(&body, form_client_id.as_deref(), &token_endpoint)
+        let mut token =
+            oauth_token_from_response(&body, form_client_id.as_deref(), &token_endpoint)?;
+        token.resource = Some(resource);
+        Ok(token)
     }
 
     /// Return only the tool result; JSON-RPC request IDs must not affect polling hashes.
@@ -2165,7 +2186,7 @@ impl McpClient {
 /// The access token RustCode holds for a remote server, for a harness that
 /// connects to it on its own (Claude Code, Codex): refreshed and saved first
 /// when it expired and can be. None when there is no usable sign-in.
-pub(crate) async fn bearer_for_harness(server: &str) -> Option<String> {
+pub(crate) async fn bearer_for_harness(server: &str, server_url: &str) -> Option<String> {
     let token = load_oauth_token(server)?;
     if token.usable() {
         return Some(token.access_token);
@@ -2185,7 +2206,16 @@ pub(crate) async fn bearer_for_harness(server: &str) -> Option<String> {
         .timeout(Duration::from_secs(15))
         .build()
         .ok()?;
-    match refresh_access_token(&http, endpoint, token.client_id.as_deref(), refresh).await {
+    let refreshed = oauth_refresh::refresh_until_reachable(
+        &http,
+        endpoint,
+        token.client_id.as_deref(),
+        refresh,
+        Some(token.resource.as_deref().unwrap_or(server_url)),
+        &oauth_refresh::HARNESS_REFRESH_RETRIES,
+    )
+    .await;
+    match refreshed {
         Ok(fresh) => {
             if let Err(error) = save_oauth_token(server, &fresh) {
                 crate::dbg_log!("harness MCP: '{server}' token not saved: {error}");
@@ -2206,46 +2236,23 @@ pub(crate) async fn with_saved_logins(
     mut servers: Vec<crate::config::McpServerConfig>,
 ) -> Vec<crate::config::McpServerConfig> {
     for server in &mut servers {
-        if server.url.is_none()
-            || server
-                .headers
-                .keys()
-                .any(|name| name.eq_ignore_ascii_case("authorization"))
+        let Some(url) = server.url.clone() else {
+            continue;
+        };
+        if server
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
         {
             continue;
         }
-        if let Some(token) = bearer_for_harness(&server.name).await {
+        if let Some(token) = bearer_for_harness(&server.name, &url).await {
             server
                 .headers
                 .insert("Authorization".to_owned(), format!("Bearer {token}"));
         }
     }
     servers
-}
-
-async fn refresh_access_token(
-    http: &reqwest::Client,
-    token_endpoint: &str,
-    client_id: Option<&str>,
-    refresh_token: &str,
-) -> Result<OAuthToken, String> {
-    let body = post_oauth_form(
-        http,
-        token_endpoint,
-        &[
-            ("grant_type", "refresh_token".to_string()),
-            ("refresh_token", refresh_token.to_string()),
-        ]
-        .into_iter()
-        .chain(client_id.map(|id| ("client_id", id.to_string())))
-        .collect::<Vec<_>>(),
-    )
-    .await?;
-    let mut token = oauth_token_from_response(&body, client_id, token_endpoint)?;
-    if token.refresh_token.is_none() {
-        token.refresh_token = Some(refresh_token.to_string());
-    }
-    Ok(token)
 }
 
 enum DeviceGrantError {
@@ -2843,6 +2850,7 @@ mod harness_login_tests {
                     client_id: None,
                     token_endpoint: None,
                     expires_at: None,
+                    resource: None,
                 },
             )
             .unwrap();

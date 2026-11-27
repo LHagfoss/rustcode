@@ -514,6 +514,7 @@ fn oauth_tokens_round_trip_through_durable_storage() {
         client_id: Some("client-789".to_string()),
         token_endpoint: Some("https://auth.example.com/token".to_string()),
         expires_at: Some(now_unix_secs() + 3600),
+        resource: Some("https://mcp.example.com/mcp".to_string()),
     };
     save_oauth_token_to_dir(dir.path(), "vercel", &token).expect("save token");
     let path = oauth_token_path_in_dir(dir.path(), "vercel");
@@ -854,15 +855,25 @@ async fn remote_http_legacy_sse_fallback_lists_and_calls_tools() {
 async fn oauth_refresh_exchanges_a_new_access_token() {
     let (url, _server) = spawn_mock_http_mcp(MockHttpMode::TokenEndpoint).await;
     let http = reqwest::Client::new();
-    let token = refresh_access_token(&http, &url, Some("client-1"), "old-refresh")
-        .await
-        .expect("refresh should succeed");
+    let token = refresh_access_token(
+        &http,
+        &url,
+        Some("client-1"),
+        "old-refresh",
+        Some("https://mcp.example.com/mcp"),
+    )
+    .await
+    .expect("refresh should succeed");
     assert_eq!(token.access_token, "refreshed-access");
     // The mock omits `refresh_token`, so the previous one is preserved
     // for the next refresh.
     assert_eq!(token.refresh_token.as_deref(), Some("old-refresh"));
     assert_eq!(token.client_id.as_deref(), Some("client-1"));
     assert_eq!(token.token_endpoint.as_deref(), Some(url.as_str()));
+    assert_eq!(
+        token.resource.as_deref(),
+        Some("https://mcp.example.com/mcp")
+    );
     assert!(token.usable());
 }
 

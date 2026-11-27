@@ -334,11 +334,16 @@ async fn oauth_rejected_device_falls_back_and_persists_refreshable_token() {
     let mut loaded = load_oauth_token_from_dir(dir.path(), "stub").unwrap();
     assert_eq!(loaded, token);
     loaded.expires_at = Some(0);
+    assert_eq!(
+        loaded.resource.as_deref(),
+        Some(format!("{}/mcp", stub.base).as_str())
+    );
     let refreshed = refresh_access_token(
         &reqwest::Client::new(),
         loaded.token_endpoint.as_deref().unwrap(),
         loaded.client_id.as_deref(),
         loaded.refresh_token.as_deref().unwrap(),
+        loaded.resource.as_deref(),
     )
     .await
     .unwrap();
@@ -353,7 +358,11 @@ async fn oauth_rejected_device_falls_back_and_persists_refreshable_token() {
     assert!(
         refresh.contains("grant_type=refresh_token")
             && refresh.contains("refresh_token=refresh")
-            && refresh.contains("client_id=registered-client"),
+            && refresh.contains("client_id=registered-client")
+            && refresh.contains(&format!(
+                "resource={}",
+                urlencoding::encode(&format!("{}/mcp", stub.base))
+            )),
         "{refresh}"
     );
 }
@@ -619,6 +628,7 @@ async fn oauth_clients_sharing_an_expired_login_refresh_it_once() {
         client_id: Some("registered-client".into()),
         token_endpoint: Some(format!("{}/token", stub.base)),
         expires_at: Some(0),
+        resource: None,
     };
     save_oauth_token(server, &expired).unwrap();
     let clients: Vec<McpClient> = (0..3)
