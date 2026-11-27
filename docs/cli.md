@@ -135,3 +135,37 @@ approval card, with the value before and after, for every change;
 [configuration.md](configuration.md) › Server settings across machines and
 [mcp-outside-agents.md](mcp-outside-agents.md) for the Admin level an outside
 agent needs to change anything.
+
+### From a thread's shell: `rc tools`, `rc secret`, `rc terminal`
+
+Every listed MCP tool is sent with each model request, so a thread also
+reaches its tools from its shell, where one costs nothing until it is run.
+The engine starts each external harness with `RUSTCODE_THREAD_ID`,
+`RUSTCODE_ORCHESTRATOR_SOCKET` and `RUSTCODE_THREAD_CREDENTIAL` (the token the
+thread's `rc mcp-orchestrator` already holds, under a name Codex does not
+strip from its shells). A command the agent runs inherits them; outside a
+thread these commands say so and exit 1.
+
+| Command | What it does |
+| --- | --- |
+| `rc tools list` | Every tool the thread can call, the ones its MCP list leaves out (`orchestration-all-tools`) included; `--json` for the MCP entries |
+| `rc tools show <name>` | A tool's description and its JSON arguments |
+| `rc tools call <name> '<json>'` | Calls it through the same dispatch as an MCP `tools/call`: the same checks, approval cards and private forms. `-` reads the arguments from stdin; `--json` prints `{"success", "content"}`. Exits 1 on a failed call |
+| `rc secret request NAME… --reason <why> --file <.env>` | One private form per name (`request_secret`); the value goes to the dotenv file and never reaches the agent. An existing assignment is replaced where it stands, a new one is appended, other lines stay; the answer says added or updated. Stops at the first decline, exit 2 |
+| `rc terminal start <name> [--cwd DIR] -- <command>` | Runs a long-lived command (a dev server, a watcher) in its own process group, so it outlives the shell call; one argument is a shell line, several are quoted as words |
+| `rc terminal output <name> [--since N] [--tail BYTES]` | Its output, the last 16 KiB by default; prints the offset to pass as `--since` next |
+| `rc terminal wait <name> --contains <text> [--timeout S] [--new]` | Waits until its output holds the text, searching from the first line (`--new`: only what it prints after this call): exit 0 found, 1 the command ended first, 2 timed out |
+| `rc terminal send <name> --text <t> [--enter]` · `list [--all]` · `stop <name>` | Types into its input, lists this thread's terminals, or stops one with everything it started |
+
+A terminal's files are under `<config>/run/terminals/<thread>/<name>/`
+(`output.log`, a named pipe for input, its `exit` status). Its input is a pipe,
+not a TTY, so a program that needs a terminal to prompt will not prompt. The
+command does not inherit `RUSTCODE_THREAD_CREDENTIAL` or the socket, so a dev
+server cannot call the thread's tools. A read takes at most 1 MiB; `output`
+says when more follows. Terminals are not stopped when the thread ends: stop
+them with `rc terminal stop`.
+
+Every process the harness starts inherits the credential, a subagent or build
+script included; it allows what the thread's own tools allow, writes still
+behind the user's approval. A harness sandbox (Codex without Full access) can
+block the socket and the run folder; the error then says so.

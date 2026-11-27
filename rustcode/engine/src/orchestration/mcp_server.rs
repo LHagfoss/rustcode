@@ -1113,6 +1113,42 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// Every tool `rc tools` reaches for a thread (`cli_bridge`): the whole list,
+/// since a shell command costs no context until it is run.
+pub(super) fn cli_tools(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
+    all_tools(version, cli_offered(smart_ui, ask_user))
+}
+
+/// One `rc tools call`, answered as a `tools/call` from the thread's harness.
+pub(super) async fn cli_call(
+    forward: &dyn Forward,
+    identity: &Identity,
+    name: &str,
+    args: Value,
+    version: u8,
+    smart_ui: bool,
+    ask_user: bool,
+) -> CallAnswer {
+    let params = json!({ "name": name, "arguments": args });
+    call(
+        forward,
+        identity,
+        &params,
+        version,
+        cli_offered(smart_ui, ask_user),
+    )
+    .await
+}
+
+fn cli_offered(smart_ui: bool, ask_user: bool) -> Offered {
+    Offered {
+        smart_ui,
+        ask_user,
+        core_only: false,
+        deferred: false,
+    }
+}
+
 /// What `tools/list` answers a thread: its orchestration version's tools
 /// under their public names, without the ones few threads call unless the
 /// user asked for every tool, and the computer-use tools the user turned on.

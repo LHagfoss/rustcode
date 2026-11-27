@@ -1,3 +1,4 @@
+mod agent_command;
 mod cli;
 mod hub_command;
 mod hub_member;
@@ -8,6 +9,7 @@ mod price_estimate;
 mod run;
 mod server_command;
 mod sync_from;
+mod terminal_command;
 mod up;
 
 #[cfg(test)]

@@ -126,7 +126,51 @@ fn destination(root: &Path, file: &str) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
-fn store(root: &Path, file: &str, name: &str, value: &str) -> Result<(), String> {
+/// Whether [`store`] wrote a new assignment or replaced one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    Added,
+    Updated,
+}
+/// The assignment part of a dotenv line: without leading blanks or an
+/// `export` and the blanks after it.
+fn assignment_part(line: &str) -> (&str, bool) {
+    let line = line.trim_start();
+    match line.strip_prefix("export") {
+        Some(rest) if rest.starts_with([' ', '\t']) => (rest.trim_start(), true),
+        _ => (line, false),
+    }
+}
+/// Whether `line` assigns `name`, and whether it is `export`ed.
+fn assigns(line: &str, name: &str) -> Option<bool> {
+    let (assignment, export) = assignment_part(line);
+    let (key, _) = assignment.split_once('=')?;
+    (key.trim() == name).then_some(export)
+}
+/// The quote a value opens on its line and does not close there, so the
+/// lines up to its closing quote belong to it.
+fn open_quote(line: &str) -> Option<char> {
+    let (_, value) = assignment_part(line).0.split_once('=')?;
+    let value = value.trim_start();
+    let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    (!closes(&value[1..], quote)).then_some(quote)
+}
+/// Whether `text` holds a closing `quote`; a double quote escaped with a
+/// backslash does not close.
+fn closes(text: &str, quote: char) -> bool {
+    let mut escaped = false;
+    for c in text.chars() {
+        if c == quote && !escaped {
+            return true;
+        }
+        escaped = quote == '"' && c == '\\' && !escaped;
+    }
+    false
+}
+/// Write `name` into the dotenv file `file`: the first assignment of it is
+/// replaced where it stands, later duplicates are dropped, every other line
+/// stays as it was, and a new name goes at the end.
+fn store(root: &Path, file: &str, name: &str, value: &str) -> Result<Stored, String> {
     if value.contains(['\n', '\r', '\0']) || value.len() > 65536 {
         return Err("Secret must be a single line of at most 64 KiB".into());
     }
@@ -136,31 +180,46 @@ fn store(root: &Path, file: &str, name: &str, value: &str) -> Result<(), String>
     } else {
         String::new()
     };
-    let mut content = old
-        .lines()
-        .filter(|line| {
-            let assignment = line
-                .trim_start()
-                .strip_prefix("export ")
-                .unwrap_or(line.trim_start());
-            assignment
-                .split_once('=')
-                .is_none_or(|(key, _)| key.trim() != name)
-        })
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
     let escaped = value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('$', "\\$")
         .replace('`', "\\`");
-    content.push(format!("{name}=\"{escaped}\""));
+    let assignment = format!("{name}=\"{escaped}\"");
+    let (bom, old) = match old.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", old.as_str()),
+    };
+    let mut stored = Stored::Added;
+    let mut content = Vec::new();
+    let mut lines = old.lines();
+    while let Some(line) = lines.next() {
+        let Some(export) = assigns(line, name) else {
+            content.push(line.to_owned());
+            continue;
+        };
+        if let Some(quote) = open_quote(line) {
+            for rest in lines.by_ref() {
+                if closes(rest, quote) {
+                    break;
+                }
+            }
+        }
+        if stored == Stored::Added {
+            stored = Stored::Updated;
+            let export = if export { "export " } else { "" };
+            content.push(format!("{export}{assignment}"));
+        }
+    }
+    if stored == Stored::Added {
+        content.push(assignment);
+    }
     let mut tmp = tempfile::NamedTempFile::new_in(path.parent().ok_or("Invalid destination")?)
         .map_err(|_| "Cannot create private destination")?;
-    tmp.write_all(format!("{}\n", content.join("\n")).as_bytes())
+    tmp.write_all(format!("{bom}{}\n", content.join("\n")).as_bytes())
         .map_err(|_| "Cannot write destination")?;
     tmp.persist(&path).map_err(|_| "Cannot save destination")?;
-    Ok(())
+    Ok(stored)
 }
 /// Answer a `request_secret` call. `env_thread` names the thread whose later
 /// commands receive the value when the call asks for `env`; it is `None` for an
@@ -228,12 +287,17 @@ pub async fn answer(
         )
         .meta(meta);
         let response = tokio::select! { _ = cancel.cancelled() => None, response = asker(permission) => response };
+        let declined = || {
+            format!(
+                "Declined: the user did not give {name}. Do not ask for it again unless the user says so."
+            )
+        };
         let Some(response) = response else {
-            return Ok("Declined".into());
+            return Ok(declined());
         };
         if !matches!(&response.outcome, RequestPermissionOutcome::Selected(s) if s.option_id.0.as_ref() == "secret_save")
         {
-            return Ok("Declined".into());
+            return Ok(declined());
         }
         let value = response
             .meta
@@ -247,8 +311,13 @@ pub async fn answer(
         }
         let mut told = Vec::new();
         if let Some((root, file)) = &root {
-            store(root, file, name, value)?;
-            told.push(format!("Secret {name} saved to {file}."));
+            let verb = match store(root, file, name, value)? {
+                Stored::Added => "added to",
+                Stored::Updated => "updated in",
+            };
+            told.push(format!(
+                "Secret {name} {verb} {file}. Do not read or print that file to check it."
+            ));
         }
         if let Some(thread) = env_thread.filter(|_| env) {
             set_thread_env(thread, name, value);
@@ -483,10 +552,55 @@ mod tests {
     }
 
     #[test]
+    fn updates_a_name_where_it_stands_and_adds_a_new_one_last() {
+        let root = workspace();
+        std::fs::write(
+            root.path().join(".env"),
+            "# keys\nexport KEY=old\nOTHER=keep\nKEY=dup\n",
+        )
+        .unwrap();
+        assert_eq!(
+            store(root.path(), ".env", "KEY", "new").unwrap(),
+            Stored::Updated
+        );
+        assert_eq!(
+            store(root.path(), ".env", "FRESH", "v").unwrap(),
+            Stored::Added
+        );
+        let text = std::fs::read_to_string(root.path().join(".env")).unwrap();
+        assert_eq!(
+            text,
+            "# keys\nexport KEY=\"new\"\nOTHER=keep\nFRESH=\"v\"\n"
+        );
+    }
+
+    #[test]
+    fn replaces_a_multi_line_value_whole_and_keeps_a_byte_order_mark() {
+        let root = workspace();
+        std::fs::write(
+            root.path().join(".env"),
+            "\u{feff}A=1\nexport\tPEM=\"-----BEGIN\nline \\\" two\n-----END\"\nB=2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            store(root.path(), ".env", "PEM", "new").unwrap(),
+            Stored::Updated
+        );
+        let text = std::fs::read_to_string(root.path().join(".env")).unwrap();
+        assert_eq!(text, "\u{feff}A=1\nexport PEM=\"new\"\nB=2\n");
+        assert_eq!(open_quote("K='one"), Some('\''));
+        assert_eq!(open_quote("K=\"done\""), None);
+        assert_eq!(open_quote("K=plain"), None);
+    }
+
+    #[test]
     fn merges_private_dotenv() {
         let root = workspace();
         std::fs::write(root.path().join(".env"), "OTHER=keep\nKEY=old\n").unwrap();
-        store(root.path(), ".env", "KEY", "private-value").unwrap();
+        assert_eq!(
+            store(root.path(), ".env", "KEY", "private-value").unwrap(),
+            Stored::Updated
+        );
         let text = std::fs::read_to_string(root.path().join(".env")).unwrap();
         assert_eq!(text, "OTHER=keep\nKEY=\"private-value\"\n");
         #[cfg(unix)]

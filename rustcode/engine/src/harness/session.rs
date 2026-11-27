@@ -146,6 +146,9 @@ fn launch_env(
         },
         _ => Vec::new(),
     };
+    if let Some(launch) = &options.orchestrator {
+        env.extend(crate::orchestration::cli_bridge::shell_env(launch));
+    }
     // A custom harness's own variables go first, so an account's login directory wins.
     env.splice(0..0, harness.env.iter().cloned());
     let mut remove: Vec<&'static str> = Vec::new();
