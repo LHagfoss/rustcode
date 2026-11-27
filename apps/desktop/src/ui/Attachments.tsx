@@ -110,16 +110,17 @@ export function AttachmentStrip({
     const element = grid.current;
     if (!hasImages || !element) return;
     const measure = () => {
-      const tracks = getComputedStyle(element).gridTemplateColumns;
-      setColumns(Math.max(1, tracks.split(" ").length));
+      const gap = Number.parseFloat(getComputedStyle(element).columnGap);
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      setColumns(Math.max(1, Math.floor((element.clientWidth + gap) / (4 * rem + gap))));
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
   }, [hasImages]);
-  const hiddenCount = images.length > columns ? images.length - columns + 1 : 0;
-  const shown = expanded || !hiddenCount ? images : images.slice(0, columns - 1);
+  const hiddenCount = Math.max(0, images.length - columns);
+  const shown = expanded || !hiddenCount ? images : images.slice(0, columns);
   const thumbnails = shown.map((a, index) => (
     <div key={a.id} className="group relative min-w-0 rc-in">
       <button
@@ -148,6 +149,11 @@ export function AttachmentStrip({
       {hasImages && (
         <div
           ref={grid}
+          style={
+            !expanded && hiddenCount
+              ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr)) minmax(0, 2rem)` }
+              : undefined
+          }
           className="grid max-h-56 content-start grid-cols-[repeat(auto-fill,minmax(min(100%,4rem),1fr))] gap-2 overflow-y-auto"
         >
           {thumbnails}
@@ -161,7 +167,10 @@ export function AttachmentStrip({
               }
               aria-expanded={expanded}
               onClick={() => setExpanded(!expanded)}
-              className="aspect-square h-auto! w-full rounded-lg! bg-fill-subtle px-0! tabular-nums ring-1 ring-inset ring-border"
+              className={cx(
+                "h-auto! w-full rounded-lg! bg-fill-subtle px-0! tabular-nums ring-1 ring-inset ring-border",
+                expanded && "aspect-square",
+              )}
             >
               {expanded ? <ChevronUp size={16} /> : `+${hiddenCount}`}
             </Pill>
