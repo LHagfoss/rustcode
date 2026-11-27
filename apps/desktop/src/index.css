@@ -296,7 +296,7 @@
   box-shadow: 0 0 0 1px var(--rc-separator);
 }
 
-aside[aria-hidden="true"] + .rc-main-panel {
+.rc-edge-peek-left + .rc-main-panel {
   margin-left: 8px;
 }
 
@@ -2042,4 +2042,92 @@ aside[aria-hidden="true"] + .rc-main-panel {
 
 .rc-tab-in {
   animation: rc-tab-in 220ms var(--ease-snappy);
+}
+
+.rc-edge-peek {
+  z-index: 30;
+  width: 0;
+  --rc-peek-offset: calc(-100% - 8px);
+}
+
+.rc-edge-peek-right {
+  --rc-peek-offset: calc(100% + 12px);
+}
+
+.rc-edge-peek-surface {
+  z-index: 1;
+  visibility: hidden;
+  pointer-events: none;
+  translate: var(--rc-peek-offset) 0;
+  opacity: 0;
+  transition:
+    translate 200ms var(--ease-snappy),
+    opacity 200ms var(--ease-snappy),
+    visibility 200ms;
+}
+
+.rc-edge-peek-left > .rc-edge-peek-surface {
+  position: absolute;
+  inset: 8px auto 8px 8px;
+  height: auto;
+  overflow: hidden;
+  border-radius: var(--rc-radius-xl);
+  background: var(--rc-sidebar);
+  box-shadow: var(--rc-shadow-2);
+}
+
+.rc-edge-peek-handle {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rc-edge-peek-handle {
+    position: absolute;
+    top: 50%;
+    display: grid;
+    width: 32px;
+    height: 144px;
+    align-items: center;
+    padding-inline: 5px;
+    translate: 0 -50%;
+  }
+
+  .rc-edge-peek-left > .rc-edge-peek-handle {
+    left: 0;
+    justify-items: start;
+  }
+
+  .rc-edge-peek-right > .rc-edge-peek-handle {
+    right: 0;
+    justify-items: end;
+  }
+
+  .rc-edge-peek-handle::after {
+    width: 3px;
+    height: 28px;
+    border-radius: 999px;
+    background: var(--rc-text);
+    opacity: 0.25;
+    content: "";
+  }
+
+  .rc-edge-peek:hover > .rc-edge-peek-surface,
+  .rc-edge-peek-surface:has(:focus-visible) {
+    visibility: visible;
+    pointer-events: auto;
+    translate: 0 0;
+    opacity: 1;
+  }
+
+  .rc-edge-peek:hover > .rc-edge-peek-handle::after,
+  .rc-edge-peek:focus-within > .rc-edge-peek-handle::after {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-edge-peek-surface {
+    translate: 0 0;
+    transition: none;
+  }
 }

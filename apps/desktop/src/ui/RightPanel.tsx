@@ -199,6 +199,7 @@ export function RightPanel() {
   }, []);
 
   const open = !!panel;
+  const [previewLoaded, setPreviewLoaded] = useState(false);
   const kind = panel ?? shown;
   const sheet = panelIsSheet(viewport);
   const card = panelWidth(width, viewport, row);
@@ -371,42 +372,75 @@ export function RightPanel() {
 
   // A narrow window cannot hold both columns: the panel opens over the chat
   // instead, on the same card surface, with a scrim that a press or Escape closes.
+  const preview =
+    !open &&
+    slot &&
+    createPortal(
+      <div
+        className="rc-edge-peek rc-edge-peek-right absolute inset-y-0 right-0"
+        onPointerEnter={(event) => {
+          if (event.pointerType === "mouse") setPreviewLoaded(true);
+        }}
+      >
+        <span aria-hidden className="rc-edge-peek-handle" />
+        <aside
+          aria-label="Thread info preview"
+          className="rc-edge-peek-surface rc-panel-card absolute right-3 bottom-3 flex flex-col overflow-hidden"
+          style={{ top: top + 4, width: sheet ? "min(88vw, 380px)" : card }}
+        >
+          <div className="flex h-11 shrink-0 items-center justify-between border-border border-b px-5">
+            <span className="text-callout font-medium text-fg">Thread info</span>
+            <PanelToggle />
+          </div>
+          {previewLoaded && (
+            <Suspense fallback={null}>
+              <ThreadDetails className="px-2 pt-3" />
+            </Suspense>
+          )}
+        </aside>
+      </div>,
+      slot,
+    );
+
   if (sheet) {
     return (
-      <div
-        className={cx("fixed inset-0 z-40", !open && "pointer-events-none")}
-        aria-hidden={!open}
-        inert={!open}
-      >
+      <>
+        {preview}
         <div
-          className={cx(
-            "rc-scrim absolute inset-0 transition-opacity duration-200",
-            open ? "opacity-100" : "opacity-0",
-          )}
-          onMouseDown={() => setPanel(null)}
-        />
-        <aside
-          ref={surface}
-          id={PANE_ID}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Side panel"
-          data-focus-area="panel"
-          data-tab-free
-          tabIndex={-1}
-          onKeyDown={onSurfaceKey}
-          onTransitionEnd={(e) => {
-            if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
-          }}
-          className={cx(
-            SHEET_SURFACE,
-            "absolute inset-y-0 right-0 flex w-[min(88vw,380px)] flex-col overflow-hidden rounded-l-2xl outline-none transition-[opacity,translate] duration-200 ease-snappy",
-            open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
-          )}
+          className={cx("fixed inset-0 z-40", !open && "pointer-events-none")}
+          aria-hidden={!open}
+          inert={!open}
         >
-          {contents}
-        </aside>
-      </div>
+          <div
+            className={cx(
+              "rc-scrim absolute inset-0 transition-opacity duration-200",
+              open ? "opacity-100" : "opacity-0",
+            )}
+            onMouseDown={() => setPanel(null)}
+          />
+          <aside
+            ref={surface}
+            id={PANE_ID}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Side panel"
+            data-focus-area="panel"
+            data-tab-free
+            tabIndex={-1}
+            onKeyDown={onSurfaceKey}
+            onTransitionEnd={(e) => {
+              if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
+            }}
+            className={cx(
+              SHEET_SURFACE,
+              "absolute inset-y-0 right-0 flex w-[min(88vw,380px)] flex-col overflow-hidden rounded-l-2xl outline-none transition-[opacity,translate] duration-200 ease-snappy",
+              open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
+            )}
+          >
+            {contents}
+          </aside>
+        </div>
+      </>
     );
   }
 
@@ -476,5 +510,12 @@ export function RightPanel() {
       </aside>
     </div>
   );
-  return slot ? createPortal(docked, slot) : docked;
+  return slot ? (
+    <>
+      {createPortal(docked, slot)}
+      {preview}
+    </>
+  ) : (
+    docked
+  );
 }

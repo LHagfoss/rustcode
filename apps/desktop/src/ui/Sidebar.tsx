@@ -1217,15 +1217,15 @@ export function Sidebar() {
       aria-label="Threads"
       data-focus-area="threads"
       // Not clipped: while it slides out of a slot already 0 wide, the column beside it covers it.
-      className="relative flex shrink-0 flex-col"
+      className={cx("relative flex shrink-0 flex-col", hidden && "rc-edge-peek rc-edge-peek-left")}
       style={{ width: hidden ? 0 : width }}
-      aria-hidden={hidden}
     >
+      {hidden && <span aria-hidden className="rc-edge-peek-handle" />}
       <div
         {...{ [FOLDER_DROP_ATTR]: "" }}
         className={cx(
           "relative flex h-full flex-col bg-sidebar-glass transition-[translate] duration-200 ease-snappy",
-          hidden ? "-translate-x-full" : "translate-x-0",
+          hidden ? "rc-edge-peek-surface" : "translate-x-0",
         )}
         style={{ width, minWidth: width }}
       >
@@ -1243,8 +1243,8 @@ export function Sidebar() {
         <TitlebarRow className="pr-3">
           <TitlebarControls className={mac ? "ml-auto shrink-0" : "contents"}>
             <ClusterButton
-              label="Hide sidebar"
-              tooltip={`Hide sidebar (${toggleKey})`}
+              label={hidden ? "Pin sidebar open" : "Hide sidebar"}
+              tooltip={`${hidden ? "Pin sidebar open" : "Hide sidebar"} (${toggleKey})`}
               onClick={toggleSidebar}
             >
               <PanelLeft size={14} />
