@@ -1171,7 +1171,7 @@ export const Composer = memo(function Composer({
               // One line of the field's own height (21px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
               <Tooltip label={extras.command.description}>
-                <span className="mt-1.5 flex h-[21px] shrink-0 items-center rounded-full bg-accent/12 px-2 font-medium font-mono text-xs text-accent leading-[21px] rc-in">
+                <span className="mt-1.5 flex h-[21px] shrink-0 items-center rounded-full bg-accent/12 px-2 font-medium font-mono text-caption text-accent leading-[21px] rc-in">
                   {extras.command.name}
                 </span>
               </Tooltip>
