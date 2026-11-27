@@ -126,7 +126,7 @@ import { UpdateRow } from "./Updates";
 
 // The title row starts past the traffic lights and ends in the sidebar's toggle, so the sidebar
 // cannot be narrower than that row: the lights' inset, then room for the toggle.
-const MIN = LIGHTS_INSET + 144;
+const MIN = LIGHTS_INSET + 140;
 const MAX = 460;
 /** What the sidebar is wide before it is dragged, and what a double-click on its edge puts back. */
 const DEFAULT_WIDTH = 288;
@@ -1260,7 +1260,7 @@ export function Sidebar() {
             <SettingsButton />
           </TitlebarControls>
         </TitlebarRow>
-        <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className={cx("relative flex min-h-0 flex-1 flex-col", mac && "pt-2")}>
           <div
             className={cx("flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
             inert={settingsOpen}

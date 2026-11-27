@@ -15,15 +15,15 @@ import { cx } from "./primitives";
  * The sidebar keeps the native controls clear of its content; the inset also
  * leaves room for the show-sidebar control when the sidebar is hidden.
  */
-export const LIGHTS_INSET = 94;
+export const LIGHTS_INSET = 98;
 
 /**
  * The title row's height: the window's drag strip and the main column's header
- * share this line. macOS gets 44 so controls clear the window's top edge;
+ * share this line. macOS gets 48 so controls clear the window's top edge;
  * Windows and Linux keep 36. The native lights use the Tauri config's inset.
  * Read from the user agent: it is needed at import, before `data-platform` is set.
  */
-export const TITLEBAR_HEIGHT = currentPlatform() === "mac" ? 44 : 36;
+export const TITLEBAR_HEIGHT = currentPlatform() === "mac" ? 48 : 36;
 
 let fullscreen = false;
 const listeners = new Set<(v: boolean) => void>();

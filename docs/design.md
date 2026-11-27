@@ -755,8 +755,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Title row:** the window's title row is one row (44px on macOS, 36px elsewhere) with no brand in it:
-  the traffic lights (`trafficLightPosition` x 20, y 30, centred on the row) and the
+- **Title row:** the window's title row is one row (48px on macOS, 36px elsewhere) with no brand in it:
+  the traffic lights (`trafficLightPosition` x 19, y 26, centred on the row) and the
   sidebar's toggle with **Settings** beside it (the same two buttons, in the same place, whether the sidebar is open or hidden; Settings shows a small amber dot while a paired machine is not connected); the main column's header shares its
   height and line (`ui/Titlebar.tsx`). The app's name and version live in
   Settings › About.
@@ -1359,8 +1359,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   header's row. The chat lane always has its card's whole width.
   A pane's header row is a 44px band of tabs (`role="tablist"`): Thread info,
   Changes, Pull requests, Issues and Preview, plus the beside thread while it shows,
-  each a quiet icon `Pill` with the open one filled and named; the panel's toggle
-  ("Thread info", `ui/PanelToggle.tsx`) closes it from the band's right end, icon only;
+  each a quiet icon `Pill` with the open one filled and named. The panel's toggle
+  ("Thread info", `ui/PanelToggle.tsx`) sits in the chat header. A sheet or a panel
+  with the header toggle hidden provides a close control at the right end of its tabs.
   a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
   pane is wide enough for split, the git button (commit, push, pull, open a pull
