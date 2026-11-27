@@ -10,7 +10,7 @@ import { openPath } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
-import { splitWorkingLabel, turnFlavor } from "../lib/workingMotion";
+import { turnFlavor } from "../lib/workingMotion";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -1339,16 +1339,13 @@ export function WaitingRow({ wait }: { wait: Waiting }) {
 
 /**
  * The running turn's header, right under the message that started it:
- * `Working for 12s` over a hairline. When the turn ends it settles on a green check and
- * `Worked for 12s` for a moment (`Transcript` keeps it in place), before the fold's own
- * `Worked for 12s` divider replaces it. What the turn does now shows at the foot
- * ({@link LiveActivityRow}).
  */
 export function WorkingRow({
   startedAt,
   now,
   done,
   elapsedMs,
+  awaitingApproval,
 }: {
   startedAt?: number;
   now: number;
@@ -1356,39 +1353,29 @@ export function WorkingRow({
   done?: boolean;
   /** The finished turn's own duration, once `turnStartedAt` is gone. */
   elapsedMs?: number;
+  awaitingApproval?: boolean;
 }) {
   const elapsed = elapsedMs ?? (startedAt ? Math.max(0, now - startedAt) : undefined);
   const time = elapsed !== undefined ? formatDuration(Math.floor(elapsed / 1000) * 1000) : undefined;
+  const flavor = turnFlavor(startedAt);
   return (
-    <div
-      className="flex h-[34px] items-center gap-2 border-border/60 border-b pt-1 pb-2 text-body text-fg-muted tabular"
-      role="status"
-    >
-      {done && <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />}
-      {time ? `${done ? "Worked" : "Working"} for ${time}` : done ? "Worked" : "Working…"}
-    </div>
-  );
-}
-
-/** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
-export function LiveActivityRow({ label, done, seed }: { label: string; done?: boolean; seed?: number }) {
-  const flavor = turnFlavor(seed);
-  const { word, detail } = splitWorkingLabel(label, flavor.word);
-  return (
-    <div className="flex min-h-6 min-w-0 items-center gap-2 text-body" role="status" aria-live="polite">
-      <span className="flex w-[18px] shrink-0 justify-center">
-        {done ? (
-          <CircleCheck size={14} className="text-success rc-dot-in" aria-hidden />
-        ) : (
-          <DotMatrix pattern={flavor.pattern} size={16} />
-        )}
-      </span>
+    <div className="flex h-[34px] min-w-0 items-center gap-2 border-border/60 border-b pt-1 pb-2 text-body text-fg-muted tabular">
       {done ? (
-        <span className="truncate text-fg-muted">{label}</span>
+        <>
+          <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />
+          <span>{time ? `Worked for ${time}` : "Worked"}</span>
+        </>
       ) : (
         <>
-          <WaveWord word={word} />
-          {detail && <span className="min-w-0 truncate text-fg-faint">{detail}</span>}
+          <span className="flex shrink-0 items-center gap-2" role="status">
+            {!awaitingApproval && <DotMatrix pattern={flavor.pattern} size={16} className="opacity-70" />}
+            {awaitingApproval ? (
+              "Waiting for approval"
+            ) : (
+              <WaveWord word="Working" className="rc-wave-quiet" />
+            )}
+          </span>
+          {time && <span className="shrink-0 text-fg-faint">for {time}</span>}
         </>
       )}
     </div>

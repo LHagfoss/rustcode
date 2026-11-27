@@ -42,8 +42,6 @@ export function DotMatrix({
         const level = levels[cell]!;
         g.globalAlpha = REST_LEVEL + (1 - REST_LEVEL) * level;
         g.fillStyle = heads.has(cell) ? head : trail;
-        g.shadowColor = g.fillStyle;
-        g.shadowBlur = level > 0.5 ? pitch * 0.9 : 0;
         g.beginPath();
         g.arc(x, y, radius, 0, Math.PI * 2);
         g.fill();

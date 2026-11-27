@@ -30,11 +30,7 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.resume) return 30;
   if (row.branch) return 24;
   if (row.queueWake || row.queueNotice) return 26;
-  // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
-  // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
-  // pinned view took that back in one step — the message just sent jumped with it.
   if (row.working) return 35;
-  if (row.activity) return 24;
   const item = row.item;
   if (!item) return 24;
   if (item.kind === "tool" || item.kind === "turnEnd") return 26;
