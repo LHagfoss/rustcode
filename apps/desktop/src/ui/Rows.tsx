@@ -462,7 +462,11 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
           className="-mx-0.5 flex min-h-6 min-w-0 max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
-            {live ? <DotMatrix pattern="ripple" size={14} /> : <Brain size={14} className="text-fg-faint" />}
+            {live ? (
+              <DotMatrix pattern="ripple" size={14} tone="spectrum" />
+            ) : (
+              <Brain size={14} className="text-fg-faint" />
+            )}
           </span>
           {live ? <WaveWord word="Thinking" /> : <span className="shrink-0">{label}</span>}
           {!open && preview && (
@@ -740,7 +744,7 @@ export const ToolRow = memo(function ToolRow({
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
-              <Spinner size={14} />
+              <Icon size={16} className="rc-breathe text-fg-muted" />
             ) : failed && exitCode === undefined ? (
               <CircleX size={16} className="text-danger" />
             ) : (
@@ -1369,7 +1373,7 @@ export function WorkingRow({
         <>
           <span className="flex shrink-0 items-center gap-2" role="status">
             {!awaitingApproval && (
-              <DotMatrix pattern={flavor.pattern} size={16} cycle className="opacity-70" />
+              <DotMatrix pattern={flavor.pattern} size={16} cycle tone="spectrum" className="opacity-70" />
             )}
             {awaitingApproval ? (
               "Waiting for approval"

@@ -46,7 +46,7 @@ const call = (bodies: Record<string, unknown>[], end = true): ToolItem => {
 const render = (el: ReactElement) => renderToStaticMarkup(createElement(Tooltip.Provider, null, el));
 const drawn = (item: ToolItem) => render(createElement(ToolRow, { item, cwd: "/p" }));
 const detail = (item: ToolItem) => render(createElement(ToolDetail, { item }));
-const spinners = (markup: string) => markup.split("rc-spin").length - 1;
+const runningMarks = (markup: string) => markup.split("rc-breathe").length - 1;
 
 const backgrounded = {
   status: "completed",
@@ -69,7 +69,7 @@ describe("a tool row while it runs", () => {
       false,
     );
     const markup = drawn(item);
-    expect(spinners(markup)).toBe(1);
+    expect(runningMarks(markup)).toBe(1);
     // The row, then nothing: no output block under the line the spinner is on.
     expect(markup).not.toContain("bun test v1.3.14");
     expect(markup).not.toContain("<pre");
@@ -86,7 +86,7 @@ describe("a command the harness backgrounded", () => {
   test("stops spinning when the call returns and says where its work went", () => {
     const item = call([backgrounded]);
     const markup = drawn(item);
-    expect(spinners(markup)).toBe(0);
+    expect(runningMarks(markup)).toBe(0);
     expect(markup).toContain("Started in background");
   });
 
@@ -140,12 +140,12 @@ describe("a tool row whose call is over (issue 3711)", () => {
   const open = call([{ status: "in_progress" }], false);
 
   test("spins while its turn runs, and settles when no call is in flight", () => {
-    expect(spinners(drawn(open))).toBe(1);
+    expect(runningMarks(drawn(open))).toBe(1);
     // The thread is not running: nothing is in flight, so the row does not spin for good.
     const idle = renderToStaticMarkup(
       createElement(ToolRow, { item: open, cwd: "/p", threadId: "no-such-thread" }),
     );
-    expect(spinners(idle)).toBe(0);
+    expect(runningMarks(idle)).toBe(0);
   });
 
   test("a failed call says why, with the harness's error wrapper taken off", () => {
