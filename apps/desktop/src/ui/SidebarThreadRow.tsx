@@ -861,7 +861,7 @@ export const ThreadRow = memo(function ThreadRow({
   );
   // One weight for every title, whatever the thread is doing: the status word says that.
   const titleTint = compact
-    ? cx("min-w-0 flex-1 truncate text-body", lit ? "font-medium text-fg" : "text-fg-muted")
+    ? cx("min-w-0 flex-1 truncate text-body", lit ? "text-fg" : "text-fg-muted")
     : "min-w-0 flex-1 truncate text-body font-medium text-fg";
   const fromText = from ? originText(from) : undefined;
   // Line 2's end: the harness mark with its model, never cut.

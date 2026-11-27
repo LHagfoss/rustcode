@@ -1262,9 +1262,10 @@ export function Sidebar() {
         </TitlebarRow>
         <div className={cx("relative flex min-h-0 flex-1 flex-col", mac && "pt-2")}>
           <div
-            className={cx("flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
+            className={cx("relative flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
             inert={settingsOpen}
           >
+            <SidebarSelection />
             <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
             {toolbarOn && <SidebarToolbar />}
             <nav
@@ -1281,12 +1282,12 @@ export function Sidebar() {
                 projectDrag.start(e);
               }}
               aria-label="Thread list"
+              data-sidebar-scroll
               className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
               style={{ maskImage: fade, WebkitMaskImage: fade }}
             >
               {listing && <ThreadRowsSkeleton />}
               <div className="relative flex min-h-full flex-col">
-                <SidebarSelection />
                 {sections.map((section) => {
                   const open = isOpen(section.id);
                   const shelf = isShelf(section.id, layoutMode);
