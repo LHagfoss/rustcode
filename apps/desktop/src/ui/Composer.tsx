@@ -94,7 +94,6 @@ import {
   PlusMenu,
   WorktreeToggle,
 } from "./ComposerFooter";
-import { UsageMeter } from "./ComposerUsage";
 import {
   ALL_MATCHES,
   type DrawerEntry,
@@ -1409,9 +1408,6 @@ export const Composer = memo(function Composer({
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <PermissionMenu threadId={thread?.id} cwd={thread ? undefined : cwd} compact={compact} />
-          <span className="flex h-7 shrink-0 items-center empty:hidden">
-            <UsageMeter threadId={thread?.id} />
-          </span>
         </div>
       </div>
       <IssueReportDialog

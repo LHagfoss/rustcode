@@ -1,6 +1,6 @@
 // The plan a thread is working to, as a card at the foot of the transcript: what is left, what is
 // done, and one way to carry on. The header's popover and the composer's meter keep their own
-// compact view (ChatView.tsx, ComposerUsage.tsx) — this is the one you read in the chat.
+// compact view (ChatView.tsx) — this is the one you read in the chat.
 //
 // While the turn works through the plan the card is live: the step it is on carries a running
 // clock, and a steering note the turn read on that step is marked under it (`ui/SteerMark.tsx`), so
