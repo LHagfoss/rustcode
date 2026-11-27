@@ -31,6 +31,7 @@ mod local_interrupt;
 mod local_merge;
 pub(crate) mod local_threads;
 pub(crate) mod local_wake;
+pub mod mcp_manifest;
 mod mcp_names;
 pub mod mcp_server;
 pub(crate) mod memory_tools;

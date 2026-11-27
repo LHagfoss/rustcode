@@ -1,0 +1,9 @@
+{
+  "name": "@rustcode/evals",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mcp-tool-use": "bun mcp-tool-use/run.ts",
+    "test": "bun test"
+  }
+}

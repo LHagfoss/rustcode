@@ -105,6 +105,10 @@ failure. Fix from the CI log and push again.
 - Before pushing, run the repository's own lints, which take seconds and are
   not part of `bun run check` or `cargo check`: `python3
   scripts/check-comments.py` and `python3 scripts/check-rust-size.py`.
+- A change to what a model sees (the MCP instructions, a tool description or
+  schema, this file) has evals in `evals/` (`evals/README.md`): add a case
+  for the mistake it fixes. They call paid models, so ask the user before
+  running them.
 - A UI-only change needs no cargo run, and a Rust-only one no
   `bun run check`, unless the change crosses the ACP boundary between them.
 

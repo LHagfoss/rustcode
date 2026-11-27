@@ -365,17 +365,17 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
 
 /// The tools a thread gets beyond its orchestration version's.
 #[derive(Debug, Clone, Copy, Default)]
-struct Offered {
+pub(super) struct Offered {
     /// `smart_ui_check`, when the user has Smart UI on.
-    smart_ui: bool,
+    pub(super) smart_ui: bool,
     /// `ask_user_question`, for a harness without a question tool (#3393).
-    ask_user: bool,
+    pub(super) ask_user: bool,
     /// Leave `EXTRA_TOOL_NAMES` out of the list: the user has not asked for
     /// every tool (`orchestration-all-tools`).
-    core_only: bool,
+    pub(super) core_only: bool,
     /// List [`DIRECT_TOOLS`], `tool_search` and `call_tool` alone: the
     /// harness sends every listed schema with each request (`tool_socket::Launch::defer_tools`).
-    deferred: bool,
+    pub(super) deferred: bool,
 }
 
 /// Run `rc mcp-connect` on stdin/stdout: the orchestration tools for an
@@ -1164,7 +1164,7 @@ fn cli_offered(smart_ui: bool, ask_user: bool) -> Offered {
 /// What `tools/list` answers a thread: its orchestration version's tools
 /// under their public names, without the ones few threads call unless the
 /// user asked for every tool, and the computer-use tools the user turned on.
-fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
+pub(super) fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
     let mut listed: Vec<_> = tools_with(version, offered.smart_ui, offered.ask_user)
         .into_iter()
         .filter(|entry| {
@@ -1196,7 +1196,7 @@ fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
 const EXTRA_VERSION: u8 = 2;
 
 /// The `instructions` a thread's harness is given.
-fn instructions(version: u8, offered: Offered) -> String {
+pub(super) fn instructions(version: u8, offered: Offered) -> String {
     let mut text = mcp_names::public_text(super::mcp_instructions(version));
     if offered.deferred {
         text.push_str("\n\n");

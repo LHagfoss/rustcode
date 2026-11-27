@@ -50,6 +50,23 @@ pub enum ToolsCommand {
     },
     /// Print one tool's description and the JSON arguments it takes
     Show { name: String },
+    /// Print the MCP instructions and tool list a thread of this build is
+    /// offered, as JSON; needs no thread (the evals in `evals/` read it)
+    #[command(hide = true)]
+    Manifest {
+        /// Every tool, as with `orchestration-all-tools` on
+        #[arg(long)]
+        all_tools: bool,
+        /// The short list with `tool_search`, as for a harness that defers tools
+        #[arg(long)]
+        deferred: bool,
+        /// Add `smart_ui_check`, as when Smart UI is on
+        #[arg(long)]
+        smart_ui: bool,
+        /// Add `ask_user_question`, as for a harness without a question tool
+        #[arg(long)]
+        ask_user: bool,
+    },
     /// Call a tool with one JSON object of arguments (`-` reads it from stdin)
     Call {
         name: String,
@@ -94,6 +111,22 @@ fn bridge() -> Result<Bridge, i32> {
 }
 
 async fn tools(command: &ToolsCommand) -> i32 {
+    if let &ToolsCommand::Manifest {
+        all_tools,
+        deferred,
+        smart_ui,
+        ask_user,
+    } = command
+    {
+        let offer = rustcode::McpOffer {
+            smart_ui,
+            ask_user,
+            all_tools,
+            deferred,
+        };
+        println!("{}", rustcode::mcp_manifest(offer));
+        return 0;
+    }
     let bridge = match bridge() {
         Ok(bridge) => bridge,
         Err(code) => return code,
@@ -110,6 +143,7 @@ async fn tools(command: &ToolsCommand) -> i32 {
             }
             0
         }
+        ToolsCommand::Manifest { .. } => 0,
         ToolsCommand::Show { name } => match find(&bridge.tools(), name) {
             Some(tool) => {
                 println!("{}", show(tool));
@@ -302,6 +336,16 @@ mod tests {
             parse(&["rc", "tools", "call", "list_threads", "{}"]),
             Ok(Some(Commands::Agent(AgentCommands::Tools {
                 command: ToolsCommand::Call { .. }
+            })))
+        ));
+        assert!(matches!(
+            parse(&["rc", "tools", "manifest", "--deferred"]),
+            Ok(Some(Commands::Agent(AgentCommands::Tools {
+                command: ToolsCommand::Manifest {
+                    deferred: true,
+                    all_tools: false,
+                    ..
+                }
             })))
         ));
         assert!(matches!(
