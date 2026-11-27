@@ -1324,7 +1324,11 @@ export function Sidebar() {
                                 const projectOpen = isOpen(`project:${p.key}`);
                                 const onNew = p.project ? () => startNewThread(p.project) : undefined;
                                 return (
-                                  <div key={p.key} data-project-id={p.key} className="relative mb-0.5 last:mb-0">
+                                  <div
+                                    key={p.key}
+                                    data-project-id={p.key}
+                                    className="relative mb-0.5 last:mb-0"
+                                  >
                                     <ProjectHeader
                                       label={p.label}
                                       count={p.items.length}
