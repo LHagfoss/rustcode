@@ -3,8 +3,8 @@
 // tone; the × shows on hover or focus. At rest the cards behind the front one take its height and
 // hide their text, so only their edges peek past it. Info and success leave after 2.5 s, errors
 // after 5 s. The pointer or focus on the stack, a drag, or the window in the background stops the
-// clock. A click on the card, ×, Escape, or a drag toward the card's own edge past 48px (or a quick
-// flick that way) dismisses; a drag never selects text anywhere.
+// clock. A click on the card, ×, Escape, or a horizontal drag past 48px (or a quick
+// horizontal flick) dismisses; a drag never selects text anywhere.
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
@@ -18,7 +18,7 @@ import {
   toastExit,
 } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
-import { type ToastPosition, toastFromTop, toastSwipeSign, useToastPosition } from "../state/toastPosition";
+import { type ToastPosition, toastFromTop, useToastPosition } from "../state/toastPosition";
 import { nextExpiry } from "../state/toasts";
 import { X } from "./icons";
 import { cx, Spinner } from "./primitives";
@@ -49,7 +49,6 @@ interface DragSession {
   /** When the press began, for a flick. */
   at: number;
   dx: number;
-  dy: number;
   /** Puts the document back; safe to call twice. */
   release: () => void;
 }
@@ -57,15 +56,12 @@ interface DragSession {
 function ToastCard({
   toast,
   compactHeight,
-  sign,
   fromTop,
   onDrag,
 }: {
   toast: Toast;
   /** A card behind the front one at rest: drawn at the front card's height with its text hidden. */
   compactHeight?: number;
-  /** The side a swipe dismisses toward: 1 right, -1 left. */
-  sign: 1 | -1;
   /** Anchored at the top: it drops in from above. */
   fromTop: boolean;
   onDrag: (dragging: boolean) => void;
@@ -90,7 +86,7 @@ function ToastCard({
       }
       if (flyOut && session && el) {
         el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = toastExit(sign);
+        el.style.transform = toastExit(session.dx);
         el.style.opacity = "0";
         setFlung(true);
         dismissToast(toast.id);
@@ -102,7 +98,7 @@ function ToastCard({
         el.style.opacity = "";
       }
     },
-    [onDrag, sign, toast.id],
+    [onDrag, toast.id],
   );
   useEffect(() => () => end(false), [end]);
 
@@ -127,7 +123,6 @@ function ToastCard({
       y: e.clientY,
       at: e.timeStamp,
       dx: 0,
-      dy: 0,
       release: holdSelection(document),
     };
     setDragging(true);
@@ -139,10 +134,9 @@ function ToastCard({
     const el = ref.current;
     if (!session || !el || session.pointerId !== e.pointerId) return;
     session.dx = e.clientX - session.x;
-    session.dy = e.clientY - session.y;
-    const state = dragState(session.dx, session.dy, Number.POSITIVE_INFINITY, sign);
+    const state = dragState(session.dx);
     el.style.transition = "none";
-    el.style.transform = `translate(${state.dx}px, ${state.dy}px)`;
+    el.style.transform = `translateX(${state.dx}px)`;
     el.style.opacity = String(dragOpacity(state.away));
   };
 
@@ -150,14 +144,14 @@ function ToastCard({
     const session = drag.current;
     if (!session || session.pointerId !== e.pointerId) return;
     session.dx = e.clientX - session.x;
-    session.dy = e.clientY - session.y;
-    if (isClick(session.dx, session.dy)) {
+    const dy = e.clientY - session.y;
+    if (isClick(session.dx, dy)) {
       // A click on the card's body (not its buttons, which never start a drag) dismisses it.
       end(false);
       dismissToast(toast.id);
       return;
     }
-    end(dragState(session.dx, session.dy, e.timeStamp - session.at, sign).dismiss);
+    end(dragState(session.dx, e.timeStamp - session.at).dismiss);
   };
 
   const onPointerCancel = () => end(false);
@@ -284,7 +278,6 @@ export function Toaster() {
   const [position] = useToastPosition();
   const fromTop = toastFromTop(position);
   const away = fromTop ? 1 : -1;
-  const sign = toastSwipeSign(position);
   const section = useRef<HTMLElement>(null);
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -403,7 +396,6 @@ export function Toaster() {
           >
             <ToastCard
               toast={toast}
-              sign={sign}
               fromTop={fromTop}
               compactHeight={!expanded && index > 0 ? heights[toasts[0]?.id ?? ""] : undefined}
               onDrag={setDragging}
