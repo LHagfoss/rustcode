@@ -1,5 +1,8 @@
-//! Mouse, keyboard and scroll events posted to one app's process, so they
-//! reach that app without moving the user's pointer or taking focus.
+//! Mouse, keyboard and scroll events. In the background they are posted to
+//! one app's process, so they reach it without moving the user's pointer or
+//! taking focus. Apps that ignore such events (Chromium and Electron apps)
+//! get them in the foreground, through the system's input stream, after the
+//! app is brought to the front.
 
 use super::ffi::{self, CGPoint, Cf};
 use crate::computer_worker::keys::Combo;
@@ -16,17 +19,31 @@ const WINDOW_UNDER_POINTER: u32 = 91;
 const WINDOW_THAT_CAN_HANDLE: u32 = 92;
 const SCROLL_UNIT_LINE: u32 = 1;
 const UNICODE_CHUNK: usize = 20;
+const HID_EVENT_TAP: u32 = 0;
 
-fn post(pid: i32, event: ffi::CGEventRef) -> Result<(), String> {
+/// Where input goes: one app's process in the background, or the system's
+/// input stream, which reaches whichever app is in front.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Background(i32),
+    Foreground,
+}
+
+fn post(target: Target, event: ffi::CGEventRef) -> Result<(), String> {
     let owned = Cf::created(event.cast_const()).ok_or("Could not create the input event")?;
     // SAFETY: `owned` is a live CGEvent.
-    unsafe { ffi::CGEventPostToPid(pid, owned.get().cast_mut()) };
+    unsafe {
+        match target {
+            Target::Background(pid) => ffi::CGEventPostToPid(pid, owned.get().cast_mut()),
+            Target::Foreground => ffi::CGEventPost(HID_EVENT_TAP, owned.get().cast_mut()),
+        }
+    };
     Ok(())
 }
 
 /// Click at a global point, `count` times, with the left or right button.
 pub fn click(
-    pid: i32,
+    target: Target,
     point: CGPoint,
     window_id: Option<u32>,
     right: bool,
@@ -61,7 +78,7 @@ pub fn click(
                     );
                 }
             }
-            post(pid, event)?;
+            post(target, event)?;
             std::thread::sleep(Duration::from_millis(30));
         }
     }
@@ -69,7 +86,7 @@ pub fn click(
 }
 
 /// Press and release one key combo.
-pub fn key(pid: i32, combo: Combo) -> Result<(), String> {
+pub fn key(target: Target, combo: Combo) -> Result<(), String> {
     for down in [true, false] {
         // SAFETY: as above.
         let event = unsafe { ffi::CGEventCreateKeyboardEvent(std::ptr::null(), combo.code, down) };
@@ -78,14 +95,14 @@ pub fn key(pid: i32, combo: Combo) -> Result<(), String> {
         }
         // SAFETY: `event` is a live CGEvent.
         unsafe { ffi::CGEventSetFlags(event, combo.flags) };
-        post(pid, event)?;
+        post(target, event)?;
         std::thread::sleep(Duration::from_millis(15));
     }
     Ok(())
 }
 
 /// Type `text` as key events carrying the characters themselves.
-pub fn type_text(pid: i32, text: &str) -> Result<(), String> {
+pub fn type_text(target: Target, text: &str) -> Result<(), String> {
     let units: Vec<u16> = text.encode_utf16().collect();
     for chunk in units.chunks(UNICODE_CHUNK) {
         for down in [true, false] {
@@ -96,7 +113,7 @@ pub fn type_text(pid: i32, text: &str) -> Result<(), String> {
             }
             // SAFETY: `chunk` outlives the call, which copies it.
             unsafe { ffi::CGEventKeyboardSetUnicodeString(event, chunk.len(), chunk.as_ptr()) };
-            post(pid, event)?;
+            post(target, event)?;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -104,7 +121,7 @@ pub fn type_text(pid: i32, text: &str) -> Result<(), String> {
 }
 
 /// Scroll at a global point; positive `dy` scrolls down, positive `dx` right.
-pub fn scroll(pid: i32, point: CGPoint, dx: i32, dy: i32) -> Result<(), String> {
+pub fn scroll(target: Target, point: CGPoint, dx: i32, dy: i32) -> Result<(), String> {
     // SAFETY: as above.
     let event = unsafe {
         ffi::CGEventCreateScrollWheelEvent2(
@@ -121,5 +138,5 @@ pub fn scroll(pid: i32, point: CGPoint, dx: i32, dy: i32) -> Result<(), String> 
     }
     // SAFETY: `event` is a live CGEvent.
     unsafe { ffi::CGEventSetLocation(event, point) };
-    post(pid, event)
+    post(target, event)
 }

@@ -75,6 +75,7 @@ fn dispatch(op: Op) -> Result<Value, String> {
             y,
             button,
             count,
+            foreground,
         } => {
             needs_accessibility()?;
             let right = match button.as_deref() {
@@ -82,17 +83,36 @@ fn dispatch(op: Op) -> Result<Value, String> {
                 Some("right") => true,
                 Some(other) => return Err(format!("unknown button '{other}'")),
             };
-            click(pid, element, window_id, x, y, right, count.unwrap_or(1))
+            let target = input_target(pid, foreground)?;
+            click(
+                target,
+                pid,
+                element,
+                window_id,
+                (x, y),
+                right,
+                count.unwrap_or(1),
+            )
         }
-        Op::Type { pid, element, text } => {
+        Op::Type {
+            pid,
+            element,
+            text,
+            foreground,
+        } => {
             needs_accessibility()?;
-            type_text(pid, element, &text)
+            let target = input_target(pid, foreground)?;
+            type_text(target, pid, element, &text)
         }
-        Op::Key { pid, key } => {
+        Op::Key {
+            pid,
+            key,
+            foreground,
+        } => {
             needs_accessibility()?;
             let combo = keys::parse(&key)?;
-            input::key(pid, combo)?;
-            Ok(json!({"pressed": key}))
+            input::key(input_target(pid, foreground)?, combo)?;
+            Ok(json!({"pressed": key, "how": how(foreground)}))
         }
         Op::Scroll {
             pid,
@@ -102,14 +122,33 @@ fn dispatch(op: Op) -> Result<Value, String> {
             y,
             dx,
             dy,
+            foreground,
         } => {
             needs_accessibility()?;
             let (point, _) = target_point(pid, element.as_deref(), window_id, x, y)?;
+            let target = input_target(pid, foreground)?;
             ui::glide(point);
-            input::scroll(pid, point, dx, dy)?;
-            Ok(json!({"scrolled": {"dx": dx, "dy": dy}}))
+            input::scroll(target, point, dx, dy)?;
+            Ok(json!({"scrolled": {"dx": dx, "dy": dy}, "how": how(foreground)}))
         }
     }
+}
+
+const FRONT_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Where an action's input goes; in the foreground, the app is brought to
+/// the front first so the system's input stream reaches it.
+fn input_target(pid: i32, foreground: bool) -> Result<input::Target, String> {
+    if !foreground {
+        return Ok(input::Target::Background(pid));
+    }
+    ax::Element::app(pid)?.bring_to_front()?;
+    std::thread::sleep(FRONT_SETTLE);
+    Ok(input::Target::Foreground)
+}
+
+fn how(foreground: bool) -> &'static str {
+    if foreground { "foreground" } else { "event" }
 }
 
 pub(super) fn status(prompt: bool) -> Value {
@@ -244,17 +283,19 @@ fn target_point(
 }
 
 fn click(
+    target: input::Target,
     pid: i32,
     element: Option<String>,
     window_id: Option<u32>,
-    x: Option<f64>,
-    y: Option<f64>,
+    (x, y): (Option<f64>, Option<f64>),
     right: bool,
     count: u8,
 ) -> Result<Value, String> {
     let (point, window) = target_point(pid, element.as_deref(), window_id, x, y)?;
     ui::glide(point);
+    let foreground = target == input::Target::Foreground;
     if let Some(element) = &element
+        && !foreground
         && !right
         && count == 1
     {
@@ -269,14 +310,20 @@ fn click(
             return Ok(json!({"clicked": element, "how": "accessibility"}));
         }
     }
-    input::click(pid, point, window, right, count)?;
+    input::click(target, point, window, right, count)?;
     Ok(json!({
         "clicked": element.unwrap_or_else(|| format!("{:.0},{:.0}", point.x, point.y)),
-        "how": "event",
+        "how": how(foreground),
     }))
 }
 
-fn type_text(pid: i32, element: Option<String>, text: &str) -> Result<Value, String> {
+fn type_text(
+    target: input::Target,
+    pid: i32,
+    element: Option<String>,
+    text: &str,
+) -> Result<Value, String> {
+    let foreground = target == input::Target::Foreground;
     if let Some(element) = &element {
         let point = with_ref(pid, element, |found| {
             if found.is_secure() {
@@ -295,10 +342,11 @@ fn type_text(pid: i32, element: Option<String>, text: &str) -> Result<Value, Str
         return Err("The focused field is a password field; hand it to the user instead".into());
     }
     if let Some(focused) = &focused
+        && !foreground
         && focused.insert_text(text)?
     {
         return Ok(json!({"typed": text.chars().count(), "how": "accessibility"}));
     }
-    input::type_text(pid, text)?;
-    Ok(json!({"typed": text.chars().count(), "how": "event"}))
+    input::type_text(target, text)?;
+    Ok(json!({"typed": text.chars().count(), "how": how(foreground)}))
 }

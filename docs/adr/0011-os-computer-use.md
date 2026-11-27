@@ -147,7 +147,14 @@ What the first slice built, and where it departs from the plan above:
 - **Background first.** Clicks press the element through Accessibility, typing inserts at the
   caret (`AXSelectedText`), keys and pixel clicks go to the target process. The user's pointer
   and focus are never taken, so the "pause on physical input" rule is not needed for these
-  actions and is not built.
+  actions and is not built. Chromium and Electron apps ignore events posted to their process,
+  so `foreground: true` brings the app to the front (`AXFrontmost`) and posts to the HID event
+  tap instead; it has an approval of its own (`<app>#foreground`), since it takes the pointer
+  and focus.
+- **Hosted worker.** The app starts `rc computer-worker --listen` as its child, so macOS checks
+  RustCode's own TCC grants rather than the bare `rc` binary's; the engine connects over
+  `<config>/run/computer-worker.sock` (same-binary peers only) and starts its own worker only
+  when no app is open.
 - **Visible activity and stop.** The agent's own cursor (drawn by RustCode, excluded from
   captures) glides to each target; a menu bar item names the app and its **Stop** ends the
   worker, which ends every grant. A global shortcut is not built.

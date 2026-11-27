@@ -62,16 +62,22 @@ pub enum Op {
         button: Option<String>,
         #[serde(default)]
         count: Option<u8>,
+        #[serde(default)]
+        foreground: bool,
     },
     Type {
         pid: i32,
         #[serde(default, rename = "ref")]
         element: Option<String>,
         text: String,
+        #[serde(default)]
+        foreground: bool,
     },
     Key {
         pid: i32,
         key: String,
+        #[serde(default)]
+        foreground: bool,
     },
     Scroll {
         pid: i32,
@@ -87,10 +93,26 @@ pub enum Op {
         dx: i32,
         #[serde(default)]
         dy: i32,
+        #[serde(default)]
+        foreground: bool,
     },
     Activity {
         label: Option<String>,
     },
+}
+
+impl Op {
+    /// Whether the action brings the app to the front and uses the system's
+    /// own input, for apps that ignore input sent to them in the background.
+    pub fn foreground(&self) -> bool {
+        match self {
+            Op::Click { foreground, .. }
+            | Op::Type { foreground, .. }
+            | Op::Key { foreground, .. }
+            | Op::Scroll { foreground, .. } => *foreground,
+            _ => false,
+        }
+    }
 }
 
 /// One request line.
@@ -274,6 +296,7 @@ mod tests {
                 y: None,
                 button: None,
                 count: Some(2),
+                foreground: false,
             }
         );
         let status: Request = serde_json::from_str(r#"{"id":1,"op":"status"}"#).unwrap();

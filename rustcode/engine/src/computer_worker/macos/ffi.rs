@@ -185,6 +185,7 @@ unsafe extern "C" {
     pub fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
     pub fn CGEventSetLocation(event: CGEventRef, location: CGPoint);
     pub fn CGEventPostToPid(pid: i32, event: CGEventRef);
+    pub fn CGEventPost(tap: u32, event: CGEventRef);
     pub fn CGImageGetWidth(image: CGImageRef) -> usize;
     pub fn CGImageGetHeight(image: CGImageRef) -> usize;
     pub fn CGImageRelease(image: CGImageRef);

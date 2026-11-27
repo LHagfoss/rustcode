@@ -141,7 +141,13 @@ Start a new thread after changing it.
    click presses the element through Accessibility and typing inserts at its
    caret, so the app works in the background: the user's pointer, keyboard
    focus and front window stay theirs. Keys and pixel clicks are posted to the
-   app's own process.
+   app's own process. Chromium and Electron apps (Discord, Slack, Chrome,
+   VS Code) ignore input sent that way; for them the agent passes
+   `foreground: true` to `computer_click`, `computer_type`, `computer_key` or
+   `computer_scroll`, which brings the app to the front and sends the input
+   through the system's own input stream (it moves the user's pointer and
+   takes focus). Foreground input is approved separately from background
+   control of the same app.
 4. `computer_screenshot` captures one window (ScreenCaptureKit, longest side
    1600 px). Pixel coordinates for `computer_click` and `computer_scroll`
    (`x`, `y` with `window_id`) are pixels of the latest screenshot of that

@@ -126,6 +126,10 @@ pub fn all_tools() -> Vec<Value> {
         "string",
         "Paired machine id or name from list_machines whose desktop to control; omit for this computer",
     );
+    let foreground = property(
+        "boolean",
+        "true to bring the app to the front and use real input, for apps that ignore background input (Chromium and Electron apps such as Discord, Slack, Chrome, VS Code). Takes the user's pointer and focus; asks the user first",
+    );
     let entries = [
         (
             "computer_windows",
@@ -147,25 +151,25 @@ pub fn all_tools() -> Vec<Value> {
         ),
         (
             "computer_click",
-            json!({"pid": pid, "ref": reference, "window_id": window, "x": x, "y": y, "button": {"type": "string", "enum": ["left", "right"]}, "count": property("integer", "2 for a double click"), "purpose": purpose, "machine": machine}),
+            json!({"pid": pid, "ref": reference, "window_id": window, "x": x, "y": y, "button": {"type": "string", "enum": ["left", "right"]}, "count": property("integer", "2 for a double click"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid"]),
-            "Click an element by ref (pressed through Accessibility, in the background) or at x, y of the latest screenshot. The agent's own cursor shows where; the user's pointer and focus stay theirs. Observe again afterwards: success does not prove the effect.",
+            "Click an element by ref (pressed through Accessibility, in the background) or at x, y of the latest screenshot. The agent's own cursor shows where; the user's pointer and focus stay theirs. Observe again afterwards: success does not prove the effect. If an app ignores the click (a screenshot shows no change), retry with foreground: true.",
         ),
         (
             "computer_type",
-            json!({"pid": pid, "ref": reference, "text": property("string", "The text to insert"), "purpose": purpose, "machine": machine}),
+            json!({"pid": pid, "ref": reference, "text": property("string", "The text to insert"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid", "text"]),
-            "Insert text into an element by ref, or into the app's focused element. Refuses password fields: hand those to the user.",
+            "Insert text into an element by ref, or into the app's focused element. Refuses password fields: hand those to the user. If the text does not appear, retry with foreground: true.",
         ),
         (
             "computer_key",
-            json!({"pid": pid, "key": property("string", "A key or combo: return, escape, tab, cmd+t, ctrl+shift+tab"), "purpose": purpose, "machine": machine}),
+            json!({"pid": pid, "key": property("string", "A key or combo: return, escape, tab, cmd+t, ctrl+shift+tab"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid", "key"]),
-            "Press a key or combo in the app, without taking focus from the user.",
+            "Press a key or combo in the app, without taking focus from the user unless foreground is true.",
         ),
         (
             "computer_scroll",
-            json!({"pid": pid, "ref": reference, "window_id": window, "x": x, "y": y, "dx": property("integer", "Lines right (negative: left)"), "dy": property("integer", "Lines down (negative: up)"), "purpose": purpose, "machine": machine}),
+            json!({"pid": pid, "ref": reference, "window_id": window, "x": x, "y": y, "dx": property("integer", "Lines right (negative: left)"), "dy": property("integer", "Lines down (negative: up)"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid"]),
             "Scroll at an element by ref, or at x, y of the latest screenshot.",
         ),
@@ -326,6 +330,31 @@ struct App {
     name: String,
     sensitive: bool,
 }
+
+impl App {
+    /// What the user approves for `op`. Foreground input takes their pointer
+    /// and focus, so it is a grant of its own, asked for even when the app is
+    /// already allowed in the background.
+    fn approval_for(&self, op: &Op) -> App {
+        if !op.foreground() {
+            return App {
+                key: self.key.clone(),
+                name: self.name.clone(),
+                sensitive: self.sensitive,
+            };
+        }
+        App {
+            key: format!("{}{FOREGROUND_SUFFIX}", self.key),
+            name: format!(
+                "{} in the foreground (it takes your pointer and focus)",
+                self.name
+            ),
+            sensitive: self.sensitive,
+        }
+    }
+}
+
+const FOREGROUND_SUFFIX: &str = "#foreground";
 
 async fn identify(pid: i32, cancel: &CancellationToken) -> Result<App, String> {
     let found = super::desktop_worker::call(Op::App { pid }, ACTION_LIMIT, cancel).await?;
@@ -568,36 +597,31 @@ pub async fn bridge(call: BridgeCall, cancel: &CancellationToken) -> Result<Valu
         return Ok(json!({ "status": "ok", "result": listed }));
     };
     let app = identify(pid, cancel).await?;
-    if !has_grant(&call.session_id, &app) {
+    let approval = app.approval_for(&op);
+    if !has_grant(&call.session_id, &approval) {
+        let needs_approval = json!({
+            "status": "needs_approval",
+            "app": {
+                "key": approval.key,
+                "name": approval.name,
+                "sensitive": approval.sensitive,
+            },
+        });
         let Some(choice) = call.approval.as_deref() else {
-            return Ok(json!({
-                "status": "needs_approval",
-                "app": {
-                    "key": app.key,
-                    "name": app.name,
-                    "sensitive": app.sensitive,
-                },
-            }));
+            return Ok(needs_approval);
         };
-        if call.approved_app.as_deref() != Some(app.key.as_str()) {
-            return Ok(json!({
-                "status": "needs_approval",
-                "app": {
-                    "key": app.key,
-                    "name": app.name,
-                    "sensitive": app.sensitive,
-                },
-            }));
+        if call.approved_app.as_deref() != Some(approval.key.as_str()) {
+            return Ok(needs_approval);
         }
         match choice {
             "once" => {}
             "app" => {
-                if !app.sensitive {
+                if !approval.sensitive {
                     grants()
                         .apps
                         .entry(call.session_id.clone())
                         .or_default()
-                        .insert(app.key.clone());
+                        .insert(approval.key.clone());
                 }
             }
             _ => return Err("invalid approval choice".into()),
@@ -672,9 +696,10 @@ async fn run(
         return Ok(listed.to_string());
     };
     let app = identify(pid, cancel).await?;
-    if !has_grant(&request.session_id, &app) {
+    let approval = app.approval_for(&op);
+    if !has_grant(&request.session_id, &approval) {
         let asker = asker.ok_or("No approval channel is attached; nothing was run")?;
-        ask(request, asker, &app, cancel).await?;
+        ask(request, asker, &approval, cancel).await?;
         if !DesktopSettings::load().enabled {
             return Err(off());
         }
@@ -790,11 +815,39 @@ mod tests {
                 y: None,
                 button: None,
                 count: None,
+                foreground: false,
             }
         );
         assert_eq!(op_for("computer_windows", &json!({})).unwrap(), Op::Windows);
         assert!(op_for("computer_type", &json!({"pid": 1})).is_err());
         assert!(op_for("computer_status", &json!({})).is_err());
+    }
+
+    #[test]
+    fn foreground_input_needs_its_own_grant() {
+        let discord = App {
+            key: "com.hnc.Discord".into(),
+            name: "Discord".into(),
+            sensitive: false,
+        };
+        let background = op_for("computer_key", &json!({"pid": 3, "key": "return"})).unwrap();
+        let foreground = op_for(
+            "computer_key",
+            &json!({"pid": 3, "key": "return", "foreground": true}),
+        )
+        .unwrap();
+        assert_eq!(discord.approval_for(&background).key, "com.hnc.Discord");
+        let front = discord.approval_for(&foreground);
+        assert_eq!(front.key, "com.hnc.Discord#foreground");
+        assert!(front.name.starts_with("Discord in the foreground"));
+        grants()
+            .apps
+            .entry("thread-fg".into())
+            .or_default()
+            .insert(discord.key.clone());
+        assert!(has_grant("thread-fg", &discord.approval_for(&background)));
+        assert!(!has_grant("thread-fg", &front));
+        unregister("thread-fg");
     }
 
     #[test]

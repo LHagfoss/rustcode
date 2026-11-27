@@ -160,6 +160,13 @@ impl Element {
         self.set("AXFocused", unsafe { ffi::kCFBooleanTrue })
     }
 
+    /// Make this app element the frontmost app, as clicking its Dock icon
+    /// would.
+    pub fn bring_to_front(&self) -> Result<(), String> {
+        // SAFETY: kCFBooleanTrue is a constant.
+        self.set("AXFrontmost", unsafe { ffi::kCFBooleanTrue })
+    }
+
     /// Insert `text` at the element's caret, when the app lets
     /// Accessibility edit it directly.
     pub fn insert_text(&self, text: &str) -> Result<bool, String> {
