@@ -221,6 +221,7 @@ export const Composer = memo(function Composer({
   // The queued message the composer is editing (its pencil, or ↑): ⏎ saves it where it waits, and
   // never sends it. What the composer held before comes back when the edit ends.
   const queuedEdit = useApp((s) => (s.queuedEdit?.threadId === key ? s.queuedEdit : null));
+  const standaloneCommand = extras.command?.action !== "skill" && extras.command?.takesArguments === false;
   // `/`: the commands, at the start or anywhere after whitespace, filtered by the
   // token the caret is in. `/usr/bin` is a path, not a command (state/compose.ts).
   const slash = dismissed === draft || extras.command ? null : slashToken(draft, caret);
@@ -698,7 +699,12 @@ export const Composer = memo(function Composer({
     if (slash.start === 0 && slash.start + 1 + slash.query.length === draft.length) {
       if (command.action === "issue_report") {
         openIssueReport();
-      } else if (run && (!command.takesArguments || command.action !== "execute")) {
+      } else if (
+        run &&
+        !offline &&
+        command.action !== "skill" &&
+        (!command.takesArguments || command.action !== "execute")
+      ) {
         update("");
         const message = commandSubmission(command);
         void submit(message.text, message.extras);
@@ -776,9 +782,15 @@ export const Composer = memo(function Composer({
     // `/name ` typed out becomes the token too, as in the SwiftUI app.
     const typed = /^(\/\S+) (.*)$/s.exec(text);
     const command = typed && !extras.command ? commands.find((c) => c.name === typed[1]) : undefined;
-    if (command?.takesArguments) {
+    if (
+      typed &&
+      command &&
+      (command.takesArguments ||
+        command.action === "skill" ||
+        (command.action === "execute" && !typed[2]?.trim()))
+    ) {
       change((e) => ({ ...e, command }));
-      update(typed![2] ?? "");
+      update(command.takesArguments || command.action === "skill" ? (typed[2] ?? "") : "");
     } else {
       update(text);
     }
@@ -786,6 +798,7 @@ export const Composer = memo(function Composer({
   };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (standaloneCommand) return;
     // A picture comes as a file, as an item, or not at all: macOS fills `files`, WebKitGTK on Linux
     // can list it only as an item, and sometimes keeps it to the native clipboard (lib/paste.ts,
     // lib/native.ts).
@@ -840,6 +853,7 @@ export const Composer = memo(function Composer({
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
+        if (e.key === "Enter" && e.repeat) return;
         const pick = picks[selected] ?? picks[0];
         if (!pick) return;
         if (pick.kind === "more") expand(pick.section);
@@ -1157,7 +1171,7 @@ export const Composer = memo(function Composer({
               // One line of the field's own height (21px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
               <Tooltip label={extras.command.description}>
-                <span className="mt-1.5 flex h-[21px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[21px] rc-in">
+                <span className="mt-1.5 flex h-[21px] shrink-0 items-center rounded-full bg-accent/12 px-2 font-medium font-mono text-xs text-accent leading-[21px] rc-in">
                   {extras.command.name}
                 </span>
               </Tooltip>
@@ -1234,11 +1248,13 @@ export const Composer = memo(function Composer({
                 onPaste={onPaste}
                 onScroll={syncField}
                 rows={1}
-                placeholder={suggestion ? `${suggestion.text}  ⇥` : placeholder}
+                placeholder={
+                  standaloneCommand ? undefined : suggestion ? `${suggestion.text}  ⇥` : placeholder
+                }
                 aria-label="Message"
                 data-focus-default
                 aria-describedby={suggestion ? suggestionHint : undefined}
-                readOnly={offline}
+                readOnly={offline || standaloneCommand}
                 {...noTextHelpers}
                 style={fadeStyle}
                 className={cx(

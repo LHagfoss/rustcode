@@ -437,7 +437,7 @@ const components: Components = {
       return (
         // A sent message's leading slash command: roomier than body `code`, since it heads the
         // message rather than sitting inside a sentence.
-        <span className="mr-1 rounded-md bg-accent/12 px-2 py-0.5 font-medium font-mono text-[0.85em] text-accent">
+        <span className="mr-1 inline-flex h-[21px] items-center rounded-full bg-accent/12 px-2 font-medium font-mono text-xs text-accent leading-[21px]">
           {text.slice(COMMAND_MARK.length)}
         </span>
       );
