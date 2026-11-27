@@ -118,6 +118,37 @@ describe("shorthand", () => {
     );
   });
 
+  test("text, table and source blocks keep lines starting with inline HTML or comparisons", () => {
+    const linkedTable = expandShorthand(
+      [
+        ":: table Merged PRs",
+        "PR | Issues | Status",
+        '<a href="https://github.com/LHagfoss/rustcode/pull/4550">PR #4550</a> | <a href="https://github.com/LHagfoss/rustcode/issues/4521">#4521</a> | Merged {ok}',
+        '— | <a href="https://github.com/LHagfoss/rustcode/issues/2034">#2034</a> | Skipped {info}',
+      ].join("\n"),
+    );
+    expect(linkedTable).toBe(
+      '<h3>Merged PRs</h3><table class="rc-table"><thead><tr><th>PR</th><th>Issues</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td><a href="https://github.com/LHagfoss/rustcode/pull/4550">PR #4550</a></td><td><a href="https://github.com/LHagfoss/rustcode/issues/4521">#4521</a></td><td><span class="rc-badge rc-ok">Merged</span></td></tr>' +
+        '<tr><td>—</td><td><a href="https://github.com/LHagfoss/rustcode/issues/2034">#2034</a></td><td><span class="rc-badge rc-info">Skipped</span></td></tr>' +
+        "</tbody></table>",
+    );
+    expect(expandShorthand(":: table\nLatency | Result\n< 10 ms | fast {ok}\n<div>after</div>")).toBe(
+      '<table class="rc-table"><thead><tr><th>Latency</th><th>Result</th></tr></thead><tbody>' +
+        '<tr><td>< 10 ms</td><td><span class="rc-badge rc-ok">fast</span></td></tr>' +
+        "</tbody></table>\n<div>after</div>",
+    );
+    expect(
+      expandShorthand(':: callout info\n<b>Core split:</b> <a href="https://example.com">Docs</a>'),
+    ).toBe('<div class="rc-callout rc-info"><b>Core split:</b> <a href="https://example.com">Docs</a></div>');
+    expect(expandShorthand(":: p\n<code>data.sqlite</code> owns telemetry.")).toBe(
+      "<p><code>data.sqlite</code> owns telemetry.</p>",
+    );
+    expect(expandShorthand(':: sources\n<a href="https://example.com/a">A</a>')).toBe(
+      '<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://example.com/a">A</a></li></ol></details>',
+    );
+  });
+
   test("callout, paragraph, heading, title and sources", () => {
     expect(expandShorthand(":: callout warn Careful.\nThe cap is `5|10` s.")).toBe(
       '<div class="rc-callout rc-warn"><b>Careful.</b> The cap is <code>5|10</code> s.</div>',
