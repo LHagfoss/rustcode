@@ -853,7 +853,10 @@ export function ChatView() {
                 <Composer
                   thread={thread}
                   compact={width < 600}
-                  className={cx(isNew && "rc-composer-over", isNew && !showsBanner && "rc-composer-plain-footer")}
+                  className={cx(
+                    isNew && "rc-composer-over",
+                    isNew && !showsBanner && "rc-composer-plain-footer",
+                  )}
                 />
               </LaneItem>
             </div>
