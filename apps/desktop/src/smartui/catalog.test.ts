@@ -180,6 +180,55 @@ describe("shorthand catalog", () => {
     expect(expandShorthand(":: tab One\n:: p First")).toContain('data-rc-tab="t1-0">One</button></div>');
   });
 
+  test("adjacent :: tab blocks separated by :: end stay in one tab set", () => {
+    const out = expandShorthand(
+      [
+        ":: tab How DSH Works",
+        ":: p First",
+        ":: end",
+        "",
+        ":: tab DSH vs RustCode",
+        ":: p Second",
+        ":: end",
+        "",
+        ":: tab What To Add",
+        ":: p Third",
+        ":: end",
+        "",
+        ":: p After",
+      ].join("\n"),
+    );
+    expect(out).toBe(
+      [
+        '<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="t1-0">How DSH Works</button><button role="tab" data-rc-tab="t1-1">DSH vs RustCode</button><button role="tab" data-rc-tab="t1-2">What To Add</button></div>',
+        '<section data-rc-panel="t1-0">',
+        "<p>First</p>",
+        "</section>",
+        '<section data-rc-panel="t1-1">',
+        "<p>Second</p>",
+        "</section>",
+        '<section data-rc-panel="t1-2">',
+        "<p>Third</p>",
+        "</section></div>",
+        "",
+        "<p>After</p>",
+      ].join("\n"),
+    );
+    const separate = expandShorthand(
+      [
+        ":: tab One",
+        ":: p First",
+        ":: end",
+        "",
+        ":: h Next section",
+        ":: tab Two",
+        ":: p Second",
+        ":: end",
+      ].join("\n"),
+    );
+    expect(separate.match(/class="rc-tabs"/g)).toHaveLength(2);
+  });
+
   test("a form sends its message with its named fields", () => {
     const out = expandShorthand(
       ":: form Apply these filters | Apply\n- select range | Range | 7d, *30d, 90d\n- choice kind | Kind | all, failed\n- check flaky | Only flaky | on\n- range n | Threshold | 0-100 = 40\n- text q | Filter | name",
