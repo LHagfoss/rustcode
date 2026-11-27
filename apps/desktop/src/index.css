@@ -628,7 +628,7 @@
   animation-duration: 2.4s;
   animation-delay: calc(var(--rc-wave-i) * 70ms - var(--rc-wave-phase, 0ms));
 }
-@keyframes rc-breathe {
+@keyframes rc-icon-pulse {
   0%,
   100% {
     opacity: 0.45;
@@ -637,8 +637,8 @@
     opacity: 1;
   }
 }
-.rc-breathe {
-  animation: rc-breathe 1.6s ease-in-out infinite;
+.rc-icon-pulse {
+  animation: rc-icon-pulse 1.6s ease-in-out infinite;
 }
 
 /*
@@ -816,7 +816,7 @@
     color: var(--rc-text-muted);
     background: none;
   }
-  .rc-breathe {
+  .rc-icon-pulse {
     animation: none;
   }
   .rc-wave > span[aria-hidden] {

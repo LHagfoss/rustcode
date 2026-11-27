@@ -744,7 +744,7 @@ export const ToolRow = memo(function ToolRow({
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
-              <Icon size={16} className="rc-breathe text-fg-muted" />
+              <Icon size={16} className="rc-icon-pulse text-fg-muted" />
             ) : failed && exitCode === undefined ? (
               <CircleX size={16} className="text-danger" />
             ) : (
