@@ -205,6 +205,11 @@ fn context(r: &GenerateRequest) -> Result<String> {
     ) {
         return Ok(bounded(r.prompt.as_deref().unwrap_or_default()));
     }
+    if r.kind == crate::review_guide::KIND {
+        let prompt = r.prompt.as_deref().unwrap_or_default();
+        anyhow::ensure!(!prompt.trim().is_empty(), "Missing pull request diff");
+        return Ok(crate::review_guide::bounded(prompt));
+    }
     let path = r.path.as_deref().context("Missing repository path")?;
     let git = |args: &[&str]| {
         crate::worktrees::git_timed(path, args, Duration::from_secs(10)).map_err(anyhow::Error::msg)
@@ -269,7 +274,7 @@ fn context(r: &GenerateRequest) -> Result<String> {
     }
 }
 pub(crate) async fn generate(r: GenerateRequest) -> Result<Value> {
-    tokio::time::timeout(Duration::from_secs(45), generate_inner(r))
+    tokio::time::timeout(crate::review_guide::timeout_for(&r.kind), generate_inner(r))
         .await
         .context("Text generation timed out")?
 }
@@ -282,6 +287,9 @@ async fn generate_inner(r: GenerateRequest) -> Result<Value> {
         return Ok(json!({"text": null}));
     };
     let mut profile = generator.profile()?;
+    if r.kind == crate::review_guide::KIND {
+        profile.max_output_tokens = Some(crate::review_guide::MAX_OUTPUT_TOKENS);
+    }
     profile.api_key = Some(
         crate::provider_auth::NativeCredentialStore
             .get("text-generation", &generator.id, "api-key")
@@ -305,6 +313,7 @@ async fn generate_inner(r: GenerateRequest) -> Result<Value> {
             "Write a pull request title on the first line, then a blank line and a Markdown body describing these commits and diff. Return only that text."
         }
         "dictation_cleanup" => DICTATION_CLEANUP_INSTRUCTION,
+        crate::review_guide::KIND => crate::review_guide::INSTRUCTION,
         _ => bail!("Unknown text generation kind"),
     };
     request_text(profile, instruction, input).await
@@ -406,6 +415,21 @@ mod tests {
             assert!(DICTATION_CLEANUP_INSTRUCTION.contains(phrase), "{phrase}");
         }
         assert!(DICTATION_CLEANUP_INSTRUCTION.contains("do not summarise, answer"));
+    }
+    #[test]
+    fn a_review_guide_reads_the_diff_the_desktop_sends() {
+        let request = |prompt: &str| GenerateRequest {
+            kind: crate::review_guide::KIND.into(),
+            prompt: Some(prompt.into()),
+            path: None,
+            files: vec![],
+            project: None,
+        };
+        assert_eq!(
+            context(&request("=== src/a.rs\n12 + x")).unwrap(),
+            "=== src/a.rs\n12 + x"
+        );
+        assert!(context(&request("  ")).is_err());
     }
     #[test]
     fn provider_profiles_are_isolated() {

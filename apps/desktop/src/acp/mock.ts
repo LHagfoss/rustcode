@@ -35,6 +35,7 @@ import { MOCK_LOCAL_HOST, mockHostEntry, mockNameWins, mockRemote } from "./mock
 import { MockAddedMcp } from "./mockMcp";
 import { MockMemory } from "./mockMemory";
 import { MockOutside } from "./mockOutside";
+import { MOCK_REVIEW_GUIDE } from "./mockReviewGuide";
 import {
   APP_PATCH,
   type MockThread,
@@ -1594,6 +1595,7 @@ export class MockEngine {
         return { text: "Summarize what changed in this branch since main." };
       case "_rustcode/textGeneration/generate":
         if (!this.textGenerators.selected) return { text: null };
+        if (params.kind === "review_guide") return { text: MOCK_REVIEW_GUIDE };
         return {
           text: "feat(desktop): improve workspace navigation\n\nMake the workspace easier to navigate.",
         };

@@ -77,6 +77,7 @@ import {
 } from "./icons";
 import { Markdown } from "./Markdown";
 import { addFeedbackToThread, PullDiff } from "./PullDiff";
+import { PullGuide } from "./PullGuide";
 import {
   Callout,
   ClusterButton,
@@ -465,7 +466,7 @@ function PullView({ cwd, host, number }: { cwd: string; host: string; number: nu
   const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState<"details" | "diff">("details");
+  const [tab, setTab] = useState<"details" | "guide" | "diff">("details");
   const merges = !!summary && !host && mergeControl(summary, detail?.checkRuns).kind !== "none";
   const askAgent = (pull: PullRequest) => {
     startNewThread(cwd, host || undefined);
@@ -571,6 +572,7 @@ function PullView({ cwd, host, number }: { cwd: string; host: string; number: nu
             onChange={setTab}
             options={[
               { value: "details", label: "Details" },
+              { value: "guide", label: "Guide" },
               { value: "diff", label: `Diff · ${summary.changedFiles}` },
             ]}
           />
@@ -579,6 +581,11 @@ function PullView({ cwd, host, number }: { cwd: string; host: string; number: nu
       {tab === "diff" && summary && (
         <div className="mt-3">
           <PullDiff cwd={cwd} local={!host} pull={summary} detail={detail} />
+        </div>
+      )}
+      {tab === "guide" && summary && (
+        <div className="mt-3">
+          <PullGuide cwd={cwd} pull={summary} body={detail?.body ?? ""} />
         </div>
       )}
       {tab === "details" && detail && (
