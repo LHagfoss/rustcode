@@ -20,6 +20,24 @@ const WINDOW_THAT_CAN_HANDLE: u32 = 92;
 const SCROLL_UNIT_LINE: u32 = 1;
 const UNICODE_CHUNK: usize = 20;
 const HID_EVENT_TAP: u32 = 0;
+const HID_SYSTEM_STATE: i32 = 1;
+
+/// Events carry the keyboard's own source, as typed keys do: some apps
+/// ignore events created without one.
+struct Source(Option<Cf>);
+
+impl Source {
+    fn new() -> Self {
+        // SAFETY: creating a source has no preconditions; `Cf` releases it.
+        Self(Cf::created(
+            unsafe { ffi::CGEventSourceCreate(HID_SYSTEM_STATE) }.cast_const(),
+        ))
+    }
+
+    fn get(&self) -> *const std::ffi::c_void {
+        self.0.as_ref().map_or(std::ptr::null(), Cf::get)
+    }
+}
 
 /// Where input goes: one app's process in the background, or the system's
 /// input stream, which reaches whichever app is in front.
@@ -54,11 +72,11 @@ pub fn click(
     } else {
         (LEFT_DOWN, LEFT_UP, LEFT_BUTTON)
     };
+    let source = Source::new();
     for click in 1..=count.clamp(1, 3) {
         for kind in [down, up] {
             // SAFETY: creating an event has no preconditions; a null source is allowed.
-            let event =
-                unsafe { ffi::CGEventCreateMouseEvent(std::ptr::null(), kind, point, button) };
+            let event = unsafe { ffi::CGEventCreateMouseEvent(source.get(), kind, point, button) };
             if event.is_null() {
                 return Err("Could not create the click".into());
             }
@@ -87,9 +105,10 @@ pub fn click(
 
 /// Press and release one key combo.
 pub fn key(target: Target, combo: Combo) -> Result<(), String> {
+    let source = Source::new();
     for down in [true, false] {
         // SAFETY: as above.
-        let event = unsafe { ffi::CGEventCreateKeyboardEvent(std::ptr::null(), combo.code, down) };
+        let event = unsafe { ffi::CGEventCreateKeyboardEvent(source.get(), combo.code, down) };
         if event.is_null() {
             return Err("Could not create the key press".into());
         }
@@ -104,10 +123,11 @@ pub fn key(target: Target, combo: Combo) -> Result<(), String> {
 /// Type `text` as key events carrying the characters themselves.
 pub fn type_text(target: Target, text: &str) -> Result<(), String> {
     let units: Vec<u16> = text.encode_utf16().collect();
+    let source = Source::new();
     for chunk in units.chunks(UNICODE_CHUNK) {
         for down in [true, false] {
             // SAFETY: as above.
-            let event = unsafe { ffi::CGEventCreateKeyboardEvent(std::ptr::null(), 0, down) };
+            let event = unsafe { ffi::CGEventCreateKeyboardEvent(source.get(), 0, down) };
             if event.is_null() {
                 return Err("Could not create the typing event".into());
             }
