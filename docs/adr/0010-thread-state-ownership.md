@@ -38,11 +38,11 @@ the code on 2026-11-26.
 | `metadata.json` | the session store | `rustcode-session` `update_session_metadata`, `write_metadata_if_missing`, `metadata.rs` | atomic; exclusive `metadata.lock` around read-modify-write | as written; holds identity, `yolo`, `model`, `compaction`, `parent`, `repo`, `scheduled_job`, `machine_origins`, `title`, `user_titled`, `status`, `pinned`, and `snoozed_until`. `running` and `needs_input` are never stored (see the locks). Legacy `status.json`, `pin.json`, `snooze.json`, `title.txt`, and `user-titled` remain readable as fallbacks and are removed on update. Verified. |
 | `workspace.json` | the session store | `save_session_workspace`, a move (`acp/project_relocate.rs`) | atomic | as written; a move writes it first, so it wins over `harness.json` (`acp/session_repair.rs`). Verified. |
 | `segment.json`, `image_cache.json` | the built-in agent | `rustcode-session` | atomic | as written. Verified. |
-| `performance.json` | the built-in agent | `network/turn/finish.rs` | at turn end | absent for a turn that never finished. Verified. |
+| `performance.json` | the built-in agent | `network/turn/finish.rs` | atomic, at turn end | absent for a turn that never finished. Verified. |
 | `logs/debug.log` | every process, appending | `logger.rs` | append, rotated | as far as it got. Verified. |
 | `open.lock` | the process that has the thread loaded | `sessions/open.rs` | advisory `flock`, released by the kernel when the process ends | free. Verified. |
 | `turn.lock`, `wait.lock` | the process running a turn or waiting on the user | `sessions/activity.rs` | advisory `flock` | free: the thread reads as idle. Verified. |
-| `tool_output/`, `artifacts/` | the agent that ran the tool | `tools/exec.rs`, `harness/transcript.rs` | plain writes, before the message that names them | a message may name an artifact that a crash cut short. Unverified. |
+| `tool_output/`, `artifacts/` | the agent that ran the tool | `network/output.rs` (`save_full_tool_output`, called by `network/tool_exec/result.rs` and `harness/transcript.rs`), `tools/dispatch.rs` (`save_mcp_binary`), `remote/images.rs` | atomic (`write_atomic_new`, or synced chunks committed by `publish_private_json`), before the message that names them | complete or absent; a message never names a half-written artifact. Verified. |
 
 Folders are never pruned (`docs/data-store.md`). A thread's folder is created
 by the session store (`ensure_session`) and never by a write: `write_atomic`

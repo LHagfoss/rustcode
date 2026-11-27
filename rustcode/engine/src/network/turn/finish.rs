@@ -306,14 +306,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     if let Some(dir) = crate::sessions::get_active_session_dir(&active_id) {
         if let Ok(bytes) = serde_json::to_vec_pretty(&ctx.performance) {
             let path = dir.join("performance.json");
-            let saved = (|| -> std::io::Result<()> {
-                use std::io::Write;
-                let mut temporary = tempfile::NamedTempFile::new_in(&dir)?;
-                temporary.write_all(&bytes)?;
-                temporary.persist(path).map_err(|error| error.error)?;
-                Ok(())
-            })();
-            if let Err(error) = saved {
+            if let Err(error) = crate::atomic_file::write_atomic(&path, &bytes) {
                 dbg_log!("Could not persist turn performance: {error}");
             }
         }
