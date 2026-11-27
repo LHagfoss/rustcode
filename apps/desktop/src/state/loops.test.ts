@@ -3,9 +3,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   agoText,
+  averageRunUsage,
   cronInWords,
   cronOfForm,
   cronProblem,
+  crossPlatformPathWarning,
   defaultForm,
   formOfCron,
   formProblem,
@@ -31,6 +33,7 @@ import {
   scheduleInWords,
   stripInlineMarkdown,
   timeZoneChoices,
+  unreviewedCountByLoop,
   webhookOf,
   withRunAccount,
 } from "./loops";
@@ -217,18 +220,25 @@ describe("a loop's state", () => {
     );
   });
 
-  test("the last result says how and when", () => {
+  test("the last result says how and keeps relative age separate", () => {
     expect(lastResult(loop(), NOW)).toEqual({ text: "No runs yet", tone: "muted" });
     expect(lastResult(loop({ runs: [run("r1", "succeeded", 2)] }), NOW)).toEqual({
-      text: "Finished 2 h ago",
+      text: "Finished",
+      age: "2 h ago",
       tone: "ok",
     });
-    expect(lastResult(loop({ runs: [run("r1", "failed", 1, { error: "boom" })] }), NOW).text).toBe(
-      "Failed 1 h ago: boom",
-    );
+    expect(lastResult(loop({ runs: [run("r1", "failed", 1, { error: "boom" })] }), NOW)).toEqual({
+      text: "Failed: boom",
+      age: "1 h ago",
+      tone: "bad",
+    });
     expect(
-      lastResult(loop({ runs: [run("r1", "cancelled", 1, { skipped: "RustCode was not open" })] }), NOW).text,
-    ).toBe("Skipped 1 h ago: RustCode was not open");
+      lastResult(loop({ runs: [run("r1", "cancelled", 1, { skipped: "RustCode was not open" })] }), NOW),
+    ).toEqual({
+      text: "Skipped: RustCode was not open",
+      age: "1 h ago",
+      tone: "muted",
+    });
   });
 
   test("the next run counts down", () => {
@@ -288,7 +298,8 @@ describe("reviewItems", () => {
     expect(isBlockedRun(structured[0]?.runs[0])).toBe(true);
     expect(loopNeedsAttention(structured[0]!)).toBe(true);
     expect(lastResult(structured[0]!, NOW)).toEqual({
-      text: "Blocked: daily-dev MCP unavailable · 1 h ago",
+      text: "Blocked: daily-dev MCP unavailable",
+      age: "1 h ago",
       tone: "warn",
     });
   });
@@ -384,7 +395,7 @@ describe("loop follow-ups (issue 3937)", () => {
     expect(saveParams({ ...base, script: "  gh run list  " }, "Europe/Oslo").script).toBe("gh run list");
     expect("script" in saveParams({ ...base, script: "   " }, "Europe/Oslo")).toBe(false);
     const silent = loop({ runs: [run("r1", "succeeded", 1, { quiet: true, silent: true })] });
-    expect(lastResult(silent, NOW)).toEqual({ text: "Script printed nothing 1 h ago", tone: "ok" });
+    expect(lastResult(silent, NOW)).toEqual({ text: "Script printed nothing", age: "1 h ago", tone: "ok" });
     const parsed = parseLoops({
       daemonRunning: true,
       loops: [
@@ -397,7 +408,7 @@ describe("loop follow-ups (issue 3937)", () => {
 
   test("a quiet run says it found nothing, and is parsed from the list", () => {
     const quiet = loop({ runs: [run("r1", "succeeded", 1, { threadId: "t-1", quiet: true })] });
-    expect(lastResult(quiet, NOW)).toEqual({ text: "Nothing to report 1 h ago", tone: "ok" });
+    expect(lastResult(quiet, NOW)).toEqual({ text: "Nothing to report", age: "1 h ago", tone: "ok" });
     const parsed = parseLoops({
       daemonRunning: true,
       loops: [
@@ -543,9 +554,13 @@ describe("hub Loops (#3957)", () => {
     expect(parsed.loops[0]?.machine).toBe("laptop");
     expect(parsed.loops[0]?.runs[0]?.queued).toBe(true);
     const held = loop({ runs: [run("r1", "succeeded", 1, { machine: "laptop", queued: true })] });
-    expect(lastResult(held, NOW)).toEqual({ text: "Waiting for laptop (queued 1 h ago)", tone: "muted" });
+    expect(lastResult(held, NOW)).toEqual({
+      text: "Waiting for laptop (queued)",
+      age: "1 h ago",
+      tone: "muted",
+    });
     const started = loop({ runs: [run("r1", "succeeded", 1, { machine: "laptop", threadId: "t-1" })] });
-    expect(lastResult(started, NOW)).toEqual({ text: "Started on laptop 1 h ago", tone: "ok" });
+    expect(lastResult(started, NOW)).toEqual({ text: "Started on laptop", age: "1 h ago", tone: "ok" });
   });
 
   test("a non-quiet run verdict is parsed and shown as the last result", () => {
@@ -570,7 +585,8 @@ describe("hub Loops (#3957)", () => {
     });
     expect(parsed.loops[0]?.runs[0]?.verdict).toBe("CI broke on main: test_x fails");
     expect(lastResult(parsed.loops[0]!, NOW)).toEqual({
-      text: "CI broke on main: test_x fails · 5 min ago",
+      text: "CI broke on main: test_x fails",
+      age: "5 min ago",
       tone: "ok",
     });
   });
@@ -668,5 +684,71 @@ describe("paired machine loops", () => {
     expect(loopThreadNames(dispatched, resolve)).toEqual({ "mac-1/t-mac": "Nightly macOS" });
     expect(loopIdsByThread(dispatched, resolve)).toEqual({ "mac-1/t-mac": "gw-hub/loop-hub" });
     expect(isJobRunThread({ id: "mac-1/t-mac" }, loopRunThreads(dispatched, resolve))).toBe(true);
+  });
+});
+
+describe("triage and observability helpers", () => {
+  test("unreviewedCountByLoop tallies grouped review rows per job", () => {
+    const a = loop({
+      id: "job-a",
+      runs: [
+        run("a1", "succeeded", 1, { threadId: "t-a1" }),
+        run("a2", "failed", 2, { error: "timeout" }),
+        run("a3", "failed", 3, { error: "timeout" }),
+      ],
+    });
+    const b = loop({
+      id: "job-b",
+      host: "vps",
+      runs: [run("b1", "succeeded", 1, { outcome: "blocked", verdict: "MCP missing" })],
+    });
+    const groups = groupReview(reviewItems([a, b], () => true, new Set(), NOW));
+    expect(unreviewedCountByLoop(groups, (l) => (l.host ? `${l.host}/${l.id}` : l.id))).toEqual({
+      "job-a": 2,
+      "vps/job-b": 1,
+    });
+  });
+
+  test("averageRunUsage computes average cost and tokens across runs that recorded them", () => {
+    expect(averageRunUsage([run("r1", "succeeded", 1)])).toEqual({});
+    const mixed = averageRunUsage([
+      run("r1", "succeeded", 1, { costUsd: 0.2, tokens: 40_000 }),
+      run("r2", "succeeded", 2, { costUsd: 0.1, tokens: 20_000 }),
+      run("r3", "failed", 3),
+    ]);
+    expect(mixed.avgCostUsd).toBeCloseTo(0.15, 6);
+    expect(mixed.avgTokens).toBe(30_000);
+    expect(averageRunUsage([run("r1", "succeeded", 1, { tokens: 12_500 })])).toEqual({ avgTokens: 12_500 });
+  });
+
+  test("crossPlatformPathWarning catches macOS paths on Linux targets and vice versa", () => {
+    expect(
+      crossPlatformPathWarning({
+        platform: "linux",
+        workspace: "/home/lucas/code/rustcode",
+        prompt: "Append to `/Users/lagos/code/paral/docs/prod-deploy-watch.log`",
+      }),
+    ).toContain("/Users/lagos/code/paral/docs/prod-deploy-watch.log");
+    expect(
+      crossPlatformPathWarning({
+        workspace: "/home/lucas/code/app",
+        prompt: "Check logs",
+        script: "tail -n 20 /Users/lagos/app.log",
+      }),
+    ).toContain("/Users/lagos/app.log");
+    expect(
+      crossPlatformPathWarning({
+        platform: "macos",
+        workspace: "/Users/lagos/code/app",
+        prompt: "Inspect /home/lucas/server.log",
+      }),
+    ).toContain("/home/lucas/server.log");
+    expect(
+      crossPlatformPathWarning({
+        platform: "linux",
+        workspace: "/home/lucas/code/app",
+        prompt: "Inspect ./docs/prod-deploy-watch.log",
+      }),
+    ).toBeNull();
   });
 });

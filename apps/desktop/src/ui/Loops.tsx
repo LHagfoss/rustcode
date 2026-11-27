@@ -33,12 +33,13 @@ import {
   reviewItems,
   saveReviewed,
   startScheduler,
+  unreviewedCountByLoop,
   useLoopThreads,
 } from "../state/loops";
 import { machineName, selfName, useLocalIdentity, useMachines } from "../state/machines";
 import { askConfirm, errorText, loadMachineHarnesses, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
-import { statusOf } from "../state/threadStatus";
+import { setThreadStatus, statusOf } from "../state/threadStatus";
 import { CheckCheck, Plus, Repeat } from "./icons";
 import { JobCard, JobCardsSkeleton, listening } from "./JobCard";
 import { JobDetails } from "./JobDetails";
@@ -257,12 +258,18 @@ export function Loops() {
     () => groupReview(reviewItems(loops, open, reviewed, now)),
     [loops, open, reviewed, now],
   );
+  const unreviewedByLoop = useMemo(() => unreviewedCountByLoop(review, loopKey), [review]);
 
   const markReviewed = (runIds: readonly string[]) => {
     const next = new Set(reviewed);
     for (const id of runIds) next.add(id);
     setReviewed(next);
     saveReviewed(next);
+  };
+
+  const reviewAndSettle = (runIds: readonly string[], threadId?: string) => {
+    markReviewed(runIds);
+    if (threadId) void setThreadStatus(threadId, "done");
   };
 
   const confirmDelete = (loop: Loop, onDeleted?: () => void) => {
@@ -374,7 +381,7 @@ export function Loops() {
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
       <ViewHeader />
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-6 pt-2 pb-8">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-6 pt-2 pb-8">
           <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
             <h1 className="font-semibold text-title tracking-tight text-fg">Jobs</h1>
             {loops.length > 0 && (
@@ -488,7 +495,14 @@ export function Loops() {
                   </div>
                 )
               ) : tab === "review" ? (
-                <JobReview groups={review} now={now} showMachine={showMachineTag} onReviewed={markReviewed} />
+                <JobReview
+                  groups={review}
+                  now={now}
+                  showMachine={showMachineTag}
+                  onReviewed={markReviewed}
+                  onReviewAndSettle={reviewAndSettle}
+                  onEditJob={(loop) => openJob(loop)}
+                />
               ) : (
                 groups.map((group) => (
                   <section key={group.title} aria-label={group.title} className="flex flex-col gap-2 pb-3">
@@ -502,7 +516,7 @@ export function Loops() {
                         {group.title} · {group.loops.length}
                       </h2>
                     )}
-                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-3">
+                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
                       {group.loops.map((loop) => {
                         const loopHarnesses = loop.host
                           ? (remoteHarnesses[loop.host] ?? harnesses)
@@ -513,6 +527,7 @@ export function Loops() {
                             loop={loop}
                             now={now}
                             agent={jobAgent(loop, loopHarnesses, signedOut)}
+                            unreviewedCount={unreviewedByLoop[loopKey(loop)] ?? 0}
                             offHarness={offHarnessOf(loop, harnesses)}
                             machineLabel={
                               showMachineTag || loop.machine
@@ -559,6 +574,7 @@ export function Loops() {
               setDetailsKey(null);
             })
           }
+          onRunOpened={(runId) => markReviewed([runId])}
           act={act}
         />
       )}

@@ -60,10 +60,24 @@ function seed(): JsonObject[] {
       runs: [
         {
           ...done("run-ci-3", 2.5, "mock-loop-ci-3"),
+          outcome: "attention",
           verdict: "CI on main failed in desktop-tests (missing snapshot)",
+          tokens: 42_300,
+          costUsd: 0.18,
         },
-        done("run-ci-2", 6.5),
-        done("run-ci-1", 10.5),
+        {
+          ...done("run-ci-2", 6.5),
+          outcome: "clear",
+          verdict: "All checks green on main",
+          tokens: 18_500,
+          costUsd: 0.07,
+        },
+        {
+          ...done("run-ci-1", 10.5),
+          outcome: "clear",
+          tokens: 16_200,
+          costUsd: 0.06,
+        },
       ],
     },
     {

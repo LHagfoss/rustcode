@@ -18,6 +18,7 @@ import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
   cronOfForm,
+  crossPlatformPathWarning,
   defaultForm,
   deleteLoop,
   EVERY_DAY,
@@ -41,7 +42,7 @@ import {
   WEEKDAYS,
   withRunAccount,
 } from "../state/loops";
-import { selfName, useLocalIdentity, useMachines } from "../state/machines";
+import { machineName, selfName, useLocalIdentity, useMachines } from "../state/machines";
 import { matchProject, projectsOn } from "../state/projects";
 import { harnessesOn, loadMachineHarnesses, useApp } from "../state/store";
 import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
@@ -560,6 +561,19 @@ export function LoopDialog({
     effortOptions.push({ value: runEffort, label: effortLabel(runEffort) });
   }
   const isWorkflow = draft.workflow !== undefined && !isHubDispatch;
+  const targetPlatform = isHubDispatch
+    ? machines.find((entry) => entry.name === draft.machine || machineName(entry) === draft.machine)?.platform
+    : isRemoteHost
+      ? machines.find((entry) => entry.id === schedulerHost)?.platform
+      : undefined;
+  const pathWarning = !isWorkflow
+    ? crossPlatformPathWarning({
+        platform: targetPlatform,
+        workspace: draft.workspace,
+        prompt: draft.prompt,
+        script: draft.script,
+      })
+    : null;
   const ready =
     draft.name.trim() &&
     (isWorkflow ? draft.workflow?.trim() && !workflowArgsProblem(draft.args) : draft.prompt.trim()) &&
@@ -662,7 +676,6 @@ export function LoopDialog({
                             <Pill
                               key={template.label}
                               size="sm"
-                              quiet
                               onClick={() => {
                                 patch({
                                   name: template.name,
@@ -848,6 +861,7 @@ export function LoopDialog({
                           )}
                         </div>
                       )}
+                      {pathWarning && <Callout tone="warning">{pathWarning}</Callout>}
                     </Section>
                     <Section title="When it runs">
                       <Field label="Schedule">
