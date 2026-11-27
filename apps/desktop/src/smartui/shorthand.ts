@@ -877,10 +877,25 @@ function render(block: Block): string {
 
 /** Blocks that take their lines as text rather than as `- ` items. */
 const TEXT_BLOCKS = new Set(["p", "table", "callout", "chart", "heatmap", "compare", "term", "code"]);
+/** Table-shaped blocks whose rows split into cells at `|`. */
+const TABLE_BLOCKS = new Set(["table", "compare", "heatmap", "chart"]);
 /** Blocks whose lines are kept as written: a line that starts with `<` or `- ` is still theirs. */
 const RAW_BLOCKS = new Set(["term", "code"]);
 /** Blocks that are one line, the directive itself. */
 const LINE_BLOCKS = new Set(["title", "head", "h", "divider"]);
+const HTML_TAG_LINE = /^\s*<[a-zA-Z/!?]/;
+const INLINE_HTML_LINE =
+  /^\s*<(?:a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|i|ins|kbd|mark|q|s|samp|small|span|strong|sub|sup|time|u|var)(?=[\s/>])/i;
+const BLOCK_HTML_LINE =
+  /^\s*<(?:\/|!--|!doctype|address|article|aside|blockquote|canvas|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|iframe|li|link|main|meta|nav|ol|p|pre|script|section|style|summary|svg|table|tbody|td|template|tfoot|th|thead|title|tr|ul)(?=[\s/>]|$)/i;
+
+/** Whether a non-empty line belongs to the open block rather than starting raw HTML after it. */
+function continuesBlock(block: Block, line: string): boolean {
+  if (!HTML_TAG_LINE.test(line)) return true;
+  if (INLINE_HTML_LINE.test(line) && (TEXT_BLOCKS.has(block.name) || block.name === "sources")) return true;
+  if (TABLE_BLOCKS.has(block.name) && !BLOCK_HTML_LINE.test(line) && cells(line).length > 1) return true;
+  return false;
+}
 
 /** Whether a source uses the shorthand at all, so a plain HTML view is never touched. */
 export const hasShorthand = (source: string) => /^\s*::\s*[a-z]+\b/m.test(source);
@@ -1110,7 +1125,7 @@ export function expandShorthand(source: string): string {
       current.text.push(current.name === "code" ? line : line.trim());
       continue;
     }
-    if (current && line.trim() && !/^\s*</.test(line)) {
+    if (current && line.trim() && continuesBlock(current, line)) {
       const item = ITEM.exec(line);
       if (item && !TEXT_BLOCKS.has(current.name)) current.items.push(item[1]!);
       else if (!item && current.items.length > 0 && !TEXT_BLOCKS.has(current.name)) {

@@ -290,8 +290,8 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
    never widens the table past the reply. A table that still cannot fit scrolls in its own box. */
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
 .rc-table :is(th, td) { min-width: 4ch; vertical-align: top; }
-.rc-table code { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
-.rc-table .rc-badge { max-width: 100%; padding: 2px 8px; line-height: 16px; border-radius: min(var(--rc-radius-pill), 9px); white-space: normal; overflow-wrap: anywhere; }
+.rc-table code { overflow-wrap: break-word; }
+.rc-table .rc-badge { max-width: 100%; padding: 2px 8px; line-height: 16px; border-radius: min(var(--rc-radius-pill), 9px); white-space: normal; overflow-wrap: break-word; }
 .rc-table :is(kbd, a) { overflow-wrap: anywhere; }
 .rc-table .rc-num { white-space: nowrap; }
 .rc-table-box { overflow-x: auto; overscroll-behavior-x: contain; }
