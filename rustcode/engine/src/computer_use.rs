@@ -971,7 +971,9 @@ pub(crate) async fn run_panel_action(
         *browser = None;
     }
     if browser.is_none() {
-        if action == "panel_state" {
+        if action == "panel_state"
+            || (action == "panel_stream" && args["active"].as_bool() == Some(false))
+        {
             let spec = panel::ViewportPreset::Desktop.spec(None, None);
             return serde_json::to_value(panel::PanelState {
                 url: String::new(),
