@@ -89,7 +89,7 @@ import { turnActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 import { WorkflowCard } from "./WorkflowRuns";
-import { DotMatrix, WaveWord } from "./WorkingIndicator";
+import { DotMatrix, WaveText, WaveWord } from "./WorkingIndicator";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -1368,14 +1368,18 @@ export function WorkingRow({
       ) : (
         <>
           <span className="flex shrink-0 items-center gap-2" role="status">
-            {!awaitingApproval && <DotMatrix pattern={flavor.pattern} size={16} className="opacity-70" />}
+            {!awaitingApproval && (
+              <DotMatrix pattern={flavor.pattern} size={16} cycle className="opacity-70" />
+            )}
             {awaitingApproval ? (
               "Waiting for approval"
             ) : (
-              <WaveWord word="Working" className="rc-wave-quiet" />
+              <WaveText
+                text={time ? `Working for ${time}` : "Working"}
+                className="rc-wave-quiet rc-wave-line"
+              />
             )}
           </span>
-          {time && <span className="shrink-0 text-fg-faint">for {time}</span>}
         </>
       )}
     </div>

@@ -624,6 +624,10 @@
   animation: rc-wave 1.8s ease-in-out infinite;
   animation-delay: calc(var(--rc-wave-i) * 90ms);
 }
+.rc-wave-line > span[aria-hidden] {
+  animation-duration: 2.4s;
+  animation-delay: calc(var(--rc-wave-i) * 70ms);
+}
 
 /*
  * An answered approval settles where its card was (ui/AttentionCards.tsx
