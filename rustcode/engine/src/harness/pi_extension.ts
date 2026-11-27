@@ -16,11 +16,11 @@ export default async function (pi: any) {
   const args: string[] = JSON.parse(take("RUSTCODE_PI_MCP_ARGS") ?? "[]");
   const token = take("RUSTCODE_ORCHESTRATOR_TOKEN");
   // The user has Smart UI on: the server also offers the block check.
-  const smartUi = take("RUSTCODE_SMART_UI");
+  const smartUi = process.env.RUSTCODE_SMART_UI;
   // Pi has no question tool of its own: the server also offers ask_user_question.
-  const askUser = take("RUSTCODE_ASK_USER");
+  const askUser = process.env.RUSTCODE_ASK_USER;
   // Which orchestration tools this thread's client can answer.
-  const orchestration = take("RUSTCODE_ORCHESTRATION_VERSION");
+  const orchestration = process.env.RUSTCODE_ORCHESTRATION_VERSION;
   if (!command || !token) return;
 
   const server = spawn(command, args, {

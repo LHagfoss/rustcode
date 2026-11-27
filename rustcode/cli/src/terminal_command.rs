@@ -14,8 +14,6 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TerminalCommand {
     /// Start a command in the background under a name; one argument is run
@@ -48,8 +46,9 @@ pub enum TerminalCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Wait until new output contains a text. Exits 0 when it appears, 1 when
-    /// the command ends first and 2 at the timeout
+    /// Wait until its output contains a text, searching from its first line.
+    /// Exits 0 when it appears, 1 when the command ends first and 2 at the
+    /// timeout
     Wait {
         name: String,
         #[arg(long)]
@@ -57,9 +56,9 @@ pub enum TerminalCommand {
         /// Seconds to wait
         #[arg(long, default_value_t = 120)]
         timeout: u64,
-        /// Also match output printed before this call
+        /// Only match output printed after this call (after a `send`, say)
         #[arg(long)]
-        from_start: bool,
+        new: bool,
     },
     /// Type a text into a terminal's input
     Send {
@@ -160,31 +159,60 @@ fn shell_line(words: &[String]) -> String {
         .join(" ")
 }
 
-/// The matching line around `at` in `text`, for `wait`'s answer.
-fn line_around(text: &str, at: usize) -> &str {
-    let start = text[..at].rfind('\n').map_or(0, |i| i + 1);
-    let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
-    &text[start..end]
+/// The most a single read takes from a log, so a huge one never fills memory.
+const MAX_READ: u64 = 1024 * 1024;
+
+/// Where `needle` first appears in `haystack`.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
-fn read_from(log: &Path, from: u64) -> std::io::Result<(Vec<u8>, u64)> {
+/// The whole line around byte `at` in `text`, for `wait`'s answer.
+fn line_around(text: &[u8], at: usize) -> String {
+    let start = text[..at]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    let end = text[at..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(text.len(), |i| at + i);
+    String::from_utf8_lossy(&text[start..end]).into_owned()
+}
+
+/// Up to `max` bytes of `log` from byte `from`, and the offset after them.
+fn read_from(log: &Path, from: u64, max: u64) -> std::io::Result<(Vec<u8>, u64)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(log)?;
     let len = file.metadata()?.len();
     let from = from.min(len);
     file.seek(SeekFrom::Start(from))?;
     let mut bytes = Vec::new();
-    file.take(len - from).read_to_end(&mut bytes)?;
-    Ok((bytes, len))
+    file.take((len - from).min(max)).read_to_end(&mut bytes)?;
+    let next = from + bytes.len() as u64;
+    Ok((bytes, next))
 }
 
 fn log_len(log: &Path) -> u64 {
     std::fs::metadata(log).map_or(0, |meta| meta.len())
 }
 
+/// The `sh` line that runs a terminal's command and records how it ended.
+/// The command runs in a shell of its own (`$1`), so `exit`, `exec` or a
+/// syntax error in it still leaves this one to write the status; the status
+/// goes to a temporary file first, so a reader never sees half of it.
+const WRAPPER: &str =
+    r#"/bin/sh -c "$1"; code=$?; printf '%s' "$code" > "$2.tmp" && mv -f "$2.tmp" "$2""#;
+
 #[cfg(unix)]
 mod unix {
     use super::*;
+    use serde_json::{Value, json};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::os::unix::process::CommandExt;
     use std::time::{Duration, Instant};
@@ -215,25 +243,39 @@ mod unix {
             let text = std::fs::read_to_string(self.dir.join("meta.json")).ok()?;
             serde_json::from_str(&text).ok()
         }
-        fn pid(&self) -> Option<i32> {
+        /// The process group `start` made: its leader's pid, never 0 or 1.
+        fn group(&self) -> Option<i32> {
             self.meta()?["pid"]
                 .as_i64()
                 .and_then(|pid| i32::try_from(pid).ok())
+                .filter(|&pid| pid > 1)
         }
         fn exists(&self) -> bool {
             self.dir.join("meta.json").is_file()
         }
-        fn running(&self) -> bool {
-            !self.exit_file().exists() && self.pid().is_some_and(alive)
+        fn exit_code(&self) -> Option<String> {
+            std::fs::read_to_string(self.exit_file())
+                .ok()
+                .map(|code| code.trim().to_owned())
+                .filter(|code| !code.is_empty())
         }
-        /// `running`, `exited <code>` or `stopped`.
+        /// Something in its process group is still alive.
+        fn group_alive(&self) -> bool {
+            self.group().is_some_and(group_alive)
+        }
+        fn running(&self) -> bool {
+            self.exit_code().is_none() && self.group_alive()
+        }
+        /// `running`, `exited <code>` (with `, children still running` when
+        /// something it started outlived it) or `stopped`.
         fn status(&self) -> String {
-            if self.running() {
-                return "running".to_owned();
-            }
-            match std::fs::read_to_string(self.exit_file()) {
-                Ok(code) => format!("exited {}", code.trim()),
-                Err(_) => "stopped".to_owned(),
+            match self.exit_code() {
+                Some(code) if self.group_alive() => {
+                    format!("exited {code}, children still running")
+                }
+                Some(code) => format!("exited {code}"),
+                None if self.group_alive() => "running".to_owned(),
+                None => "stopped".to_owned(),
             }
         }
         fn missing(name: &str) -> String {
@@ -241,16 +283,22 @@ mod unix {
         }
     }
 
-    fn alive(pid: i32) -> bool {
-        // SAFETY: signal 0 only checks that the process exists.
-        let result = unsafe { libc::kill(pid, 0) };
+    fn group_alive(group: i32) -> bool {
+        if group <= 1 {
+            return false;
+        }
+        // SAFETY: signal 0 to a process group only checks that it has a member.
+        let result = unsafe { libc::kill(-group, 0) };
         result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 
-    fn signal_group(pid: i32, signal: i32) {
+    fn signal_group(group: i32, signal: i32) {
+        if group <= 1 {
+            return;
+        }
         // SAFETY: a negative pid signals the process group `start` created.
         unsafe {
-            libc::kill(-pid, signal);
+            libc::kill(-group, signal);
         }
     }
 
@@ -268,8 +316,8 @@ mod unix {
                 name,
                 contains,
                 timeout,
-                from_start,
-            } => wait(name, contains, *timeout, *from_start).await,
+                new,
+            } => wait(name, contains, *timeout, *new).await,
             TerminalCommand::Send { name, text, enter } => send(name, text, *enter),
             TerminalCommand::Stop { name } => stop(name).await,
         }
@@ -277,17 +325,22 @@ mod unix {
 
     fn start(name: &str, cwd: Option<&Path>, words: &[String]) -> Result<i32, String> {
         let terminal = Terminal::named(name)?;
-        if terminal.running() {
+        if terminal.group_alive() {
             return Err(format!(
-                "{name} is already running; `rc terminal stop {name}` first"
+                "{name} is still running; `rc terminal stop {name}` first"
             ));
         }
         if terminal.dir.exists() {
             std::fs::remove_dir_all(&terminal.dir)
                 .map_err(|error| format!("cannot clear the old {name}: {error}"))?;
         }
-        std::fs::create_dir_all(&terminal.dir)
-            .map_err(|error| format!("cannot create {}: {error}", terminal.dir.display()))?;
+        std::fs::create_dir_all(&terminal.dir).map_err(|error| {
+            format!(
+                "cannot create {}: {error}{}",
+                terminal.dir.display(),
+                sandbox_hint(&error)
+            )
+        })?;
         let _ = std::fs::set_permissions(&terminal.dir, std::fs::Permissions::from_mode(0o700));
         let fifo = std::ffi::CString::new(terminal.input().as_os_str().as_encoded_bytes())
             .map_err(|_| "the terminal path holds a NUL byte".to_owned())?;
@@ -317,11 +370,15 @@ mod unix {
             Some(cwd) => cwd.to_path_buf(),
             None => std::env::current_dir().map_err(|error| error.to_string())?,
         };
-        let child = std::process::Command::new("/bin/sh")
+        let mut child = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(r#"eval "$RC_TERMINAL_COMMAND"; printf '%s' "$?" > "$RC_TERMINAL_EXIT""#)
-            .env("RC_TERMINAL_COMMAND", &line)
-            .env("RC_TERMINAL_EXIT", terminal.exit_file())
+            .arg(WRAPPER)
+            .arg("rc-terminal")
+            .arg(format!(" {line}"))
+            .arg(terminal.exit_file())
+            .env_remove(rustcode::cli_bridge::CREDENTIAL_ENV)
+            .env_remove(rustcode::cli_bridge::SOCKET_ENV)
+            .env_remove(rustcode::ORCHESTRATOR_TOKEN_ENV)
             .current_dir(&cwd)
             .stdin(stdin)
             .stdout(log)
@@ -338,9 +395,17 @@ mod unix {
         });
         std::fs::write(terminal.dir.join("meta.json"), meta.to_string())
             .map_err(|error| format!("cannot record {name}: {error}"))?;
-        std::thread::sleep(Duration::from_millis(300));
-        if !terminal.running() {
-            let (bytes, _) = read_from(&terminal.log(), 0).unwrap_or_default();
+        let settle = Instant::now() + Duration::from_millis(300);
+        let mut ended = false;
+        while Instant::now() < settle {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                ended = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if ended {
+            let (bytes, _) = read_from(&terminal.log(), 0, MAX_READ).unwrap_or_default();
             eprintln!(
                 "{name} {} right away. Its output:\n{}",
                 terminal.status(),
@@ -353,6 +418,15 @@ mod unix {
             child.id()
         );
         Ok(0)
+    }
+
+    /// What to add when a sandboxed harness refused a write.
+    fn sandbox_hint(error: &std::io::Error) -> &'static str {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            " (the harness's sandbox may block RustCode's run folder; run with Full access, or ask the user)"
+        } else {
+            ""
+        }
     }
 
     fn entries(all: bool) -> Result<Vec<(String, Terminal)>, String> {
@@ -428,31 +502,28 @@ mod unix {
             return Err(Terminal::missing(name));
         }
         let log = terminal.log();
-        let from = since.unwrap_or_else(|| log_len(&log).saturating_sub(tail));
-        let (bytes, next) = read_from(&log, from).map_err(|error| error.to_string())?;
+        let from = since.unwrap_or_else(|| log_len(&log).saturating_sub(tail.min(MAX_READ)));
+        let (bytes, next) = read_from(&log, from, MAX_READ).map_err(|error| error.to_string())?;
+        let more = next < log_len(&log);
         let text = String::from_utf8_lossy(&bytes);
         let status = terminal.status();
         if as_json {
             println!(
                 "{}",
-                json!({ "output": text, "next": next, "status": status })
+                json!({ "output": text, "next": next, "more": more, "status": status })
             );
         } else {
             print!("{text}");
             if !text.is_empty() && !text.ends_with('\n') {
                 println!();
             }
-            eprintln!("[{name}: {status}; next: rc terminal output {name} --since {next}]");
+            let more = if more { "; more follows" } else { "" };
+            eprintln!("[{name}: {status}{more}; next: rc terminal output {name} --since {next}]");
         }
         Ok(0)
     }
 
-    pub(super) async fn wait(
-        name: &str,
-        contains: &str,
-        timeout: u64,
-        from_start: bool,
-    ) -> Result<i32, String> {
+    async fn wait(name: &str, contains: &str, timeout: u64, new: bool) -> Result<i32, String> {
         let terminal = Terminal::named(name)?;
         if !terminal.exists() {
             return Err(Terminal::missing(name));
@@ -460,36 +531,36 @@ mod unix {
         if contains.is_empty() {
             return Err("--contains needs a text to wait for".to_owned());
         }
+        let needle = contains.as_bytes();
         let log = terminal.log();
-        let mut offset = if from_start { 0 } else { log_len(&log) };
-        let mut seen = String::new();
+        let mut offset = if new { log_len(&log) } else { 0 };
+        let mut seen: Vec<u8> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(timeout);
         loop {
             let running = terminal.running();
-            if let Ok((bytes, next)) = read_from(&log, offset) {
+            let mut full = false;
+            if let Ok((bytes, next)) = read_from(&log, offset, MAX_READ) {
+                full = bytes.len() as u64 == MAX_READ;
                 offset = next;
-                seen.push_str(&String::from_utf8_lossy(&bytes));
+                seen.extend_from_slice(&bytes);
             }
-            if let Some(at) = seen.find(contains) {
+            if let Some(at) = find_bytes(&seen, needle) {
                 println!("{}", line_around(&seen, at));
                 return Ok(0);
             }
-            let keep = seen.len().saturating_sub(64 * 1024 + contains.len());
-            if keep > 0 {
-                let cut = (keep..seen.len())
-                    .find(|&i| seen.is_char_boundary(i))
-                    .unwrap_or(seen.len());
-                seen.drain(..cut);
+            let keep = 64 * 1024 + needle.len();
+            if seen.len() > keep {
+                seen.drain(..seen.len() - keep);
+            }
+            if full {
+                continue;
             }
             if !running {
                 let tail = seen.len().saturating_sub(2048);
-                let tail = (tail..seen.len())
-                    .find(|&i| seen.is_char_boundary(i))
-                    .unwrap_or(seen.len());
                 eprintln!(
                     "{name} {} before printing {contains:?}. Its last output:\n{}",
                     terminal.status(),
-                    &seen[tail..]
+                    String::from_utf8_lossy(&seen[tail..])
                 );
                 return Ok(1);
             }
@@ -518,8 +589,13 @@ mod unix {
         if enter {
             bytes.push(b'\n');
         }
-        pipe.write_all(&bytes)
-            .map_err(|error| format!("cannot write to {name}: {error}"))?;
+        pipe.write_all(&bytes).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                format!("{name}'s input is full: it is not reading what was sent")
+            } else {
+                format!("cannot write to {name}: {error}")
+            }
+        })?;
         println!("Sent {} bytes to {name}.", bytes.len());
         Ok(0)
     }
@@ -529,14 +605,14 @@ mod unix {
         if !terminal.exists() {
             return Err(Terminal::missing(name));
         }
-        if let Some(pid) = terminal.pid().filter(|_| terminal.running()) {
-            signal_group(pid, libc::SIGTERM);
+        if let Some(group) = terminal.group().filter(|&group| group_alive(group)) {
+            signal_group(group, libc::SIGTERM);
             let deadline = Instant::now() + Duration::from_secs(5);
-            while alive(pid) && Instant::now() < deadline {
+            while group_alive(group) && Instant::now() < deadline {
                 tokio::time::sleep(POLL).await;
             }
-            if alive(pid) {
-                signal_group(pid, libc::SIGKILL);
+            if group_alive(group) {
+                signal_group(group, libc::SIGKILL);
             }
         }
         std::fs::remove_dir_all(&terminal.dir)
@@ -582,9 +658,11 @@ mod tests {
 
     #[test]
     fn the_matching_line_is_reported_whole() {
-        let text = "starting\n  Local: http://localhost:5173\nready";
-        let at = text.find("Local:").unwrap();
-        assert_eq!(line_around(text, at), "  Local: http://localhost:5173");
+        let text = "starting\n  ➜  Local: http://localhost:5173\nready".as_bytes();
+        let at = find_bytes(text, "Local:".as_bytes()).unwrap();
+        assert_eq!(line_around(text, at), "  ➜  Local: http://localhost:5173");
+        assert_eq!(find_bytes(text, b"missing"), None);
+        assert_eq!(find_bytes(b"ab", b"abc"), None);
     }
 
     #[test]
@@ -592,10 +670,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("output.log");
         std::fs::write(&log, "hello world").unwrap();
-        let (bytes, next) = read_from(&log, 6).unwrap();
+        let (bytes, next) = read_from(&log, 6, MAX_READ).unwrap();
         assert_eq!(bytes, b"world");
         assert_eq!(next, 11);
-        let (bytes, _) = read_from(&log, 99).unwrap();
+        let (bytes, next) = read_from(&log, 0, 5).unwrap();
+        assert_eq!((bytes.as_slice(), next), (&b"hello"[..], 5));
+        let (bytes, _) = read_from(&log, 99, MAX_READ).unwrap();
         assert!(bytes.is_empty());
     }
 }

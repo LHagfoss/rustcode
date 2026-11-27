@@ -132,12 +132,40 @@ enum Stored {
     Added,
     Updated,
 }
-fn assigns(line: &str, name: &str) -> bool {
+/// The assignment part of a dotenv line: without leading blanks or an
+/// `export` and the blanks after it.
+fn assignment_part(line: &str) -> (&str, bool) {
     let line = line.trim_start();
-    line.strip_prefix("export ")
-        .unwrap_or(line)
-        .split_once('=')
-        .is_some_and(|(key, _)| key.trim() == name)
+    match line.strip_prefix("export") {
+        Some(rest) if rest.starts_with([' ', '\t']) => (rest.trim_start(), true),
+        _ => (line, false),
+    }
+}
+/// Whether `line` assigns `name`, and whether it is `export`ed.
+fn assigns(line: &str, name: &str) -> Option<bool> {
+    let (assignment, export) = assignment_part(line);
+    let (key, _) = assignment.split_once('=')?;
+    (key.trim() == name).then_some(export)
+}
+/// The quote a value opens on its line and does not close there, so the
+/// lines up to its closing quote belong to it.
+fn open_quote(line: &str) -> Option<char> {
+    let (_, value) = assignment_part(line).0.split_once('=')?;
+    let value = value.trim_start();
+    let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    (!closes(&value[1..], quote)).then_some(quote)
+}
+/// Whether `text` holds a closing `quote`; a double quote escaped with a
+/// backslash does not close.
+fn closes(text: &str, quote: char) -> bool {
+    let mut escaped = false;
+    for c in text.chars() {
+        if c == quote && !escaped {
+            return true;
+        }
+        escaped = quote == '"' && c == '\\' && !escaped;
+    }
+    false
 }
 /// Write `name` into the dotenv file `file`: the first assignment of it is
 /// replaced where it stands, later duplicates are dropped, every other line
@@ -158,18 +186,28 @@ fn store(root: &Path, file: &str, name: &str, value: &str) -> Result<Stored, Str
         .replace('$', "\\$")
         .replace('`', "\\`");
     let assignment = format!("{name}=\"{escaped}\"");
+    let (bom, old) = match old.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", old.as_str()),
+    };
     let mut stored = Stored::Added;
     let mut content = Vec::new();
-    for line in old.lines() {
-        if !assigns(line, name) {
+    let mut lines = old.lines();
+    while let Some(line) = lines.next() {
+        let Some(export) = assigns(line, name) else {
             content.push(line.to_owned());
-        } else if stored == Stored::Added {
+            continue;
+        };
+        if let Some(quote) = open_quote(line) {
+            for rest in lines.by_ref() {
+                if closes(rest, quote) {
+                    break;
+                }
+            }
+        }
+        if stored == Stored::Added {
             stored = Stored::Updated;
-            let export = if line.trim_start().starts_with("export ") {
-                "export "
-            } else {
-                ""
-            };
+            let export = if export { "export " } else { "" };
             content.push(format!("{export}{assignment}"));
         }
     }
@@ -178,7 +216,7 @@ fn store(root: &Path, file: &str, name: &str, value: &str) -> Result<Stored, Str
     }
     let mut tmp = tempfile::NamedTempFile::new_in(path.parent().ok_or("Invalid destination")?)
         .map_err(|_| "Cannot create private destination")?;
-    tmp.write_all(format!("{}\n", content.join("\n")).as_bytes())
+    tmp.write_all(format!("{bom}{}\n", content.join("\n")).as_bytes())
         .map_err(|_| "Cannot write destination")?;
     tmp.persist(&path).map_err(|_| "Cannot save destination")?;
     Ok(stored)
@@ -534,6 +572,25 @@ mod tests {
             text,
             "# keys\nexport KEY=\"new\"\nOTHER=keep\nFRESH=\"v\"\n"
         );
+    }
+
+    #[test]
+    fn replaces_a_multi_line_value_whole_and_keeps_a_byte_order_mark() {
+        let root = workspace();
+        std::fs::write(
+            root.path().join(".env"),
+            "\u{feff}A=1\nexport\tPEM=\"-----BEGIN\nline \\\" two\n-----END\"\nB=2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            store(root.path(), ".env", "PEM", "new").unwrap(),
+            Stored::Updated
+        );
+        let text = std::fs::read_to_string(root.path().join(".env")).unwrap();
+        assert_eq!(text, "\u{feff}A=1\nexport PEM=\"new\"\nB=2\n");
+        assert_eq!(open_quote("K='one"), Some('\''));
+        assert_eq!(open_quote("K=\"done\""), None);
+        assert_eq!(open_quote("K=plain"), None);
     }
 
     #[test]

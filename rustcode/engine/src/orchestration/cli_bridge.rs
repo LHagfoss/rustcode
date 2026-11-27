@@ -10,8 +10,14 @@
 //! private secret form behave exactly as they do there. A tool reached this
 //! way costs no context until it is called.
 //!
-//! The token is the one the thread's MCP server already holds; it lets a
-//! command do what the thread's own tools do, nothing more.
+//! The token is the one the thread's MCP server already holds, and it lets
+//! a command call every tool that thread can, the writes still behind the
+//! user's approval. It is no longer confined to the MCP server: every
+//! process the harness starts inherits it, an in-harness subagent and a
+//! build script included, and it lasts until the thread's harness stops.
+//! `rc terminal` drops it from the commands it keeps running, and a delegate
+//! the engine starts gets a token of its own, since a harness never inherits
+//! the engine's `RUSTCODE_*` variables (`harness::process`).
 
 use std::path::PathBuf;
 

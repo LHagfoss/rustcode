@@ -137,7 +137,7 @@ async fn tools(command: &ToolsCommand) -> i32 {
             } else if answer.success {
                 println!("{}", answer.content);
             } else {
-                eprintln!("{}", answer.content);
+                eprintln!("{}{}", answer.content, sandbox_hint(&answer.content));
             }
             i32::from(!answer.success)
         }
@@ -150,6 +150,13 @@ async fn secret(command: &SecretCommand) -> i32 {
         reason,
         file,
     } = command;
+    let names = match secret_names(names) {
+        Ok(names) => names,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
     let bridge = match bridge() {
         Ok(bridge) => bridge,
         Err(code) => return code,
@@ -162,7 +169,7 @@ async fn secret(command: &SecretCommand) -> i32 {
             )
             .await;
         if !answer.success {
-            eprintln!("{}", answer.content);
+            eprintln!("{}{}", answer.content, sandbox_hint(&answer.content));
             return 1;
         }
         println!("{}", answer.content);
@@ -171,6 +178,42 @@ async fn secret(command: &SecretCommand) -> i32 {
         }
     }
     0
+}
+
+/// The names to ask for, each once, in order, after checking every one is
+/// a variable name, so a bad one is refused before any form opens.
+fn secret_names(names: &[String]) -> Result<Vec<&str>, String> {
+    let mut unique: Vec<&str> = Vec::new();
+    for name in names {
+        let valid = name
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit()));
+        if name.is_empty() || !valid {
+            return Err(format!(
+                "{name:?} is not an environment variable name (letters, digits and _, not starting with a digit)"
+            ));
+        }
+        if !unique.contains(&name.as_str()) {
+            unique.push(name);
+        }
+    }
+    Ok(unique)
+}
+
+/// What to add when the harness's sandbox kept the call from RustCode's socket.
+fn sandbox_hint(content: &str) -> &'static str {
+    let refused = [
+        "Operation not permitted",
+        "Permission denied",
+        "os error 1)",
+        "os error 13)",
+    ];
+    if refused.iter().any(|text| content.contains(text)) {
+        " (the harness's sandbox may block RustCode's socket; use the thread's MCP tool instead, or run with Full access)"
+    } else {
+        ""
+    }
 }
 
 fn find<'a>(tools: &'a [Value], name: &str) -> Option<&'a Value> {
@@ -230,6 +273,17 @@ mod tests {
         assert_eq!(read_args(Some(r#"{"a":1}"#)).unwrap(), json!({"a": 1}));
         assert!(read_args(Some("[1]")).is_err());
         assert!(read_args(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn secret_names_are_checked_and_asked_once() {
+        let names = |list: &[&str]| list.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            secret_names(&names(&["A", "B_2", "A"])).unwrap(),
+            vec!["A", "B_2"]
+        );
+        assert!(secret_names(&names(&["A", "bad-name"])).is_err());
+        assert!(secret_names(&names(&["2X"])).is_err());
     }
 
     #[test]
