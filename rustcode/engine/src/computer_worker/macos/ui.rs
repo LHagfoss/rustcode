@@ -29,6 +29,7 @@ const DEFAULT_LABEL: &str = "RustCode";
 struct Ui {
     window: Retained<AnyObject>,
     label: Retained<AnyObject>,
+    item: Retained<AnyObject>,
     activity: Retained<AnyObject>,
     size: CGSize,
     tip: CGPoint,
@@ -144,10 +145,12 @@ unsafe fn build(app: &AnyObject) -> Ui {
         ];
         let _: () = msg_send![&content, addSubview: &*label];
 
-        let activity = status_item(app);
+        let (item, activity) = status_item(app);
+        let _: () = msg_send![&item, setVisible: !crate::computer_worker::hosted::listening()];
         Ui {
             window,
             label,
+            item,
             activity,
             size,
             tip: CGPoint { x: tip.x, y: tip.y },
@@ -156,7 +159,7 @@ unsafe fn build(app: &AnyObject) -> Ui {
     }
 }
 
-unsafe fn status_item(app: &AnyObject) -> Retained<AnyObject> {
+unsafe fn status_item(app: &AnyObject) -> (Retained<AnyObject>, Retained<AnyObject>) {
     // SAFETY: the caller is on the main thread; every selector is AppKit's.
     unsafe {
         let bar: Retained<AnyObject> = msg_send![class("NSStatusBar"), systemStatusBar];
@@ -176,8 +179,7 @@ unsafe fn status_item(app: &AnyObject) -> Retained<AnyObject> {
         let _: () = msg_send![&stop, setTarget: app];
         let _: () = msg_send![&menu, addItem: &*stop];
         let _: () = msg_send![&item, setMenu: &*menu];
-        std::mem::forget(item);
-        activity
+        (item, activity)
     }
 }
 
@@ -249,6 +251,8 @@ pub fn set_activity(label: Option<String>) {
                 let _: () =
                     msg_send![&ui.label, setStringValue: &*ns_string(&format!(" {short} "))];
                 let _: () = msg_send![&ui.activity, setTitle: &*ns_string(&menu)];
+                let visible = label.is_some() || !crate::computer_worker::hosted::listening();
+                let _: () = msg_send![&ui.item, setVisible: visible];
             }
         });
     });

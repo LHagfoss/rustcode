@@ -14,12 +14,17 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// The argument after `computer-worker` that makes it listen on the socket.
 pub const LISTEN_ARG: &str = "--listen";
 
 const PROBE_LIMIT: Duration = Duration::from_secs(5);
+
+/// Engine connections being served; when the last one closes, nothing is
+/// controlled any more and the menu bar item goes away.
+static OPEN: AtomicUsize = AtomicUsize::new(0);
 
 /// The socket the hosted worker listens on.
 pub fn socket_path() -> Option<PathBuf> {
@@ -56,7 +61,13 @@ pub(super) fn listen(handle: fn(Op) -> Result<Value, String>) -> ! {
         let Ok(reader) = stream.try_clone() else {
             continue;
         };
-        std::thread::spawn(move || super::serve_lines(BufReader::new(reader), stream, handle));
+        OPEN.fetch_add(1, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            super::serve_lines(BufReader::new(reader), stream, handle);
+            if OPEN.fetch_sub(1, Ordering::SeqCst) == 1 {
+                let _ = handle(Op::Activity { label: None });
+            }
+        });
     }
     std::process::exit(0)
 }
