@@ -158,6 +158,7 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
         let mut lease = None;
         let mut announced = std::collections::HashMap::new();
         let mut cleaned = std::collections::HashSet::new();
+        let mut followed = std::collections::HashMap::new();
         loop {
             if lease.is_none() {
                 lease = store.lease();
@@ -196,6 +197,7 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
                     );
                 })
                 .await;
+                crate::pull_outcomes::follow_settled(&mut followed).await;
                 // A worktree thread whose own pull request merged no longer
                 // needs its checkout: remove it, as `cleanup_worktree` would.
                 crate::worktrees::clean_merged(&store.load(), &mut cleaned).await;
