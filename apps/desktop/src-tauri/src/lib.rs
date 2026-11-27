@@ -147,6 +147,7 @@ pub fn run() {
             native::haptic,
             microphone::microphone_access,
             microphone::open_microphone_settings,
+            computer_worker_host::open_desktop_control_settings,
             url_scheme::url_scheme_status,
             url_scheme::claim_url_scheme,
             notify::notify_show,

@@ -144,13 +144,17 @@ What the first slice built, and where it departs from the plan above:
 - **Process model.** `rc computer-worker` is the same `rc` binary started with one argument,
   speaking JSON lines over stdin and stdout rather than a socket. A closed stdin ends it; a
   dedicated signed helper binary is left for when release signing (#2034) needs it.
-- **Background first.** Clicks press the element through Accessibility, typing inserts at the
-  caret (`AXSelectedText`), keys and pixel clicks go to the target process. The user's pointer
-  and focus are never taken, so the "pause on physical input" rule is not needed for these
-  actions and is not built. Chromium and Electron apps ignore events posted to their process,
-  so `foreground: true` brings the app to the front (`AXFrontmost`) and posts to the HID event
-  tap instead; it has an approval of its own (`<app>#foreground`), since it takes the pointer
-  and focus.
+- **Background first.** Clicks press the element through Accessibility when they can; other
+  clicks, keys and typing go to the target process through WindowServer (`SLEventPostToPid`,
+  `macos/skylight.rs`) after a focus record makes its window key without raising it. Keyboard
+  events carry an `SLSEventAuthenticationMessage` and left clicks a move plus an off-screen
+  primer press, which Chromium and Electron accept as user input (Cua Driver's recipe, MIT).
+  These are private interfaces, resolved at run time with the public `CGEventPostToPid` as the
+  fallback, accepted because the alternative takes the user's pointer. The user's pointer and
+  focus are never taken, so the "pause on physical input" rule is not needed for these actions
+  and is not built. `foreground: true` remains for apps that still ignore the input: it brings
+  the app to the front (`AXFrontmost`) and posts to the HID event tap, with an approval of its
+  own (`<app>#foreground`).
 - **Hosted worker.** The app starts `rc computer-worker --listen` as its child, so macOS checks
   RustCode's own TCC grants rather than the bare `rc` binary's; the engine connects over
   `<config>/run/computer-worker.sock` (same binary, or the same stable signature after an update) and starts its own worker only

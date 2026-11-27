@@ -128,7 +128,7 @@ pub fn all_tools() -> Vec<Value> {
     );
     let foreground = property(
         "boolean",
-        "true to bring the app to the front and use real input, for apps that ignore background input (Chromium and Electron apps such as Discord, Slack, Chrome, VS Code). Takes the user's pointer and focus; asks the user first",
+        "true to bring the app to the front and use real input. Only when a background action had no effect: background input reaches most apps, Chromium and Electron ones included, behind the user's windows. Takes the user's pointer and focus; asks the user first",
     );
     let entries = [
         (
@@ -153,13 +153,13 @@ pub fn all_tools() -> Vec<Value> {
             "computer_click",
             json!({"pid": pid, "ref": reference, "window_id": window, "x": x, "y": y, "button": {"type": "string", "enum": ["left", "right"]}, "count": property("integer", "2 for a double click"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid"]),
-            "Click an element by ref (pressed through Accessibility, in the background) or at x, y of the latest screenshot. The agent's own cursor shows where; the user's pointer and focus stay theirs. Observe again afterwards: success does not prove the effect. If an app ignores the click (a screenshot shows no change), retry with foreground: true.",
+            "Click an element by ref (pressed through Accessibility, in the background) or at x, y of the latest screenshot. The agent's own cursor shows where; the user's pointer and focus stay theirs. Observe again afterwards: success does not prove the effect. It works behind the user's windows, Chromium and Electron apps included. If a screenshot shows no change, retry once with foreground: true.",
         ),
         (
             "computer_type",
             json!({"pid": pid, "ref": reference, "text": property("string", "The text to insert"), "foreground": foreground, "purpose": purpose, "machine": machine}),
             json!(["pid", "text"]),
-            "Insert text into an element by ref, or into the app's focused element. Refuses password fields: hand those to the user. If the text does not appear, retry with foreground: true.",
+            "Type text into an element by ref, or into the app's focused element, behind the user's windows. Refuses password fields: hand those to the user. If the text does not appear, retry once with foreground: true.",
         ),
         (
             "computer_key",

@@ -97,6 +97,35 @@ pub fn ask(op: &str) -> Result<Value, String> {
     }
 }
 
+/// The Privacy & Security pane in System Settings for one permission desktop
+/// control needs.
+fn privacy_pane(permission: &str) -> Option<&'static str> {
+    match permission {
+        "accessibility" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        "screen_recording" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        _ => None,
+    }
+}
+
+/// Opens the System Settings pane where the user turns `permission` on for
+/// RustCode.
+#[tauri::command(async)]
+pub fn open_desktop_control_settings(permission: String) -> Result<(), String> {
+    let pane = privacy_pane(&permission).ok_or("Unknown permission")?;
+    if !cfg!(target_os = "macos") {
+        return Err("Only the macOS app has these settings to open.".into());
+    }
+    crate::process::command("open")
+        .arg(pane)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 /// The permissions the worker still lacks, by their System Settings names.
 pub fn missing(status: &Value) -> Vec<&'static str> {
     let mut missing = Vec::new();
@@ -112,6 +141,17 @@ pub fn missing(status: &Value) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_only_the_two_privacy_panes() {
+        assert!(privacy_pane("accessibility")
+            .unwrap()
+            .ends_with("Privacy_Accessibility"));
+        assert!(privacy_pane("screen_recording")
+            .unwrap()
+            .ends_with("Privacy_ScreenCapture"));
+        assert_eq!(privacy_pane("camera"), None);
+    }
 
     #[test]
     fn names_each_permission_still_missing() {

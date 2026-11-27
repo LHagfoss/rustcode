@@ -23,6 +23,8 @@ const OUTLINE: [Vertex; 8] = [
 ];
 const OUTLINE_HEIGHT: f64 = 72.36;
 const CURVE_STEPS: usize = 12;
+const OUTLINE_SAMPLES: usize = 480;
+const ROUNDING: usize = 9;
 const FILL: [f64; 3] = [232.0, 116.0, 59.0];
 const RIM: [f64; 3] = [255.0, 255.0, 255.0];
 const SHADOW: [f64; 3] = [0.0, 0.0, 0.0];
@@ -47,7 +49,7 @@ pub fn draw(points: f64, scale: f64) -> CursorImage {
     let blur = SHADOW_BLUR_POINTS * scale;
     let drop = SHADOW_DROP_POINTS * scale;
     let margin = rim + blur + drop + scale;
-    let outline = flatten();
+    let outline = outline();
     let (min_x, min_y, max_x, max_y) = bounds(&outline);
     let polygon: Vec<(f64, f64)> = outline
         .iter()
@@ -119,6 +121,58 @@ fn paint_at(
     };
     let fade = (1.0 - beyond / blur).max(0.0);
     (SHADOW, SHADOW_ALPHA * fade * fade)
+}
+
+/// The outline as a polygon with its corners rounded further: sampled evenly
+/// along its length, then each point averaged with its neighbours, and moved
+/// so the rounded tip sits on the hotspot.
+fn outline() -> Vec<(f64, f64)> {
+    let even = resample(&flatten(), OUTLINE_SAMPLES);
+    let count = even.len();
+    let smooth: Vec<(f64, f64)> = (0..count)
+        .map(|index| {
+            let (mut x, mut y) = (0.0, 0.0);
+            for offset in 0..=2 * ROUNDING {
+                let (px, py) = even[(index + count + offset - ROUNDING) % count];
+                x += px;
+                y += py;
+            }
+            let span = (2 * ROUNDING + 1) as f64;
+            (x / span, y / span)
+        })
+        .collect();
+    let tip = smooth[0];
+    smooth
+        .into_iter()
+        .map(|(x, y)| (x - tip.0, y - tip.1))
+        .collect()
+}
+
+/// `count` points spaced evenly along the closed polygon, starting at its first.
+fn resample(points: &[(f64, f64)], count: usize) -> Vec<(f64, f64)> {
+    let segment = |index: usize| {
+        let (a, b) = (points[index], points[(index + 1) % points.len()]);
+        (a, b, (b.0 - a.0).hypot(b.1 - a.1))
+    };
+    let perimeter: f64 = (0..points.len()).map(|index| segment(index).2).sum();
+    let step = perimeter / count as f64;
+    let mut out = Vec::with_capacity(count);
+    let (mut index, mut walked) = (0, 0.0);
+    for sample in 0..count {
+        let wanted = sample as f64 * step;
+        while walked + segment(index).2 < wanted && index + 1 < points.len() {
+            walked += segment(index).2;
+            index += 1;
+        }
+        let (a, b, length) = segment(index);
+        let t = if length == 0.0 {
+            0.0
+        } else {
+            ((wanted - walked) / length).clamp(0.0, 1.0)
+        };
+        out.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+    }
+    out
 }
 
 fn flatten() -> Vec<(f64, f64)> {
@@ -206,11 +260,21 @@ mod tests {
     }
 
     #[test]
+    fn rounding_keeps_the_tip_on_the_hotspot_and_the_size_close() {
+        let rounded = outline();
+        assert_eq!(rounded[0], (0.0, 0.0));
+        let (min_x, min_y, max_x, max_y) = bounds(&rounded);
+        assert!(min_y > -3.0);
+        assert!((max_y - min_y - OUTLINE_HEIGHT).abs() < 6.0);
+        assert!(max_x - min_x > 50.0);
+    }
+
+    #[test]
     fn the_outline_is_closed_and_its_tip_is_its_top_left_point() {
         let outline = flatten();
         assert_eq!(outline[0], (0.0, 0.0));
         let (_, min_y, _, max_y) = bounds(&outline);
-        assert!(min_y > -1.0 && min_y <= 0.0);
+        assert!(min_y > -3.0 && min_y <= 0.0);
         assert!((max_y - OUTLINE_HEIGHT).abs() < 1.5);
     }
 }

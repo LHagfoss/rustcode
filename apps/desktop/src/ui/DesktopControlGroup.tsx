@@ -1,14 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { obj } from "../acp/jsonrpc";
+import { openDesktopControlSettings } from "../lib/nativeAccess";
 import { errorText, request, toast } from "../state/store";
 import { Action, Group, Loading, Row, useEngineData } from "./settingsKit";
 
 const KEY = "desktop-control";
+/** How often the page looks again while a permission is still off. */
+const RECHECK_MS = 2000;
 
 function permissionText(granted: unknown): string {
-  if (granted === true) return "Granted";
-  if (granted === false) return "Not granted";
+  if (granted === true) return "Allowed";
+  if (granted === false) return "Off";
   return "Unknown";
+}
+
+function openPane(permission: "accessibility" | "screen_recording") {
+  openDesktopControlSettings(permission).catch((e: unknown) => toast(errorText(e), "error"));
 }
 
 /**
@@ -47,6 +54,7 @@ export function DesktopControlGroup() {
   const missing = settings.accessibility !== true || settings.screen_recording !== true;
   const executable = typeof settings.executable === "string" ? settings.executable : null;
   const listedAs = settings.hosted === true ? "RustCode" : executable;
+  const watching = supported && enabled && missing;
   return (
     <Group
       title="Desktop control"
@@ -65,33 +73,31 @@ export function DesktopControlGroup() {
           subtitle={typeof settings.reason === "string" ? settings.reason : undefined}
         />
       )}
+      {watching && <Recheck reload={reload} />}
       {supported && (
         <>
-          <Row
+          <PermissionRow
             title="Accessibility"
             subtitle="Needed to read apps and act on them."
-            hint={permissionText(settings.accessibility)}
+            granted={settings.accessibility}
+            enabled={enabled}
+            onOpen={() => openPane("accessibility")}
           />
-          <Row
+          <PermissionRow
             title="Screen Recording"
             subtitle="Needed for window screenshots."
-            hint={permissionText(settings.screen_recording)}
+            granted={settings.screen_recording}
+            enabled={enabled}
+            onOpen={() => openPane("screen_recording")}
           />
-          {missing && (
+          {watching && (
             <Row
-              title="Grant the permissions"
-              subtitle="macOS shows its prompts; turn RustCode on in Privacy & Security, then come back."
+              title="Turn RustCode on in each list"
+              subtitle="This page notices the change by itself; no restart needed."
               hint={listedAs ? `macOS lists it as ${listedAs}` : undefined}
             >
-              <Action disabled={pending || !enabled} onClick={() => void save(true, true)}>
+              <Action disabled={pending} onClick={() => void save(true, true)}>
                 Ask macOS
-              </Action>
-            </Row>
-          )}
-          {missing && (
-            <Row title="Check again" subtitle="After changing System Settings.">
-              <Action disabled={pending} onClick={() => void reload()}>
-                Check
               </Action>
             </Row>
           )}
@@ -99,4 +105,33 @@ export function DesktopControlGroup() {
       )}
     </Group>
   );
+}
+
+function PermissionRow({
+  title,
+  subtitle,
+  granted,
+  enabled,
+  onOpen,
+}: {
+  title: string;
+  subtitle: string;
+  granted: unknown;
+  enabled: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <Row title={title} subtitle={subtitle} hint={permissionText(granted)}>
+      {enabled && granted !== true && <Action onClick={onOpen}>Open System Settings</Action>}
+    </Row>
+  );
+}
+
+/** Reads the status again every few seconds while a permission is off. */
+function Recheck({ reload }: { reload: () => Promise<unknown> }) {
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), RECHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+  return null;
 }

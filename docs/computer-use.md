@@ -117,9 +117,11 @@ built-in harness does not offer these tools yet.
 On by default, per machine; turn it off under **Settings → Voice & computer
 use** › **Desktop control** on the Mac itself. Nothing runs until macOS grants
 **Accessibility** (to read apps and act on them) and **Screen Recording** (for
-window screenshots); the section shows both and **Ask macOS** shows the
+window screenshots). The section shows each one with **Open System
+Settings** for the exact Privacy & Security list, and **Ask macOS** shows the
 prompts, as does the **Allow desktop control** step under **Settings › System
-setup**. While the app is open it hosts the worker, so macOS checks RustCode's
+setup**. While a permission is off the section checks again every two seconds,
+and a grant applies without restarting anything. While the app is open it hosts the worker, so macOS checks RustCode's
 own grants and lists them as **RustCode**. With the app closed the engine
 starts its own worker, which macOS treats as the bare `rc` binary (that
 Settings names) with grants of its own. Or set it in `config.toml`:
@@ -137,17 +139,22 @@ Start a new thread after changing it.
 2. `computer_snapshot` reads one window's accessibility tree. Each element gets
    a ref such as `e12`. Password fields are marked and their values never
    listed; everything read is wrapped as untrusted screen content.
-3. `computer_click`, `computer_type` and `computer_scroll` act on a ref. A
-   click presses the element through Accessibility and typing inserts at its
-   caret, so the app works in the background: the user's pointer, keyboard
-   focus and front window stay theirs. Keys and pixel clicks are posted to the
-   app's own process. Chromium and Electron apps (Discord, Slack, Chrome,
-   VS Code) ignore input sent that way; for them the agent passes
-   `foreground: true` to `computer_click`, `computer_type`, `computer_key` or
-   `computer_scroll`, which brings the app to the front and sends the input
-   through the system's own input stream (it moves the user's pointer and
-   takes focus). Foreground input is approved separately from background
-   control of the same app.
+3. `computer_click`, `computer_type` and `computer_scroll` act on a ref, and
+   the app works behind the user's windows: the user's pointer, keyboard focus
+   and front window stay theirs. A click presses the element through
+   Accessibility when it can. Otherwise clicks, keys and typing are posted to
+   the app's process through WindowServer (`SLEventPostToPid`), after its
+   window is made key without being raised; keyboard events carry the
+   authentication message Chromium asks for, and a left click is preceded by a
+   move and an off-screen press, so Chromium and Electron apps (Discord, Slack,
+   Chrome, VS Code) take it as a real gesture. If the target brings itself to
+   the front anyway, the app the user was in goes back in front. This is Cua
+   Driver's recipe (MIT) on private interfaces; when they are missing the
+   public per-process post is used. Only when an app still ignores the input
+   does the agent pass `foreground: true`, which brings the app to the front
+   and sends the input through the system's own input stream (it moves the
+   user's pointer and takes focus). Foreground input is approved separately
+   from background control of the same app.
 4. `computer_screenshot` captures one window (ScreenCaptureKit, longest side
    1600 px). Pixel coordinates for `computer_click` and `computer_scroll`
    (`x`, `y` with `window_id`) are pixels of the latest screenshot of that
@@ -174,7 +181,8 @@ drawn by RustCode in a click-through window that screen captures leave out.
 The agent's cursor glides to each target on a short eased arc (longer moves
 take longer, up to about 0.7 s), starting from the user's pointer the first
 time, and shrinks briefly on each click. It then floats gently for half a
-minute and rests where it last acted, and the app's worker shows it there
+minute and rests where it last acted. It fades away as soon as the user moves
+their pointer or types, and comes back with the agent's next action, and the app's worker shows it there
 again after a restart (`<config>/run/cursor-position`). Its outline is Cua
 Driver's default cursor (MIT). Nothing is added to the menu bar.
 Turning the switch off, closing the thread, or revoking `desktop:<thread>`

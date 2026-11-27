@@ -1,7 +1,9 @@
 //! What the user sees while an agent drives this Mac: the agent's own cursor,
 //! which glides to each element before it acts, floats gently for a while
 //! after, and then rests where it last acted, even across restarts of the
-//! app. Desktop control stops from Settings, or when the app quits.
+//! app. It steps aside as soon as the user moves their pointer or types, and
+//! comes back with the agent's next action. Desktop control stops from
+//! Settings, or when the app quits.
 
 use super::ffi::{self, CGPoint, CGRect, CGSize};
 use crate::computer_worker::cursor_image;
@@ -32,6 +34,11 @@ const FLOAT_EASE_IN_SECS: f64 = 0.8;
 const FLOAT_FOR_SECS: f64 = 30.0;
 const FLOAT_EASE_OUT_SECS: f64 = 1.2;
 const RESTING_POLL: Duration = Duration::from_millis(250);
+const FADE_OUT_FRAMES: u32 = 10;
+const USER_GRACE: Duration = Duration::from_millis(600);
+const POINTER_JITTER: f64 = 2.0;
+const HID_SYSTEM_STATE: i32 = 1;
+const KEY_DOWN: u32 = 10;
 const ACCESSORY_POLICY: isize = 1;
 const BORDERLESS: usize = 0;
 const BUFFERED: usize = 2;
@@ -60,6 +67,9 @@ static DRAWN: Mutex<Option<CGPoint>> = Mutex::new(None);
 /// When it last came to rest, which starts its float.
 static RESTED: Mutex<Option<Instant>> = Mutex::new(None);
 static MOVING: AtomicBool = AtomicBool::new(false);
+/// When the agent last sent input, so its own events are not taken for the
+/// user's.
+static ACTED: Mutex<Option<Instant>> = Mutex::new(None);
 static BEND_LEFT: AtomicBool = AtomicBool::new(true);
 static CLOCK: OnceLock<Instant> = OnceLock::new();
 
@@ -169,6 +179,7 @@ fn primary_height() -> f64 {
 /// about to act. It rests there afterwards.
 pub fn glide(point: CGPoint) {
     MOVING.store(true, Ordering::SeqCst);
+    acting();
     let from = lock(&DRAWN).or_else(pointer_location).unwrap_or(point);
     let bend_left = BEND_LEFT.fetch_xor(true, Ordering::Relaxed);
     let plan = Glide::plan(motion_point(from), motion_point(point), bend_left);
@@ -185,7 +196,14 @@ pub fn glide(point: CGPoint) {
     save_position(point);
     std::thread::sleep(SETTLE);
     *lock(&RESTED) = Some(Instant::now());
+    acting();
     MOVING.store(false, Ordering::SeqCst);
+}
+
+/// Note that the agent is sending input now, so the pointer moves and keys it
+/// causes do not count as the user's.
+pub fn acting() {
+    *lock(&ACTED) = Some(Instant::now());
 }
 
 /// Show a press at the cursor's tip just before a click lands.
@@ -330,7 +348,13 @@ fn float() {
     let clock = *CLOCK.get_or_init(Instant::now);
     let frame = Duration::from_secs_f64(1.0 / FLOAT_FRAMES_PER_SECOND);
     let mut still_since: Option<Instant> = None;
+    let mut pointer = pointer_location();
     loop {
+        let now = pointer_location();
+        if user_is_active(pointer, now) {
+            step_aside();
+        }
+        pointer = now;
         let rested = *lock(&RESTED);
         let base = *lock(&POSITION);
         let (Some(rested), Some(base)) = (rested, base) else {
@@ -358,6 +382,55 @@ fn float() {
         });
         std::thread::sleep(frame);
     }
+}
+
+/// Whether the user moved their pointer or typed since the last look, apart
+/// from what the agent's own input caused.
+fn user_is_active(before: Option<CGPoint>, now: Option<CGPoint>) -> bool {
+    if MOVING.load(Ordering::SeqCst) || lock(&ACTED).is_some_and(|at| at.elapsed() < USER_GRACE) {
+        return false;
+    }
+    let moved = before
+        .zip(now)
+        .is_some_and(|(a, b)| (a.x - b.x).hypot(a.y - b.y) > POINTER_JITTER);
+    // SAFETY: no preconditions.
+    let typed = unsafe { ffi::CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, KEY_DOWN) }
+        < RESTING_POLL.as_secs_f64();
+    moved || typed
+}
+
+/// Fade the cursor out and take it off screen; it keeps its resting point and
+/// comes back with the next glide.
+fn step_aside() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    DispatchQueue::main().exec_async(move || {
+        let _ = sender.send(UI.with(|slot| slot.borrow().as_ref().is_some_and(|ui| ui.shown)));
+    });
+    if !receiver.recv().unwrap_or(false) {
+        return;
+    }
+    let frame = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
+    for step in (0..FADE_OUT_FRAMES).rev() {
+        if MOVING.load(Ordering::SeqCst) {
+            return;
+        }
+        set_alpha(f64::from(step) / f64::from(FADE_OUT_FRAMES));
+        std::thread::sleep(frame);
+    }
+    DispatchQueue::main().exec_async(|| {
+        UI.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let Some(ui) = slot.as_mut() else { return };
+            if MOVING.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: this runs on the main thread, which owns the window.
+            unsafe {
+                let _: () = msg_send![&ui.window, orderOut: Option::<&AnyObject>::None];
+            }
+            ui.shown = false;
+        });
+    });
 }
 
 fn position_file() -> Option<PathBuf> {

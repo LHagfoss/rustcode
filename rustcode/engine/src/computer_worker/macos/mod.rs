@@ -1,12 +1,15 @@
 //! macOS desktop control: Accessibility for reading and acting by ref,
-//! events posted to the target process for keys, scrolls and pixel clicks,
-//! ScreenCaptureKit for window screenshots, and AppKit for the agent's cursor.
+//! events posted to the target process behind the user's windows for keys,
+//! scrolls and pixel clicks, ScreenCaptureKit for window screenshots, and
+//! AppKit for the agent's cursor.
 
 mod ax;
+mod background;
 mod capture;
 mod ffi;
 mod input;
 pub mod signature;
+mod skylight;
 mod ui;
 
 use super::{MAX_ELEMENTS, Op, keys};
@@ -41,7 +44,18 @@ thread_local! {
 
 /// Answer one request. Runs on the worker's request thread.
 pub fn handle(op: Op) -> Result<Value, String> {
-    autoreleasepool(|_| dispatch(op))
+    let input = matches!(
+        op,
+        Op::Click { .. } | Op::Type { .. } | Op::Key { .. } | Op::Scroll { .. }
+    );
+    if input {
+        ui::acting();
+    }
+    let answer = autoreleasepool(|_| dispatch(op));
+    if input {
+        ui::acting();
+    }
+    answer
 }
 
 fn dispatch(op: Op) -> Result<Value, String> {
@@ -108,7 +122,11 @@ fn dispatch(op: Op) -> Result<Value, String> {
         } => {
             needs_accessibility()?;
             let combo = keys::parse(&key)?;
-            input::key(input_target(pid, foreground)?, combo)?;
+            let target = input_target(pid, foreground)?;
+            let session = background::Session::begin(target, pid, None);
+            let pressed = input::key(target, combo);
+            session.map(background::Session::end);
+            pressed?;
             Ok(json!({"pressed": key, "how": how(foreground)}))
         }
         Op::Scroll {
@@ -308,7 +326,11 @@ fn click(
             return Ok(json!({"clicked": element, "how": "accessibility"}));
         }
     }
-    input::click(target, point, window, right, count)?;
+    let window = background::window(pid, window);
+    let session = background::Session::begin(target, pid, window.map(|window| window.id));
+    let clicked = input::click(target, point, window, right, count);
+    session.map(background::Session::end);
+    clicked?;
     Ok(json!({
         "clicked": element.unwrap_or_else(|| format!("{:.0},{:.0}", point.x, point.y)),
         "how": how(foreground),
@@ -341,10 +363,18 @@ fn type_text(
     }
     if let Some(focused) = &focused
         && !foreground
+        && !skylight::available()
         && focused.insert_text(text)?
     {
         return Ok(json!({"typed": text.chars().count(), "how": "accessibility"}));
     }
-    input::type_text(target, text)?;
+    let window = focused
+        .as_ref()
+        .and_then(ax::Element::window)
+        .and_then(|window| window.window_id());
+    let session = background::Session::begin(target, pid, window);
+    let typed = input::type_text(target, text);
+    session.map(background::Session::end);
+    typed?;
     Ok(json!({"typed": text.chars().count(), "how": how(foreground)}))
 }
