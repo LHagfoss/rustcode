@@ -76,7 +76,7 @@ mod metadata_lock;
 mod search;
 mod workspace;
 
-pub use atomic_file::{replace_file, write_atomic};
+pub use atomic_file::{replace_file, write_atomic, write_atomic_new};
 pub use metadata::{
     LEGACY_PIN_FILE, LEGACY_SNOOZE_FILE, LEGACY_STATUS_FILE, LEGACY_TITLE_FILE,
     LEGACY_USER_TITLED_FILE, SessionStatusRecord, load_session_metadata_in,

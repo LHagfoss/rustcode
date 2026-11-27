@@ -120,11 +120,17 @@ fn save_mcp_binary(
     };
     let preview = binary_preview(&bytes);
     let saved = artifacts.and_then(|directory| {
-        let name = mcp_artifact_name(mime, uri, index);
         std::fs::create_dir_all(directory).ok()?;
-        let path = directory.join(name);
-        std::fs::write(&path, &bytes).ok()?;
-        Some(path)
+        for attempt in 0..32usize {
+            let name = mcp_artifact_name(mime, uri, index, attempt);
+            let path = directory.join(name);
+            match crate::atomic_file::write_atomic_new(&path, &bytes) {
+                Ok(()) => return Some(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return None,
+            }
+        }
+        None
     });
     match saved {
         Some(path) => format!(
@@ -141,7 +147,7 @@ fn save_mcp_binary(
 
 /// A unique artifact file name that keeps the resource's own name when it
 /// has one, else an extension for its type.
-fn mcp_artifact_name(mime: &str, uri: Option<&str>, index: usize) -> String {
+fn mcp_artifact_name(mime: &str, uri: Option<&str>, index: usize, attempt: usize) -> String {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -171,7 +177,11 @@ fn mcp_artifact_name(mime: &str, uri: Option<&str>, index: usize) -> String {
         };
         format!("result.{extension}")
     });
-    format!("mcp-{stamp}-{index}-{name}")
+    if attempt == 0 {
+        format!("mcp-{stamp}-{index}-{name}")
+    } else {
+        format!("mcp-{stamp}-{index}-{attempt}-{name}")
+    }
 }
 
 /// A short look inside binary content: decompressed text for gzip, the text
@@ -572,5 +582,55 @@ mod tests {
             {"type": "resource", "resource": {"uri": "file:///a.txt", "text": "two"}}
         ]}});
         assert_eq!(mcp_result_content_in(&result, None), "one\ntwo");
+    }
+
+    #[test]
+    fn concurrent_binary_mcp_saves_produce_distinct_artifacts_without_temporaries() {
+        use base64::Engine as _;
+        let artifacts = tempfile::tempdir().unwrap();
+        let dir = std::sync::Arc::new(artifacts.path().to_path_buf());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4u8)
+            .map(|index| {
+                let dir = std::sync::Arc::clone(&dir);
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let payload = vec![index + 1; 1024];
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+                    let result = serde_json::json!({"result": {"content": [
+                        {"type": "image", "data": encoded, "mimeType": "image/png"}
+                    ]}});
+                    barrier.wait();
+                    (mcp_result_content_in(&result, Some(dir.as_path())), payload)
+                })
+            })
+            .collect();
+
+        let mut expected = Vec::new();
+        for handle in handles {
+            let (content, payload) = handle.join().unwrap();
+            assert!(content.contains("binary MCP result saved to "), "{content}");
+            expected.push(payload);
+        }
+
+        let entries: Vec<_> = std::fs::read_dir(artifacts.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 4);
+        assert!(entries.iter().all(|path| {
+            !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+        let mut actual: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected);
     }
 }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-pub(crate) use rustcode_session::atomic_file::{replace_file, write_atomic};
+pub(crate) use rustcode_session::atomic_file::{replace_file, write_atomic, write_atomic_new};
 
 /// [`write_atomic`] into a folder created when missing, with an error that
 /// names the file, for callers that report errors as text.

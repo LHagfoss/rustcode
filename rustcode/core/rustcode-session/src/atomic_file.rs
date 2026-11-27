@@ -30,6 +30,38 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// Write `bytes` to a new file at `path` atomically, failing with
+/// [`io::ErrorKind::AlreadyExists`] if `path` is already present.
+///
+/// Like [`write_atomic`], a crash never leaves a truncated file at `path`, and
+/// the parent folder must already exist.
+pub fn write_atomic_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if fs::symlink_metadata(path).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", path.display()),
+        ));
+    }
+    let temporary = temporary_path(path);
+    let write_result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        });
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    let link_result = fs::hard_link(&temporary, path);
+    let _ = fs::remove_file(&temporary);
+    link_result?;
+    sync_parent(path);
+    Ok(())
+}
+
 /// Replace `destination` with `source`, preserving the old destination while
 /// the replacement is being installed on platforms that cannot rename over an
 /// existing file.
@@ -200,5 +232,86 @@ mod tests {
             })
             .count();
         assert_eq!(temporaries, 0);
+    }
+
+    #[test]
+    fn write_atomic_new_creates_file_and_leaves_no_temporary() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("artifact.txt");
+
+        write_atomic_new(&path, b"complete payload").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"complete payload");
+        let names: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["artifact.txt"]);
+    }
+
+    #[test]
+    fn write_atomic_new_refuses_to_overwrite_existing_file() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("artifact.txt");
+        fs::write(&path, b"original").unwrap();
+
+        let error = write_atomic_new(&path, b"replacement").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        let names: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["artifact.txt"]);
+    }
+
+    #[test]
+    fn write_atomic_new_does_not_create_missing_folder() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let folder = directory.path().join("removed");
+
+        assert!(write_atomic_new(&folder.join("artifact.txt"), b"x").is_err());
+
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn write_atomic_new_allows_only_one_concurrent_winner() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = Arc::new(directory.path().join("raced.bin"));
+        let writers = 8;
+        let barrier = Arc::new(Barrier::new(writers));
+        let handles: Vec<_> = (0..writers)
+            .map(|writer| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let body = vec![b'a' + writer as u8; 64 * 1024];
+                    barrier.wait();
+                    write_atomic_new(&path, &body)
+                })
+            })
+            .collect();
+
+        let mut successes = 0;
+        let mut collisions = 0;
+        for handle in handles {
+            match handle.join().unwrap() {
+                Ok(()) => successes += 1,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => collisions += 1,
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+        assert_eq!(successes, 1);
+        assert_eq!(collisions, writers - 1);
+
+        let written = fs::read(&*path).unwrap();
+        assert_eq!(written.len(), 64 * 1024);
+        assert!(written.iter().all(|byte| *byte == written[0]));
+        let names: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["raced.bin"]);
     }
 }

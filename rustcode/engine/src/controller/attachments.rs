@@ -397,6 +397,7 @@ fn upload_image_chunk_in(
             uri: None,
         });
     }
+    file.sync_all().map_err(|error| error.to_string())?;
     drop(file);
     let part = directory.join(format!("upload_{id}.part"));
     let mut head = [0u8; 16];
@@ -408,7 +409,7 @@ fn upload_image_chunk_in(
         return Err(format!("the uploaded bytes are not a {mime} image"));
     }
     let kept = directory.join(format!("upload_{id}.{extension}"));
-    fs::rename(&part, &kept).map_err(|error| error.to_string())?;
+    crate::atomic_file::replace_file(&part, &kept).map_err(|error| error.to_string())?;
     let kept = fs::canonicalize(&kept).unwrap_or(kept);
     Ok(UploadAnswer {
         upload_id: id,
@@ -508,15 +509,8 @@ fn save_image_in(directory: &Path, bytes: &[u8], extension: &str) -> io::Result<
     for _ in 0..32 {
         let id = NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed);
         let path = directory.join(format!("native_{now}_{id}.{extension}"));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                if let Err(error) = file.write_all(bytes) {
-                    drop(file);
-                    let _ = fs::remove_file(&path);
-                    return Err(error);
-                }
-                return Ok(path);
-            }
+        match crate::atomic_file::write_atomic_new(&path, bytes) {
+            Ok(()) => return Ok(path),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }

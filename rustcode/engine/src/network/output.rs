@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{fs::OpenOptions, io::Write};
 
 use regex::Regex;
 
@@ -281,7 +280,15 @@ pub(crate) fn truncate_tool_output_for_message_with_completion(
 
 pub(crate) fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
     let dir = crate::config::get_config_dir()?.join("tool_output");
-    let _ = std::fs::create_dir_all(&dir);
+    save_full_tool_output_in(&dir, name, content).map(|path| path.to_string_lossy().into_owned())
+}
+
+fn save_full_tool_output_in(
+    dir: &std::path::Path,
+    name: &str,
+    content: &str,
+) -> Option<std::path::PathBuf> {
+    std::fs::create_dir_all(dir).ok()?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or(std::time::Duration::from_secs(0))
@@ -293,13 +300,8 @@ pub(crate) fn save_full_tool_output(name: &str, content: &str) -> Option<String>
         .collect();
     loop {
         let path = dir.join(format!("{ts}_{sequence}_{safe_name}.txt"));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                return file
-                    .write_all(content.as_bytes())
-                    .is_ok()
-                    .then(|| path.to_string_lossy().to_string());
-            }
+        match crate::atomic_file::write_atomic_new(&path, content.as_bytes()) {
+            Ok(()) => return Some(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 sequence = sequence.wrapping_add(1);
             }
@@ -632,5 +634,22 @@ token usage: 1234
         ];
         assert!(recovered.contains(&first.into_bytes()));
         assert!(recovered.contains(&second.into_bytes()));
+    }
+
+    #[test]
+    fn save_full_tool_output_in_writes_complete_file_without_temporaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = save_full_tool_output_in(dir.path(), "run_command", "full output body\n")
+            .expect("artifact path");
+
+        assert_eq!(
+            std::fs::read_to_string(&saved).unwrap(),
+            "full output body\n"
+        );
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries, vec![saved]);
     }
 }

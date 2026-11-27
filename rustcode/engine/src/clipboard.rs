@@ -10,7 +10,7 @@ pub fn paste_image_from_clipboard() -> Option<String> {
     // is read in-process; launching `osascript` costs a visible pause.
     #[cfg(target_os = "macos")]
     if let Some(png) = pasteboard::png_data()
-        && std::fs::write(&file_path, png).is_ok()
+        && crate::atomic_file::write_atomic(&file_path, &png).is_ok()
     {
         return Some(format!("![image](file://{})", file_path_str));
     }
