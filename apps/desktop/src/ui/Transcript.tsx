@@ -87,7 +87,6 @@ import {
   AssistantRow,
   CompletionCard,
   HandoffRow,
-  LiveActivityRow,
   NoticeRow,
   QuestionRow,
   SwitchRow,
@@ -119,17 +118,13 @@ export type Row = {
   /** How many of the same automatic message this row stands for (`collapseRepeats`). */
   repeats?: number;
   /** The running turn's header; on the moment it ends, `done` holds its check. */
-  working?: { done?: boolean; elapsedMs?: number };
+  working?: { done?: boolean; elapsedMs?: number; awaitingApproval?: boolean };
   /** Two or more subagents in a row, shown as one. */
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
   /** The threads a run of `start_session` calls started, shown as one row or card. */
   threads?: { links: Link[]; open: boolean };
   /** A fork or side chat opened from this thread: its lifecycle line (state/branches.ts). */
   branch?: Branch;
-  /** The running turn's foot: what it does now, when no row of its own shows it. */
-  activity?: string;
-  /** The turn ended while the foot was the live line: it settles on a check. */
-  activityDone?: boolean;
   /** The thread's background work, when no turn of its own runs (state/waiting.ts). */
   waiting?: Waiting;
   /** A request from a thread below this one, at the foot (state/pending.ts). */
@@ -486,23 +481,12 @@ export function Transcript({
       }
       out.splice(at, 0, {
         key: "working",
-        working: { done: !running, elapsedMs: settleEnd?.elapsedMs },
+        working: {
+          done: !running,
+          elapsedMs: settleEnd?.elapsedMs,
+          awaitingApproval: thread.permissions.length > 0,
+        },
       });
-      // The foot says what it does now unless the last row already does (a call
-      // or thought still running, a reply streaming).
-      const last = out.filter((row) => row.item?.kind !== "turnEnd").at(-1)?.item;
-      const shows =
-        (last?.kind === "tool" && (last.status === "in_progress" || last.status === "pending")) ||
-        (last?.kind === "thought" && !last.done) ||
-        last?.kind === "assistant";
-      // With an approval waiting, the turn is not working: the row that asks is the foot.
-      const activity = workingLabel(visible);
-      if (!shows && !waiting && !(settleEnd && activity === "Working"))
-        out.push({
-          key: "activity",
-          activity,
-          activityDone: !!settleEnd,
-        });
     } else if (wait) out.push({ key: "waiting", waiting: wait });
     // What a thread below this one asks sits at the foot with the waiting line, oldest first; the
     // first one that can take the keyboard does, so a key never answers another thread's card too.
@@ -1255,12 +1239,7 @@ export function Transcript({
                         now={now}
                         done={row.working.done}
                         elapsedMs={row.working.elapsedMs}
-                      />
-                    ) : row.activity ? (
-                      <LiveActivityRow
-                        label={row.activity}
-                        done={row.activityDone}
-                        seed={thread.turn?.startedAt ?? thread.enginePhase?.startedAt}
+                        awaitingApproval={row.working.awaitingApproval}
                       />
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">

@@ -610,13 +610,15 @@ aside[aria-hidden="true"] + .rc-main-panel {
 @keyframes rc-wave {
   0%,
   100% {
-    color: var(--rc-text-muted);
-    text-shadow: none;
+    color: var(--rc-wave-base, var(--rc-text-muted));
   }
   50% {
-    color: var(--rc-text);
-    text-shadow: 0 0 6px color-mix(in srgb, var(--rc-text) 45%, transparent);
+    color: var(--rc-wave-highlight, var(--rc-text));
   }
+}
+.rc-wave-quiet {
+  --rc-wave-base: var(--rc-text-faint);
+  --rc-wave-highlight: color-mix(in srgb, var(--rc-text) 70%, var(--rc-text-faint));
 }
 .rc-wave > span[aria-hidden] {
   animation: rc-wave 1.8s ease-in-out infinite;
@@ -800,7 +802,7 @@ aside[aria-hidden="true"] + .rc-main-panel {
   }
   .rc-wave > span[aria-hidden] {
     animation: none;
-    color: var(--rc-text-muted);
+    color: var(--rc-wave-base, var(--rc-text-muted));
   }
   /* Off, not instant: `both` would hold the word invisible until its delay was up. */
   .rc-reveal,

@@ -577,8 +577,8 @@
 24 apps/desktop/src/ui/TimelineRail.tsx
 6 apps/desktop/src/ui/Titlebar.tsx
 28 apps/desktop/src/ui/Toaster.tsx
-12 apps/desktop/src/ui/Transcript.test.ts
-161 apps/desktop/src/ui/Transcript.tsx
+8 apps/desktop/src/ui/Transcript.test.ts
+158 apps/desktop/src/ui/Transcript.tsx
 9 apps/desktop/src/ui/TurnChanges.tsx
 27 apps/desktop/src/ui/TurnTrace.tsx
 10 apps/desktop/src/ui/Updates.tsx
@@ -613,7 +613,7 @@
 21 apps/desktop/src/ui/sidebarDrag.tsx
 1 apps/desktop/src/ui/syncRows.test.ts
 4 apps/desktop/src/ui/syncRows.ts
-11 apps/desktop/src/ui/transcriptHeight.ts
+8 apps/desktop/src/ui/transcriptHeight.ts
 2 apps/desktop/vite.config.ts
 64 harness/src/inline_terminal.rs
 48 harness/src/run.rs

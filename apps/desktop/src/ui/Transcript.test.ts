@@ -72,9 +72,7 @@ describe("the height a row is reserved at", () => {
   });
 
   test("the turn's own lines are the heights they are drawn at", () => {
-    // `WorkingRow` is `h-[34px]` over a hairline; the live activity row is `min-h-6`.
     expect(estimatedRowHeight({ key: "working", working: {} })).toBe(35);
-    expect(estimatedRowHeight({ key: "activity", activity: "Reading files" })).toBe(24);
   });
 
   test("keeps the height of a collapsed thought stable as its text streams", () => {
@@ -84,19 +82,10 @@ describe("the height a row is reserved at", () => {
   });
 
   test("a row's estimate and its gap are the whole size it mounts at", () => {
-    // A message sent into an open thread: the bubble, then the turn's `Working for 0s` and its
-    // activity line. Estimates that leave the gap out (or guess 24 for the working line) measured
-    // 105px taller a frame after mounting, and the pinned transcript took that back in one step.
-    const rows: Row[] = [
-      tool("c0"),
-      user("m1"),
-      { key: "working", working: {} },
-      { key: "activity", activity: "Working" },
-    ];
+    const rows: Row[] = [tool("c0"), user("m1"), { key: "working", working: {} }];
     const reserved = rows.map((row, i) => rowGap(rows, i) + estimatedRowHeight(row));
     expect(reserved[1]).toBe(28 + 8 * 2 + 24 + 24);
     expect(reserved[2]).toBe(12 + 35);
-    expect(reserved[3]).toBe(12 + 24);
   });
 
   test("a footer nothing draws takes no room, gap included", () => {
