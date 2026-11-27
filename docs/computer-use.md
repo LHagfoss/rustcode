@@ -103,8 +103,70 @@ locations. Calls time out, and a failed or cancelled call closes that thread's
 browser. Popups are blocked. No arbitrary JavaScript tool, desktop control,
 uploads, downloads UI or Windows integration is provided.
 
-## OS computer use
+## Desktop control
 
-RustCode does not drive the operating system (screen, mouse, keyboard, other
-apps) yet. How it will, per platform, and its safety model are decided in
-[ADR 0011](adr/0011-os-computer-use.md).
+Desktop control lets any harness see and use this computer's own apps with
+seven tools from the same `rustcode` MCP server: `computer_windows`,
+`computer_snapshot`, `computer_screenshot`, `computer_click`, `computer_type`,
+`computer_key` and `computer_scroll`. It runs on **macOS 14 or later** for
+now; Windows and Linux follow ([ADR 0011](adr/0011-os-computer-use.md)). The
+built-in harness does not offer these tools yet.
+
+### Enable
+
+Off by default, per machine. Open **Settings → Voice & computer use** on the
+Mac itself and turn on **Desktop control**. macOS then asks for
+**Accessibility** (to read apps and act on them) and **Screen Recording** (for
+window screenshots); the section shows both and has **Ask macOS** to show the
+prompts again. macOS lists the permission under the binary Settings names,
+usually RustCode's bundled `rc`. Or set it in `config.toml`:
+
+```toml
+[desktop_control]
+enabled = true
+```
+
+Start a new thread after turning it on.
+
+### How an agent works
+
+1. `computer_windows` lists on-screen windows with their `window_id` and `pid`.
+2. `computer_snapshot` reads one window's accessibility tree. Each element gets
+   a ref such as `e12`. Password fields are marked and their values never
+   listed; everything read is wrapped as untrusted screen content.
+3. `computer_click`, `computer_type` and `computer_scroll` act on a ref. A
+   click presses the element through Accessibility and typing inserts at its
+   caret, so the app works in the background: the user's pointer, keyboard
+   focus and front window stay theirs. Keys and pixel clicks are posted to the
+   app's own process.
+4. `computer_screenshot` captures one window (ScreenCaptureKit, longest side
+   1600 px). Pixel coordinates for `computer_click` and `computer_scroll`
+   (`x`, `y` with `window_id`) are pixels of the latest screenshot of that
+   window, for canvases and custom views without a usable tree.
+
+Before each action the **agent's cursor**, an arrow in RustCode's colour with
+the app's name, glides to where it is about to act, and hides after five idle
+seconds. It is drawn by RustCode in a click-through window that screen
+captures leave out.
+
+### Approval
+
+- The first action on an app in a thread asks: **Allow ‹App› for this thread**,
+  **Allow once** or **Deny**. Listing windows does not ask.
+- Password managers (1Password, Bitwarden, LastPass, Dashlane, Passwords,
+  Keychain Access) and System Settings ask on every action.
+- `computer_type` refuses password fields: hand those to the user.
+- One thread drives an app at a time; another thread gets `app_busy` for two
+  minutes after the last action.
+- Typed text is redacted on the card. Each action is logged as the
+  `computer_use.action` operational event (thread, tool, app, outcome).
+
+### Stop
+
+While the worker runs, the menu bar shows **◉ RustCode** with what it is
+controlling. **Stop desktop control** there ends the worker at once and every
+thread's desktop grants with it; the agent is told to ask before trying again.
+Turning the switch off, closing the thread, or revoking `desktop:<thread>`
+through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
+(`rc computer-worker`) starts on the first desktop call and exits after two
+idle minutes; its log is `<config>/computer-use/desktop-worker.log`.

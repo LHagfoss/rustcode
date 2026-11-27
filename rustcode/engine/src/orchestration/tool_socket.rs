@@ -461,6 +461,14 @@ impl Hub {
             return crate::computer_use::answer(&request, self.questions_for(&request), cancel)
                 .await;
         }
+        if crate::computer_use::desktop::is_tool(&request.tool) {
+            return crate::computer_use::desktop::answer(
+                &request,
+                self.questions_for(&request),
+                cancel,
+            )
+            .await;
+        }
         if request.tool == super::secret::TOOL_NAME {
             let workspace = self
                 .lock()

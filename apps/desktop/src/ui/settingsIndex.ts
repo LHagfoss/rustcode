@@ -266,6 +266,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Computer use",
     keywords: "browser tools chrome chromium allowlist allowed domains approval headless",
   },
+  {
+    section: "voice",
+    title: "Desktop control",
+    keywords:
+      "computer use desktop apps cursor mouse keyboard click type screenshot accessibility screen recording permissions",
+  },
 
   // ------------------------------------------------------------ Connections
   {

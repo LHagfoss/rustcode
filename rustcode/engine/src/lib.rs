@@ -18,6 +18,7 @@ pub mod daemon;
 pub mod data_store;
 use crate::app::{AppState, ChatMessage};
 mod computer_use;
+pub mod computer_worker;
 mod desktop_control;
 pub mod discord_rpc;
 pub mod doctor;
