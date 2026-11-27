@@ -1,6 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
 import { SIDEBAR_ROW_CURRENT, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
 
+/**
+ * The fill of the open row: one layer over the nav rows and the thread list that slides between
+ * them, follows the list as it scrolls and is clipped to it.
+ */
 export function SidebarSelection() {
   const highlight = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
@@ -8,7 +12,7 @@ export function SidebarSelection() {
     const list = pill?.parentElement;
     if (!pill || !list) return;
     let previous: HTMLElement | null = null;
-    const measure = () => {
+    const measure = (scrolling = false) => {
       const row = list.querySelector<HTMLElement>("[data-sidebar-current]");
       const target = row?.closest('[data-fold="closed"]') ? null : row;
       pill.hidden = !target;
@@ -17,17 +21,25 @@ export function SidebarSelection() {
         return;
       }
       if (target !== previous) pill.dataset.sliding = String(previous !== null);
+      else if (scrolling) pill.dataset.sliding = "false";
       const bounds = target.getBoundingClientRect();
       const origin = list.getBoundingClientRect();
+      const viewport = target.closest("[data-sidebar-scroll]")?.getBoundingClientRect();
+      const clipTop = viewport ? Math.max(0, viewport.top - bounds.top) : 0;
+      const clipBottom = viewport ? Math.max(0, bounds.bottom - viewport.bottom) : 0;
+      pill.style.clipPath = clipTop || clipBottom ? `inset(${clipTop}px 0 ${clipBottom}px 0)` : "";
       pill.style.width = `${bounds.width}px`;
       pill.style.height = `${bounds.height}px`;
       pill.style.transform = `translate(${bounds.left - origin.left}px, ${bounds.top - origin.top}px)`;
       previous = target;
     };
-    const resize = new ResizeObserver(measure);
+    const resize = new ResizeObserver(() => measure());
+    const onScroll = () => measure(true);
     const observe = () => {
       resize.disconnect();
       resize.observe(list);
+      for (const scroller of list.querySelectorAll("[data-sidebar-scroll], [data-sidebar-scroll] > *"))
+        resize.observe(scroller);
       for (const fold of list.querySelectorAll("[data-fold]")) resize.observe(fold);
       measure();
     };
@@ -50,8 +62,10 @@ export function SidebarSelection() {
       attributes: true,
       attributeFilter: ["data-sidebar-current", "data-fold"],
     });
+    list.addEventListener("scroll", onScroll, { capture: true, passive: true });
     observe();
     return () => {
+      list.removeEventListener("scroll", onScroll, { capture: true });
       resize.disconnect();
       mutations.disconnect();
     };
