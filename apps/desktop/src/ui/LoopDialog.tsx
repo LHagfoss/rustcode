@@ -9,6 +9,7 @@ import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { effortLabel, modelName, plainPath, projectName } from "../acp/types";
 import { modelTitle } from "../lib/modelNames";
+import { DIRECTOR_PROMPT } from "../state/director";
 import { useFleet } from "../state/fleet";
 import { jobMachineTargets, remoteLoopError, runThreadKey, targetKeyOf } from "../state/fleetLoops";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
@@ -85,6 +86,8 @@ interface LoopTemplate {
   name: string;
   prompt: string;
   script?: string;
+  /** A Director: picks a stopped thread each run, and needs full access to message it. */
+  director?: boolean;
   form: Partial<ScheduleForm>;
 }
 
@@ -118,6 +121,13 @@ const TEMPLATES: LoopTemplate[] = [
       "Inspect recent changes for performance regressions, hot loops, unbounded allocations, or growing tech debt. Propose the highest-impact fix first. Say Nothing to report if nothing stands out.",
     form: { repeat: "days", days: [1], time: "09:00" },
   },
+  {
+    label: "Director",
+    name: "Director",
+    prompt: DIRECTOR_PROMPT,
+    director: true,
+    form: { repeat: "hours", everyHours: 1 },
+  },
 ];
 
 function ordinal(n: number): string {
@@ -146,6 +156,7 @@ function draftOf(loop: Loop | null, project: string, duplicate = false): LoopDra
     readOnly: loop.readOnly,
     threadId: loop.threadId,
     script: loop.script,
+    director: loop.director,
     webhook: duplicate ? false : loop.webhook,
     webhookEvents: loop.webhookEvents?.join(", "),
     machine: loop.machine,
@@ -388,6 +399,7 @@ export function LoopDialog({
         workspace: "",
         threadId: undefined,
         script: undefined,
+        director: undefined,
         account: "",
       });
       setTarget("fresh");
@@ -672,23 +684,27 @@ export function LoopDialog({
                       {!isEditing && !duplicate && (
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="mr-0.5 text-caption text-fg-faint">Templates</span>
-                          {TEMPLATES.map((template) => (
-                            <Pill
-                              key={template.label}
-                              size="sm"
-                              onClick={() => {
-                                patch({
-                                  name: template.name,
-                                  prompt: template.prompt,
-                                  script: isHubDispatch ? undefined : template.script,
-                                });
-                                patchForm(template.form);
-                                if (!isHubDispatch && template.script) setScriptOpen(true);
-                              }}
-                            >
-                              {template.label}
-                            </Pill>
-                          ))}
+                          {TEMPLATES.filter((template) => !(isHubDispatch && template.director)).map(
+                            (template) => (
+                              <Pill
+                                key={template.label}
+                                size="sm"
+                                onClick={() => {
+                                  patch({
+                                    name: template.name,
+                                    prompt: template.prompt,
+                                    script: isHubDispatch ? undefined : template.script,
+                                    director: template.director,
+                                    readOnly: !template.director,
+                                  });
+                                  patchForm(template.form);
+                                  if (!isHubDispatch && template.script) setScriptOpen(true);
+                                }}
+                              >
+                                {template.label}
+                              </Pill>
+                            ),
+                          )}
                         </div>
                       )}
                       <Field label="Machine">
@@ -1122,6 +1138,20 @@ export function LoopDialog({
                         checked={draft.readOnly}
                         onChange={(readOnly) => patch({ readOnly })}
                       />
+                      {!isHubDispatch && !isWorkflow && (
+                        <ToggleRow
+                          label="Director"
+                          hint={
+                            !draft.director
+                              ? "Check one thread of this project that stopped, and unblock it when the next move is obvious."
+                              : draft.readOnly
+                                ? "Read-only declines its messages to threads, so it can only report what it sees."
+                                : "Each run checks one thread of this project that stopped since the last; when none did, no agent turn starts."
+                          }
+                          checked={Boolean(draft.director)}
+                          onChange={(director) => patch({ director })}
+                        />
+                      )}
                     </Section>
                   </div>
                   <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">

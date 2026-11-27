@@ -519,6 +519,12 @@ fn every_dispatched_method_matches_its_request_type() {
         "method mismatch for worktree_scripts::TrustRequest"
     );
     assert!(
+        <director::NextRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/director/next"
+        ),
+        "method mismatch for director::NextRequest"
+    );
+    assert!(
         <worktree_scripts::ActionRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
             "_rustcode/worktrees/scripts/action"
         ),

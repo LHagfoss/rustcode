@@ -390,6 +390,25 @@ describe("loop follow-ups (issue 3937)", () => {
     expect(params.threadId).toBe("t-9");
   });
 
+  test("a Director is saved for this computer only, and its quiet run says nothing stopped", () => {
+    const base = {
+      name: "Director",
+      workspace: "/code/app",
+      prompt: "Direct",
+      cron: "0 * * * *",
+      readOnly: false,
+    };
+    expect(saveParams({ ...base, director: true }, "Europe/Oslo").director).toBe(true);
+    expect("director" in saveParams({ ...base, director: true, machine: "studio" }, "Europe/Oslo")).toBe(
+      false,
+    );
+    expect("director" in saveParams(base, "Europe/Oslo")).toBe(false);
+    const quiet = loop({
+      runs: [run("r1", "succeeded", 1, { quiet: true, silent: true, verdict: "No thread stopped" })],
+    });
+    expect(lastResult(quiet, NOW)?.text).toBe("No thread stopped");
+  });
+
   test("a script is saved trimmed, a blank one is left out, and a silent run says so", () => {
     const base = { name: "CI", workspace: "/code/app", prompt: "Check", cron: "0 9 * * *", readOnly: true };
     expect(saveParams({ ...base, script: "  gh run list  " }, "Europe/Oslo").script).toBe("gh run list");

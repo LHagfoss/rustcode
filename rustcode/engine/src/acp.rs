@@ -12,6 +12,7 @@ mod connections;
 mod cursor;
 pub(crate) mod data;
 mod desktop_call;
+mod director;
 mod edit_diff;
 mod extension_dispatch;
 mod github_issues;

@@ -80,6 +80,8 @@ export interface Loop {
   threadId?: string;
   /** Script mode: run first; the agent wakes only when it prints something. */
   script?: string;
+  /** A Director: each run checks one stopped thread of the project, and none starts no turn. */
+  director?: boolean;
   /** Calling the loop's webhook URL starts a run (its URL is shown once, when made). */
   webhook: boolean;
   /** The webhook events it takes (`check_suite`, `pull_request.opened`); none takes every delivery. */
@@ -216,6 +218,7 @@ function loopOf(value: Json, host = LOCAL_HOST): Loop | null {
     readOnly: bool(raw.readOnly) ?? true,
     threadId: str(raw.threadId),
     script: str(raw.script),
+    director: bool(raw.director) ?? false,
     webhook: bool(raw.webhook) ?? false,
     webhookEvents: arr(raw.webhookEvents).flatMap((event) => str(event) ?? []),
     machine: str(raw.machine),
@@ -627,7 +630,7 @@ export function lastResult(
   const age = agoText(run.finishedAt ?? run.startedAt ?? run.scheduledAt, now);
   switch (run.state) {
     case "succeeded":
-      if (run.silent) return { text: "Script printed nothing", age, tone: "ok" };
+      if (run.silent) return { text: run.verdict ?? "Script printed nothing", age, tone: "ok" };
       // A hub Loop's run ends once its machine has the thread (or the hub holds it for that machine).
       if (run.queued)
         return { text: `Waiting for ${run.machine ?? "its machine"} (queued)`, age, tone: "muted" };
@@ -864,6 +867,8 @@ export interface LoopDraft {
   threadId?: string;
   /** Script mode: run first; the agent wakes only when it prints something. */
   script?: string;
+  /** A Director: each run checks one stopped thread of the project. */
+  director?: boolean;
   /** No schedule: the loop runs from Run now or its webhook. */
   manual?: boolean;
   /** Start a run when the loop's webhook URL is called. */
@@ -941,6 +946,7 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
   // A script runs on this computer, so a Loop for another machine takes none.
   const script = machine ? undefined : draft.script?.trim();
   if (script) params.script = script;
+  if (draft.director && !machine) params.director = true;
   for (const key of draft.threadId
     ? (["threadId"] as const)
     : (["harness", "account", "model", "effort"] as const)) {

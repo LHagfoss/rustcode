@@ -52,6 +52,7 @@ pub use orchestration::outside_hub::answer_for_hub as answer_hub_call;
 pub use orchestration::outside_passkey as owner_passkeys;
 pub use orchestration::outside_web as owner_web_sessions;
 pub use orchestration::tool_socket::ORCHESTRATOR_TOKEN_ENV;
+mod director;
 mod platform;
 pub mod ports;
 pub mod preview;

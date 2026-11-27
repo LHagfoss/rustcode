@@ -1723,7 +1723,7 @@ pub(super) fn project_of(session_id: &str, meta: &crate::sessions::SessionMeta) 
 
 /// The reach of a thread's tools: its repository, where a worktree and its
 /// checkout meet, else its folder.
-pub(super) fn reach_of(session_id: &str, meta: &crate::sessions::SessionMeta) -> String {
+pub(crate) fn reach_of(session_id: &str, meta: &crate::sessions::SessionMeta) -> String {
     crate::worktrees::of_session(session_id)
         .map(|worktree| clean_path(&worktree.repo.to_string_lossy()))
         .or_else(|| {
@@ -1740,7 +1740,7 @@ fn same_project(left: Option<&str>, right: &str) -> bool {
 
 /// A project path as people write it: no Windows verbatim prefix, no trailing
 /// slash, and no macOS `/private` in front of `/tmp`, `/var` or `/etc`.
-pub(super) fn clean_path(path: &str) -> String {
+pub(crate) fn clean_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }

@@ -93,6 +93,11 @@ pub enum JobAction {
         /// workspace; the agent turn starts only when it prints something.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         script: Option<String>,
+        /// A Director (`crate::director`): each run first asks the running
+        /// app for a stopped thread of the project, and starts no agent turn
+        /// when there is none.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        director: bool,
         /// Webhook trigger (issue 3937): the SHA-256 of the secret in the
         /// Loop's webhook URL, in hex. Only the hash is kept, so listing jobs
         /// never shows a secret that starts a run.
