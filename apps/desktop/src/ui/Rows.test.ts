@@ -46,7 +46,7 @@ const call = (bodies: Record<string, unknown>[], end = true): ToolItem => {
 const render = (el: ReactElement) => renderToStaticMarkup(createElement(Tooltip.Provider, null, el));
 const drawn = (item: ToolItem) => render(createElement(ToolRow, { item, cwd: "/p" }));
 const detail = (item: ToolItem) => render(createElement(ToolDetail, { item }));
-const runningMarks = (markup: string) => markup.split("rc-breathe").length - 1;
+const runningMarks = (markup: string) => markup.split("rc-icon-pulse").length - 1;
 
 const backgrounded = {
   status: "completed",
