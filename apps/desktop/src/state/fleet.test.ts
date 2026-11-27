@@ -304,4 +304,170 @@ describe("syncing with the peers", () => {
     expect(merged).toEqual([]);
     expect(view.host.hostId).toBe("gw-a");
   });
+
+  test("an entry learned from peer B reaches peer C in the same sync round", async () => {
+    const hostB = entry({ hostId: "gw-b", name: "Studio" });
+    const hostC = entry({ hostId: "gw-c", name: "Mini" });
+    const learned = entry({
+      hostId: "gw-d",
+      name: "Pi",
+      nameUpdatedAt: "2026-11-13T10:05:00Z",
+    });
+    const sent = new Map<string, Record<string, unknown>[]>();
+    const merged: string[] = [];
+    let state = fleet("gw-a", [hostB, hostC]);
+
+    const view = await exchangeWithPeers(
+      [
+        { id: "gw-b", connection: "b" },
+        { id: "gw-c", connection: "c" },
+      ],
+      state,
+      async (connection, params) => {
+        const list = sent.get(connection) ?? [];
+        list.push(params);
+        sent.set(connection, list);
+        if (connection === "b") return { host: hostB, osName: null, entries: [learned] };
+        return { host: hostC, osName: null, entries: [] };
+      },
+      async (remote) => {
+        merged.push(remote.host.hostId);
+        const byId = new Map(state.entries.map((item) => [item.hostId, item]));
+        byId.set(remote.host.hostId, remote.host);
+        for (const item of remote.entries) byId.set(item.hostId, item);
+        state = { ...state, entries: [...byId.values()] };
+        return state;
+      },
+    );
+
+    expect(merged).toEqual(["gw-b", "gw-c"]);
+    expect(sent.get("b")).toHaveLength(1);
+    expect(sent.get("c")).toHaveLength(2);
+    const relayedEntries = (sent.get("c")?.[1]?.entries ?? []) as { hostId: string; name: string }[];
+    expect(relayedEntries.find((item) => item.hostId === "gw-d")?.name).toBe("Pi");
+    expect(view.entries.map((item) => item.hostId)).toEqual(["gw-b", "gw-c", "gw-d"]);
+  });
+
+  test("the relay round stays concurrent so a stalled peer does not block another", async () => {
+    const hostB = entry({ hostId: "gw-b", name: "Studio" });
+    const hostC = entry({ hostId: "gw-c", name: "Mini" });
+    const hostD = entry({ hostId: "gw-d", name: "Box" });
+    const learned = entry({ hostId: "gw-e", name: "Pi" });
+    let releaseC: (view: FleetView | null) => void = () => undefined;
+    const stalledRelay = new Promise<FleetView | null>((resolve) => {
+      releaseC = resolve;
+    });
+    const calls: string[] = [];
+    let state = fleet("gw-a", [hostB, hostC, hostD]);
+
+    const done = exchangeWithPeers(
+      [
+        { id: "gw-b", connection: "b" },
+        { id: "gw-c", connection: "c" },
+        { id: "gw-d", connection: "d" },
+      ],
+      state,
+      (connection) => {
+        calls.push(connection);
+        const count = calls.filter((item) => item === connection).length;
+        if (connection === "b") return Promise.resolve({ host: hostB, osName: null, entries: [learned] });
+        if (connection === "c") {
+          return count === 1 ? Promise.resolve({ host: hostC, osName: null, entries: [] }) : stalledRelay;
+        }
+        return Promise.resolve({ host: hostD, osName: null, entries: [] });
+      },
+      async (remote) => {
+        const byId = new Map(state.entries.map((item) => [item.hostId, item]));
+        byId.set(remote.host.hostId, remote.host);
+        for (const item of remote.entries) byId.set(item.hostId, item);
+        state = { ...state, entries: [...byId.values()] };
+        return state;
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual(["b", "c", "d", "c", "d"]);
+    releaseC(null);
+    await done;
+  });
+
+  test("no second round is sent when nothing changed or when only one peer answered", async () => {
+    const hostB = entry({ hostId: "gw-b", name: "Studio" });
+    const hostC = entry({ hostId: "gw-c", name: "Mini" });
+    const learned = entry({ hostId: "gw-d", name: "Pi" });
+
+    const steadyCalls: string[] = [];
+    const steadyView = fleet("gw-a", [hostB, hostC]);
+    await exchangeWithPeers(
+      [
+        { id: "gw-b", connection: "b" },
+        { id: "gw-c", connection: "c" },
+      ],
+      steadyView,
+      async (connection) => {
+        steadyCalls.push(connection);
+        return connection === "b"
+          ? { host: hostB, osName: null, entries: [hostC] }
+          : { host: hostC, osName: null, entries: [hostB] };
+      },
+      async () => ({ ...steadyView, entries: [hostB, hostC] }),
+    );
+    expect(steadyCalls).toEqual(["b", "c"]);
+
+    const soloCalls: string[] = [];
+    await exchangeWithPeers(
+      [
+        { id: "gw-b", connection: "b" },
+        { id: "gw-c", connection: "c" },
+      ],
+      fleet("gw-a"),
+      async (connection) => {
+        soloCalls.push(connection);
+        if (connection === "c") throw new Error("offline");
+        return { host: hostB, osName: null, entries: [learned] };
+      },
+      async (remote) => fleet("gw-a", [remote.host, ...remote.entries]),
+    );
+    expect(soloCalls).toEqual(["b", "c"]);
+  });
+
+  test("a rename of this computer learned from peer B reaches peer C in the same round", async () => {
+    const hostB = entry({ hostId: "gw-b", name: "Studio" });
+    const hostC = entry({ hostId: "gw-c", name: "Mini" });
+    const renamedSelf = entry({
+      hostId: "gw-a",
+      name: "Desk",
+      nameUpdatedAt: "2026-11-13T10:10:00Z",
+    });
+    const sent = new Map<string, Record<string, unknown>[]>();
+    let state: FleetView = {
+      host: entry({ hostId: "gw-a", name: "Laptop" }),
+      osName: null,
+      entries: [hostB, hostC],
+    };
+
+    await exchangeWithPeers(
+      [
+        { id: "gw-b", connection: "b" },
+        { id: "gw-c", connection: "c" },
+      ],
+      state,
+      async (connection, params) => {
+        const list = sent.get(connection) ?? [];
+        list.push(params);
+        sent.set(connection, list);
+        if (connection === "b") return { host: hostB, osName: null, entries: [renamedSelf] };
+        return { host: hostC, osName: null, entries: [state.host] };
+      },
+      async (remote) => {
+        const renamed = remote.entries.find((item) => item.hostId === "gw-a" && item.nameUpdatedAt);
+        if (renamed) state = { ...state, host: renamed };
+        return state;
+      },
+    );
+
+    expect(sent.get("b")).toHaveLength(1);
+    expect(sent.get("c")).toHaveLength(2);
+    expect((sent.get("c")?.[1]?.from as { name?: string })?.name).toBe("Desk");
+  });
 });
