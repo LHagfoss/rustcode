@@ -3,7 +3,7 @@
 // page: a schedule in words, a loop's state and last result, and what its runs left for the user.
 
 import { create } from "zustand";
-import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
+import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { connectionFor, request, useApp } from "./store";
 import { LOCAL_HOST, threadKey } from "./threadKeys";
@@ -26,6 +26,7 @@ export type LoopSchedule =
   | { kind: "manual" };
 
 export type LoopRunState = "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "ambiguous";
+export type LoopRunOutcome = "clear" | "attention" | "blocked";
 
 export interface LoopRun {
   id: string;
@@ -38,6 +39,8 @@ export interface LoopRun {
   threadId?: string;
   /** The one-line verdict a non-quiet run opened with. */
   verdict?: string;
+  /** Structured classification of a finished run's verdict. */
+  outcome?: LoopRunOutcome;
   /** The run found nothing for the user, and its thread was archived. */
   quiet?: boolean;
   /** Why the run started nothing: the app was closed, or the loop's thread was busy. */
@@ -46,6 +49,10 @@ export interface LoopRun {
   silent?: boolean;
   /** The harness's login was signed out; `error` names the login and how to sign in. */
   signedOut?: boolean;
+  /** Total reported input + output tokens for the run's thread, if recorded. */
+  tokens?: number;
+  /** Total reported cost in USD for the run's thread, if recorded. */
+  costUsd?: number;
   /** A hub Loop: the machine the run was sent to; `threadId` is a thread there. */
   machine?: string;
   /** That machine was offline, so the hub holds the run until it connects again. */
@@ -143,11 +150,30 @@ function scheduleOf(value: Json | undefined): LoopSchedule {
   }
 }
 
+const RUN_OUTCOMES: readonly LoopRunOutcome[] = ["clear", "attention", "blocked"];
+
+/** Remove inline Markdown syntax from plain-text job verdicts, including legacy recorded runs. */
+export function stripInlineMarkdown(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)\n]+\)/g, "$1")
+    .replace(/\*\*|__|~~|`/g, "")
+    .replace(/(^|\s)\*(?=\S)|(?<=\S)\*(?=\s|$|[.,;:!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function outcomeOf(value: unknown): LoopRunOutcome | undefined {
+  const raw = str(value) as LoopRunOutcome | undefined;
+  return raw && RUN_OUTCOMES.includes(raw) ? raw : undefined;
+}
+
 function runOf(value: Json): LoopRun | null {
   const raw = obj(value);
   const id = str(raw?.id);
   if (!raw || !id) return null;
   const state = str(raw.state) as LoopRunState | undefined;
+  const rawVerdict = str(raw.verdict);
+  const verdict = rawVerdict ? stripInlineMarkdown(rawVerdict) || undefined : undefined;
   return {
     id,
     state: state && RUN_STATES.includes(state) ? state : "failed",
@@ -156,11 +182,14 @@ function runOf(value: Json): LoopRun | null {
     finishedAt: time(raw.finishedAt),
     error: str(raw.error),
     threadId: str(raw.threadId),
-    verdict: str(raw.verdict),
+    verdict,
+    outcome: outcomeOf(raw.outcome),
     quiet: bool(raw.quiet) ?? false,
     skipped: str(raw.skipped),
     silent: bool(raw.silent) ?? false,
     signedOut: bool(raw.signedOut) ?? false,
+    tokens: num(raw.tokens),
+    costUsd: num(raw.costUsd),
     machine: str(raw.machine),
     queued: bool(raw.queued) ?? false,
     runId: str(raw.runId),
@@ -579,8 +608,19 @@ export function loopState(loop: Loop): LoopState {
   return loop.paused ? "paused" : "active";
 }
 
+export const isBlockedRun = (run: LoopRun | undefined): boolean =>
+  run?.state === "succeeded" && run.outcome === "blocked";
+
+/** Whether a job belongs in the Needs attention group and header counter. */
+export function loopNeedsAttention(loop: Loop): boolean {
+  return loopState(loop) === "failing" || (!loop.paused && isBlockedRun(loop.runs[0]));
+}
+
 /** The last run, as the list says it. */
-export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: "ok" | "bad" | "muted" } {
+export function lastResult(
+  loop: Loop,
+  now = Date.now(),
+): { text: string; tone: "ok" | "warn" | "bad" | "muted" } {
   const run = loop.runs[0];
   if (!run) return { text: "No runs yet", tone: "muted" };
   if (isActive(run)) return { text: "Running now", tone: "muted" };
@@ -592,6 +632,12 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
       if (run.queued)
         return { text: `Waiting for ${run.machine ?? "its machine"} (queued ${when})`, tone: "muted" };
       if (run.machine) return { text: `Started on ${run.machine} ${when}`, tone: "ok" };
+      if (run.outcome === "blocked") {
+        return {
+          text: run.verdict ? `Blocked: ${run.verdict} · ${when}` : `Blocked ${when}`,
+          tone: "warn",
+        };
+      }
       return run.quiet
         ? { text: `Nothing to report ${when}`, tone: "ok" }
         : run.verdict
@@ -620,15 +666,17 @@ export interface ReviewItem {
   loop: Loop;
   run: LoopRun;
   /**
-   * "failed": the run's error; "open": its thread is still in the list, waiting for the user. A quiet
-   * run archived its thread, so it is never "open".
+   * "failed": the run's error; "blocked": a missing tool, MCP, path, or permission prevented the
+   * check; "open": its thread is still in the list, waiting for the user. Quiet and all-clear
+   * runs never enter Review.
    */
-  kind: "failed" | "open";
+  kind: "failed" | "blocked" | "open";
 }
 
 /**
- * What loops did on their own in the last week that the user has not looked at: failed runs, and
- * runs whose thread is still open (not archived). Marking one reviewed clears it. Newest first.
+ * What loops did on their own in the last week that the user has not looked at: failed runs,
+ * blocked runs, and runs whose thread is still open (not archived or all-clear). Marking one
+ * reviewed clears it. Newest first.
  */
 export function reviewItems(
   loops: readonly Loop[],
@@ -643,7 +691,8 @@ export function reviewItems(
       const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
       if (at < since || reviewed.has(run.id) || isActive(run)) continue;
       if (isFailure(run)) items.push({ loop, run, kind: "failed" });
-      else if (run.state === "succeeded" && run.threadId && !run.machine) {
+      else if (isBlockedRun(run)) items.push({ loop, run, kind: "blocked" });
+      else if (run.state === "succeeded" && run.outcome !== "clear" && run.threadId && !run.machine) {
         const key = threadKey(loop.host ?? LOCAL_HOST, run.threadId);
         if (isOpen(key)) items.push({ loop, run, kind: "open" });
       }
@@ -664,7 +713,9 @@ export interface ReviewGroup {
 const reviewKey = ({ loop, run, kind }: ReviewItem) =>
   kind === "failed"
     ? `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000failed\u0000${run.error ?? ""}`
-    : `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000open\u0000${run.id}`;
+    : kind === "blocked"
+      ? `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000blocked\u0000${run.verdict ?? ""}`
+      : `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000open\u0000${run.id}`;
 
 /**
  * Fold the review list: a job that failed the same way on every run is one row with a count, not one

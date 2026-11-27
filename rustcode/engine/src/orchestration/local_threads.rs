@@ -23,9 +23,13 @@
 //! access).
 
 pub(crate) mod job_workflow;
+mod verdict;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
+pub(crate) use verdict::{VerdictKind, classify_reply, loop_prompt};
+#[cfg(test)]
+pub(crate) use verdict::{loop_reply_is_quiet, loop_reply_verdict};
 
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ContentBlock, InitializeRequest, LoadSessionRequest,
@@ -1982,6 +1986,7 @@ pub(crate) enum LoopRunEnd {
         thread_id: String,
         quiet: bool,
         verdict: Option<String>,
+        outcome: Option<VerdictKind>,
     },
     /// The thread could not start, or its turn did not end well.
     Failed {
@@ -2038,92 +2043,6 @@ async fn open_job_engine(access: Access, thread_id: Option<&str>) -> Result<(Eng
         .ok_or_else(|| unavailable("the shared server stopped while the job was connecting"))?;
     let engine = Engine::open_stream(stream, access).await?;
     Ok((engine, info.pid))
-}
-
-/// How a Loop run's answer starts when it found nothing for the user; the
-/// run's fresh thread is then archived.
-pub(crate) const LOOP_QUIET_MARKER: &str = "Nothing to report";
-
-/// Whether a Loop run's answer says it found nothing for the user.
-pub(crate) fn loop_reply_is_quiet(reply: &str) -> bool {
-    let reply = reply.trim_start().trim_start_matches(['*', '_', '`']);
-    reply
-        .get(..LOOP_QUIET_MARKER.len())
-        .is_some_and(|start| start.eq_ignore_ascii_case(LOOP_QUIET_MARKER))
-}
-
-/// The one-line verdict a non-quiet job run opens with, bounded for the Jobs
-/// page and Review list (where [`loop_prompt`] asks for it). Skips fenced code
-/// blocks (such as ` ```rustcode-ui v1 `) so a Smart UI view falls back to its
-/// title instead of returning a fence marker or `None`.
-pub(crate) fn loop_reply_verdict(reply: &str) -> Option<String> {
-    let mut in_fence = false;
-    let mut candidate: Option<String> = None;
-    let mut view_title: Option<String> = None;
-    for raw in reply.lines() {
-        let line = raw.trim();
-        if line.starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            if view_title.is_none() {
-                if let Some(rest) = line.strip_prefix(":: title ") {
-                    let t = rest.trim();
-                    if !t.is_empty() {
-                        view_title = Some(t.to_owned());
-                    }
-                } else if let Some(start) = line.find("<title>") {
-                    let rest = &line[start + 7..];
-                    if let Some(end) = rest.find("</title>") {
-                        let t = rest[..end].trim();
-                        if !t.is_empty() {
-                            view_title = Some(t.to_owned());
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-        if !line.is_empty() {
-            candidate = Some(line.to_owned());
-            break;
-        }
-    }
-    let line = candidate.or(view_title)?;
-    let cleaned = line
-        .trim_start_matches(['#', '>', '-', '*', '_', '`', ' '])
-        .trim_end_matches(['*', '_', '`'])
-        .trim();
-    if cleaned.is_empty() || loop_reply_is_quiet(cleaned) {
-        return None;
-    }
-    const MAX_VERDICT_CHARS: usize = 180;
-    let clipped: String = cleaned.chars().take(MAX_VERDICT_CHARS).collect();
-    if cleaned.chars().count() > MAX_VERDICT_CHARS {
-        Some(format!("{}…", clipped.trim_end()))
-    } else {
-        Some(clipped)
-    }
-}
-
-/// The first message of a job's thread: the user's prompt, with what a
-/// scheduled run is for and, read-only, what it may not do.
-pub(crate) fn loop_prompt(name: &str, prompt: &str, read_only: bool) -> String {
-    let mut text = format!(
-        "This is a scheduled run of the job “{name}”. Nobody is watching it run. \
-         When nothing needs the user, answer in one or two lines starting with \
-         “{LOOP_QUIET_MARKER}”. When something does, start with a one-line verdict saying what."
-    );
-    if read_only {
-        text.push_str(
-            " This run is read-only: do not edit files, commit or push; \
-             anything that asks for approval is declined.",
-        );
-    }
-    text.push_str("\n\n");
-    text.push_str(prompt.trim());
-    text
 }
 
 /// The account a scheduled job's run starts on: the job's own, else the one a
@@ -2317,20 +2236,23 @@ pub(crate) async fn run_loop_thread(
     match ended {
         Ok(StopReason::EndTurn) => {
             let reply = super::local::last_reply_cut(&thread_id).map(|(reply, _)| reply);
-            // A fresh thread that found nothing leaves the list; the Loop's own
-            // thread stays where the user put it.
+            let classified = reply.as_deref().map(classify_reply);
             let quiet = fresh
-                && reply.as_deref().is_some_and(loop_reply_is_quiet)
+                && matches!(classified, Some((VerdictKind::Quiet, _)))
                 && crate::thread_status::set(&thread_id, "done").is_ok();
-            let verdict = if quiet {
-                None
+            let (outcome, verdict) = if quiet {
+                (None, None)
+            } else if let Some((kind, text)) = classified {
+                let outcome = (kind != VerdictKind::Quiet).then_some(kind);
+                (outcome, text)
             } else {
-                reply.as_deref().and_then(loop_reply_verdict)
+                (None, None)
             };
             LoopRunEnd::Finished {
                 thread_id,
                 quiet,
                 verdict,
+                outcome,
             }
         }
         Ok(other) => LoopRunEnd::Failed {

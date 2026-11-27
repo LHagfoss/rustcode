@@ -2,13 +2,16 @@
 //! saved through `_rustcode/loops/save` with `workflow` set, listed beside
 //! Loops with `workflow` and `args` in place of a prompt.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
-use super::{LoopsSaveRequest, loop_schedule, run_json, trimmed};
+use super::{LoopsSaveRequest, loop_schedule, run_json_with_usage, run_thread_id, trimmed};
 use crate::daemon::{
     command::create_job,
     model::{JobAction, JobRecord, JobRunRecord, ScheduleSpec},
 };
+use crate::data_store::run_usage::ThreadRunUsage;
 
 /// The workflow job a save request describes. `webhook` is the hash of its
 /// webhook secret, if it has one.
@@ -68,7 +71,16 @@ pub(super) fn job_from(
 }
 
 /// A workflow job as the page shows it. `None` for any other job.
+#[cfg(test)]
 pub(super) fn json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value> {
+    json_with_usage(job, runs, &HashMap::new())
+}
+
+pub(super) fn json_with_usage(
+    job: &JobRecord,
+    runs: &[JobRunRecord],
+    usage_by_thread: &HashMap<String, ThreadRunUsage>,
+) -> Option<Value> {
     let JobAction::Workflow {
         name,
         workspace,
@@ -98,7 +110,13 @@ pub(super) fn json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value> {
         "webhookEvents": webhook_events,
         "nextDueAt": (!manual).then_some(job.next_due_at),
         "createdAt": job.created_at,
-        "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
+        "runs": runs
+            .iter()
+            .map(|run| {
+                let usage = run_thread_id(run).and_then(|id| usage_by_thread.get(&id));
+                run_json_with_usage(run, usage)
+            })
+            .collect::<Vec<_>>(),
     }))
 }
 

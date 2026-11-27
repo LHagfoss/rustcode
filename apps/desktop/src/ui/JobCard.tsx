@@ -9,6 +9,7 @@ import { projectName } from "../acp/types";
 import { loopKey, runThreadKey } from "../state/fleetLoops";
 import {
   cancelLoopRun,
+  isBlockedRun,
   type Loop,
   lastResult,
   loopState,
@@ -96,6 +97,8 @@ function StatusChip({ loop, waiting }: { loop: Loop; waiting: boolean }) {
   if (state === "failing")
     return <span className={cx(chip, "bg-danger/12 font-medium text-danger")}>Needs attention</span>;
   if (state === "paused") return <span className={cx(chip, "bg-fill text-fg-muted")}>Paused</span>;
+  if (isBlockedRun(loop.runs[0]))
+    return <span className={cx(chip, "bg-warning/14 font-medium text-warning")}>Blocked</span>;
   if (waiting)
     return (
       <span className={cx(chip, "bg-fill text-fg-muted")}>
@@ -171,6 +174,7 @@ export function JobCard({
   const lastThread = running ? undefined : runThreadKey(loop, latest, machines, localName);
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
   const waiting = state === "active" && next === undefined && listening(loop);
+  const blocked = !loop.paused && isBlockedRun(latest);
   const quiet = latest?.state === "succeeded" && (latest.quiet || latest.silent);
   const hasRuns = loop.runs.length > 0;
   const promptPreview = loop.prompt.trim();
@@ -188,6 +192,7 @@ export function JobCard({
       className={cx(
         "group/job relative flex min-w-0 flex-col gap-2 rounded-xl bg-surface p-4 hover:bg-surface-2",
         reason && "ring-1 ring-danger/35",
+        !reason && blocked && "ring-1 ring-warning/35",
         loop.paused && !reason && "opacity-75",
       )}
     >
@@ -304,9 +309,11 @@ export function JobCard({
             "line-clamp-2 pt-0.5 text-callout",
             result.tone === "bad"
               ? "text-danger"
-              : quiet || result.tone === "muted"
-                ? "text-fg-muted"
-                : "text-fg",
+              : result.tone === "warn"
+                ? "text-warning"
+                : quiet || result.tone === "muted"
+                  ? "text-fg-muted"
+                  : "text-fg",
           )}
         >
           {result.text}

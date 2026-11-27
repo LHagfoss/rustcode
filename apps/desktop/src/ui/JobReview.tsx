@@ -33,9 +33,12 @@ function ReviewRow({
     threadId ? s.sessions.find((session) => session.id === threadId)?.title : undefined,
   );
   const failed = kind === "failed";
+  const blocked = kind === "blocked";
   const text = failed
     ? `Failed${run.error ? `: ${run.error}` : ""}`
-    : (run.verdict ?? title ?? "Finished, and left its thread open for you");
+    : blocked
+      ? `Blocked${run.verdict ? `: ${run.verdict}` : ""}`
+      : (run.verdict ?? title ?? "Finished, and left its thread open for you");
   const count = group.runIds.length;
   return (
     <li className="group/row relative grid grid-cols-[3rem_1rem_minmax(0,1fr)_auto] items-start gap-x-2 rounded-md py-2 pr-1 hover:bg-fill-subtle">
@@ -63,7 +66,12 @@ function ReviewRow({
           )}
           {machineLabel && <span className="shrink-0 text-caption text-fg-faint">{machineLabel}</span>}
         </div>
-        <p className={cx("line-clamp-2 text-caption", failed ? "text-danger" : "text-fg-muted")}>
+        <p
+          className={cx(
+            "line-clamp-2 text-caption",
+            failed ? "text-danger" : blocked ? "text-warning" : "text-fg-muted",
+          )}
+        >
           {text}
           {count > 1 && <span className="text-fg-faint"> · {count} runs</span>}
         </p>

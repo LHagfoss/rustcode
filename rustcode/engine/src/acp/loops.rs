@@ -14,6 +14,8 @@
 //! The daemon keeps only the secret's hash; the URL is shown once, when the
 //! webhook is turned on or its secret is replaced.
 
+use std::collections::{HashMap, HashSet};
+
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -27,6 +29,7 @@ use crate::daemon::{
     lifecycle::DaemonLifecycle,
     protocol::{DaemonRequest, DaemonResponse},
 };
+use crate::data_store::run_usage::ThreadRunUsage;
 
 /// Runs each Loop in the list carries: the page shows the last result and a
 /// short history, and the review list looks back seven days.
@@ -181,7 +184,12 @@ async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResp
 
 /// What a run's output says about it: the thread it started, or why it was
 /// skipped (`daemon::executor::loop_outcome`).
+#[cfg(test)]
 pub(super) fn run_json(run: &JobRunRecord) -> Value {
+    run_json_with_usage(run, None)
+}
+
+pub(super) fn run_json_with_usage(run: &JobRunRecord, usage: Option<&ThreadRunUsage>) -> Value {
     let output: Value = run
         .output
         .as_deref()
@@ -199,10 +207,13 @@ pub(super) fn run_json(run: &JobRunRecord) -> Value {
         "runId": output.get("run_id"),
         "workflowStatus": output.get("status"),
         "verdict": output.get("verdict"),
+        "outcome": output.get("outcome"),
         "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
         "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
         "signedOut": output.get("signed_out").and_then(Value::as_bool).unwrap_or(false),
+        "tokens": usage.and_then(|entry| entry.tokens),
+        "costUsd": usage.and_then(|entry| entry.cost_usd),
         // Hub Loops: the member the run was sent to, and whether it waits
         // there for that machine to come back.
         "machine": output.get("machine"),
@@ -210,8 +221,25 @@ pub(super) fn run_json(run: &JobRunRecord) -> Value {
     })
 }
 
+fn run_thread_id(run: &JobRunRecord) -> Option<String> {
+    let output: Value = serde_json::from_str(run.output.as_deref()?).ok()?;
+    output
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 /// A Loop as the page shows it. `None` for a job that is not a Loop.
 pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value> {
+    loop_json_with_usage(job, runs, &HashMap::new())
+}
+
+pub(crate) fn loop_json_with_usage(
+    job: &JobRecord,
+    runs: &[JobRunRecord],
+    usage_by_thread: &HashMap<String, ThreadRunUsage>,
+) -> Option<Value> {
     let JobAction::Loop {
         prompt,
         workspace,
@@ -227,7 +255,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         machine,
     } = &job.action
     else {
-        return workflow_job::json(job, runs);
+        return workflow_job::json_with_usage(job, runs, usage_by_thread);
     };
     let manual = matches!(job.schedule, ScheduleSpec::Manual);
     Some(json!({
@@ -250,7 +278,13 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         // A Loop run only by hand or by its webhook is never due.
         "nextDueAt": (!manual).then_some(job.next_due_at),
         "createdAt": job.created_at,
-        "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
+        "runs": runs
+            .iter()
+            .map(|run| {
+                let usage = run_thread_id(run).and_then(|id| usage_by_thread.get(&id));
+                run_json_with_usage(run, usage)
+            })
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -325,7 +359,8 @@ async fn list_with(client: &DaemonClient) -> Result<Value, String> {
     let Ok(DaemonResponse::Jobs { jobs }) = ask(client, DaemonRequest::List).await else {
         return Ok(json!({ "daemonRunning": false, "loops": [] }));
     };
-    let mut loops = Vec::new();
+    let mut entries = Vec::new();
+    let mut thread_ids = HashSet::new();
     for job in jobs
         .iter()
         .filter(|job| {
@@ -348,7 +383,19 @@ async fn list_with(client: &DaemonClient) -> Result<Value, String> {
             DaemonResponse::History { runs } => runs,
             _ => Vec::new(),
         };
-        loops.extend(loop_json(job, &runs));
+        for run in &runs {
+            if let Some(id) = run_thread_id(run) {
+                thread_ids.insert(id);
+            }
+        }
+        entries.push((job, runs));
+    }
+    let thread_id_list: Vec<String> = thread_ids.into_iter().collect();
+    let usage_by_thread =
+        crate::data_store::run_usage::thread_usage_map(&thread_id_list).unwrap_or_default();
+    let mut loops = Vec::new();
+    for (job, runs) in entries {
+        loops.extend(loop_json_with_usage(job, &runs, &usage_by_thread));
     }
     Ok(json!({ "daemonRunning": true, "loops": loops }))
 }
@@ -1042,6 +1089,22 @@ mod tests {
         let skipped = run_json(&run);
         assert_eq!(skipped["skipped"], "RustCode was not open");
         assert!(skipped["threadId"].is_null());
+
+        run.state = crate::daemon::model::JobRunState::Succeeded;
+        run.error_class = None;
+        run.output = Some(
+            r#"{"thread_id":"t-9","outcome":"blocked","verdict":"daily-dev MCP unavailable"}"#
+                .into(),
+        );
+        let usage = ThreadRunUsage {
+            tokens: Some(42_000),
+            cost_usd: Some(0.18),
+        };
+        let enriched = run_json_with_usage(&run, Some(&usage));
+        assert_eq!(enriched["outcome"], "blocked");
+        assert_eq!(enriched["verdict"], "daily-dev MCP unavailable");
+        assert_eq!(enriched["tokens"], 42_000);
+        assert_eq!(enriched["costUsd"], 0.18);
     }
 
     mod daemon {

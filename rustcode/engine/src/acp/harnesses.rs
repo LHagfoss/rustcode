@@ -429,6 +429,7 @@ pub(crate) async fn new_session(
         crate::sessions::save_session_scheduled_job(&session_id, &job);
     }
     let mut record = store::HarnessRecord::new(&resolved.id, cwd.clone());
+    record.title = crate::sessions::load_session_title(&session_id);
     record.account = account.as_ref().map(|account| account.id.clone());
     record.model = model;
     record.effort = effort;

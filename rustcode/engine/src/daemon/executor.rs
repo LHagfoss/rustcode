@@ -56,15 +56,20 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
     let thread =
         |id: Option<String>| id.map(|id| serde_json::json!({ "thread_id": id }).to_string());
     match end {
-        // A quiet run found nothing for the user and its thread was archived.
         LoopRunEnd::Finished {
             thread_id,
             quiet,
             verdict,
+            outcome,
         } => {
             let mut body = serde_json::json!({ "thread_id": thread_id });
             if quiet {
                 body["quiet"] = serde_json::json!(true);
+            }
+            if let Some(outcome) = outcome
+                && outcome != crate::orchestration::local_threads::VerdictKind::Quiet
+            {
+                body["outcome"] = serde_json::json!(outcome.as_str());
             }
             if let Some(verdict) = verdict.as_deref().filter(|v| !v.is_empty()) {
                 body["verdict"] = serde_json::json!(verdict);

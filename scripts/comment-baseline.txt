@@ -790,7 +790,7 @@
 21 rustcode/engine/src/controller/tests.rs
 12 rustcode/engine/src/controller/worker.rs
 7 rustcode/engine/src/daemon/action_tests.rs
-22 rustcode/engine/src/daemon/executor.rs
+21 rustcode/engine/src/daemon/executor.rs
 1 rustcode/engine/src/daemon/hub_run.rs
 12 rustcode/engine/src/daemon/lifecycle.rs
 1 rustcode/engine/src/daemon/mod.rs
@@ -898,7 +898,7 @@
 2 rustcode/engine/src/orchestration/ask_user.rs
 33 rustcode/engine/src/orchestration/local.rs
 2 rustcode/engine/src/orchestration/local_merge.rs
-80 rustcode/engine/src/orchestration/local_threads.rs
+78 rustcode/engine/src/orchestration/local_threads.rs
 3 rustcode/engine/src/orchestration/mcp_names.rs
 80 rustcode/engine/src/orchestration/mcp_server.rs
 33 rustcode/engine/src/orchestration/outside.rs

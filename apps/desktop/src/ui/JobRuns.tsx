@@ -24,12 +24,14 @@ export function runDotTint(run: LoopRun | undefined): string {
   if (run.state === "running" || run.state === "claimed") return "bg-accent";
   if (isFailedRun(run)) return "bg-danger";
   if (run.state === "cancelled") return "bg-fg-faint";
-  return run.quiet || run.silent ? "bg-fg-faint" : "bg-success";
+  if (run.quiet || run.silent) return "bg-fg-faint";
+  if (run.outcome === "blocked" || run.outcome === "attention") return "bg-warning";
+  return "bg-success";
 }
 
 export function runStatusMeta(run: LoopRun): {
   label: string;
-  tone: "ok" | "bad" | "accent" | "muted";
+  tone: "ok" | "warn" | "bad" | "accent" | "muted";
 } {
   if (run.state === "running" || run.state === "claimed") return { label: "Running", tone: "accent" };
   if (isFailedRun(run)) return { label: run.signedOut ? "Signed out" : "Failed", tone: "bad" };
@@ -37,6 +39,9 @@ export function runStatusMeta(run: LoopRun): {
   if (run.queued) return { label: "Queued", tone: "muted" };
   if (run.silent) return { label: "Silent", tone: "muted" };
   if (run.quiet) return { label: "Quiet", tone: "muted" };
+  if (run.outcome === "blocked") return { label: "Blocked", tone: "warn" };
+  if (run.outcome === "attention") return { label: "Needs attention", tone: "warn" };
+  if (run.outcome === "clear") return { label: "All clear", tone: "ok" };
   return { label: "Succeeded", tone: "ok" };
 }
 
@@ -131,9 +136,11 @@ export function RunTimelineStrip({ runs, now }: { runs: readonly LoopRun[]; now:
               ? "bg-accent"
               : status.tone === "bad"
                 ? "bg-danger"
-                : status.tone === "ok"
-                  ? "bg-success"
-                  : "bg-fill-strong";
+                : status.tone === "warn"
+                  ? "bg-warning"
+                  : status.tone === "ok"
+                    ? "bg-success"
+                    : "bg-fill-strong";
           return (
             <Tooltip
               key={run.id}
@@ -186,9 +193,11 @@ export function RunList({
               ? "bg-accent/14 text-accent"
               : status.tone === "bad"
                 ? "bg-danger/12 text-danger"
-                : status.tone === "ok"
-                  ? "bg-success/12 text-success"
-                  : "bg-fill text-fg-muted";
+                : status.tone === "warn"
+                  ? "bg-warning/14 text-warning"
+                  : status.tone === "ok"
+                    ? "bg-success/12 text-success"
+                    : "bg-fill text-fg-muted";
           const content = (
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
