@@ -202,16 +202,26 @@ pub(crate) fn detect(harness: &ResolvedHarness) -> Detection {
             error: None,
         };
     }
-    if let Some((at, command, detection)) = cache()
+    let cached = cache()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .get(&harness.id)
-        && at.elapsed() < CACHE_TTL
-        && *command == harness.command
-    {
-        return detection.clone();
+        .filter(|(_, command, _)| *command == harness.command)
+        .map(|(at, _, detection)| (at.elapsed() < CACHE_TTL, detection.clone()));
+    match cached {
+        Some((true, detection)) => return detection,
+        Some((false, detection)) => {
+            redetect_in_background(harness);
+            return detection;
+        }
+        None => {}
     }
     let detection = detect_uncached(harness);
+    remember_detection(harness, &detection);
+    detection
+}
+
+fn remember_detection(harness: &ResolvedHarness, detection: &Detection) {
     cache()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -219,7 +229,45 @@ pub(crate) fn detect(harness: &ResolvedHarness) -> Detection {
             harness.id.clone(),
             (Instant::now(), harness.command.clone(), detection.clone()),
         );
-    detection
+}
+
+fn redetecting() -> &'static Mutex<std::collections::HashSet<String>> {
+    static REDETECTING: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    REDETECTING.get_or_init(Default::default)
+}
+
+/// Probe a harness whose detection is past [`CACHE_TTL`] again on a thread of
+/// its own, at most once at a time per harness, while readers keep the last
+/// answer: an overloaded machine runs every probe to [`PROBE_TIMEOUT`], and a
+/// snapshot that waited for them missed the client's deadline (#4532).
+fn redetect_in_background(harness: &ResolvedHarness) {
+    if !redetecting()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(harness.id.clone())
+    {
+        return;
+    }
+    let harness = harness.clone();
+    let spawned = std::thread::Builder::new()
+        .name("harness-detect".to_owned())
+        .spawn({
+            let harness = harness.clone();
+            move || {
+                let detection = detect_uncached(&harness);
+                remember_detection(&harness, &detection);
+                redetecting()
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .remove(&harness.id);
+            }
+        });
+    if spawned.is_err() {
+        redetecting()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&harness.id);
+    }
 }
 
 fn detect_uncached(harness: &ResolvedHarness) -> Detection {
@@ -1118,5 +1166,51 @@ mod tests {
         assert_eq!(account_auth(&claude, false), "ok");
         // A harness with no named logins answers nothing about one.
         assert_eq!(account_auth(&account("gemini", "/tmp/x"), true), "unknown");
+    }
+
+    #[test]
+    fn a_detection_past_its_ttl_answers_at_once_and_is_probed_again_behind() {
+        let harness = ResolvedHarness {
+            id: "stale-fixture-4532".into(),
+            name: "Stale fixture".into(),
+            kind: HarnessKind::Acp,
+            command: vec!["rustcode-no-such-harness-4532".into()],
+            env: Vec::new(),
+            enabled: true,
+            known: None,
+        };
+        let Some(long_ago) = Instant::now().checked_sub(CACHE_TTL * 2) else {
+            return;
+        };
+        let stale = Detection {
+            installed: true,
+            version: Some("1.2.3".into()),
+            auth: "ok",
+            error: None,
+        };
+        cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                harness.id.clone(),
+                (long_ago, harness.command.clone(), stale.clone()),
+            );
+        let answered = detect(&harness);
+        assert!(answered.installed, "the last detection answers at once");
+        assert_eq!(answered.version.as_deref(), Some("1.2.3"));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while redetecting()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains(&harness.id)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !detect(&harness).installed,
+            "the probe behind it replaced the stale answer"
+        );
+        forget(&harness.id);
     }
 }
