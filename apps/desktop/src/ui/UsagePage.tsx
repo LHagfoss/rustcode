@@ -54,10 +54,10 @@ import {
   usageView,
   watchUsageRefresh,
 } from "../state/usagePage";
-import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { Skeleton, Spinner, Tooltip } from "./primitives";
 import { Action, Chip, Choice, Group, Row, SectionTitle, SettingsHeaderActions } from "./settingsKit";
+import { PlanWindow } from "./ThreadUsage";
 
 /** One page read, optionally bypassing the cache as an explicit look. */
 interface PageRead {

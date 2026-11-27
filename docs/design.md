@@ -1503,7 +1503,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   works through the plan — live, with the running step's clock — and once the
   thread waits on you with something left; an all-done plan still draws it
   while it holds a note, and otherwise leaves no card. The header's popover
-  and the composer's meter are unchanged.
+  remains available. Context and plan usage live under Activity in Thread info.
 - **Steering note:** a message sent into a running turn says where the turn
   read it. The plan card marks it on the step that was active then; a thread
   with no plan, or a plan rewritten past that step, gets a quiet row in the

@@ -5,12 +5,11 @@
 
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pullErrorTitle } from "../acp/rustcode";
-import { modelName, projectName, type SessionUsage } from "../acp/types";
+import { modelName, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { type GitChanges, gitChangeSummary, openExternal, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { useNow } from "../lib/useNow";
-import { contextPercent } from "../state/details";
 import { turnItemsByEnd } from "../state/fold";
 import { formatCost } from "../state/pricing";
 import { PULL_LIMIT, usePullList } from "../state/pullQueries";
@@ -42,9 +41,10 @@ import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
 import { useStoredTurns, withStoredTurns } from "./storedTurns";
 import { ThreadPortsSection } from "./ThreadPorts";
+import { ThreadUsage } from "./ThreadUsage";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
-import { contextTone, costTotal, threadBilling, threadTotals, turnCost } from "./threadTotals";
+import { costTotal, threadBilling, threadTotals, turnCost } from "./threadTotals";
 import { WorktreeScriptsSection } from "./WorktreeScriptsSection";
 
 /**
@@ -146,7 +146,6 @@ export function ThreadDetails() {
   }
 
   const usage = thread.usage;
-  const used = contextPercent(usage);
   const model = modelName(summary?.model);
   const account = thread.harness?.account ?? summary?.account;
   const billing = threadBilling(harnessEntry, account);
@@ -268,7 +267,7 @@ export function ThreadDetails() {
             </div>
           ))}
         </dl>
-        {usage && used !== undefined && <ContextMeter used={used} usage={usage} />}
+        <ThreadUsage key={id} threadId={id} />
       </Section>
       <TurnsSection
         key={id}
@@ -529,39 +528,6 @@ function Total({ label, value, tip }: { label: string; value: string; tip: strin
         <dd className="truncate font-medium text-body text-fg tabular">{value}</dd>
       </div>
     </Tooltip>
-  );
-}
-
-const TONE_BAR = { accent: "bg-accent", warning: "bg-warning", danger: "bg-danger" } as const;
-const TONE_TEXT = { accent: "text-fg", warning: "text-warning", danger: "text-danger" } as const;
-
-/** How full the context window is: the percentage up front, a bar that warms as it fills. */
-function ContextMeter({ used, usage }: { used: number; usage: SessionUsage }) {
-  const tone = contextTone(used);
-  return (
-    <div className="flex flex-col gap-1.5 px-2 pt-2">
-      <div className="flex items-baseline gap-2">
-        <span className="text-caption text-fg-muted">Context</span>
-        <span className={cx("font-medium text-callout tabular", TONE_TEXT[tone])}>{used}%</span>
-        <span className="flex-1" />
-        <span className="text-caption text-fg-muted tabular">
-          {formatTokens(usage.used)} / {formatTokens(usage.size)}
-        </span>
-      </div>
-      <div
-        role="meter"
-        aria-label="Context used"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={used}
-        className="h-2 overflow-hidden rounded-full bg-fill"
-      >
-        <div
-          className={cx("h-full rounded-full transition-[width]", TONE_BAR[tone])}
-          style={{ width: `${Math.max(used, 1)}%` }}
-        />
-      </div>
-    </div>
   );
 }
 

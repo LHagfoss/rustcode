@@ -51,7 +51,6 @@ import {
 import { openSettings, useApp } from "../state/store";
 import { formatTokens as compactTokens, relativeAge } from "../state/thread";
 import { ActivityProfile } from "./ActivityProfile";
-import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { ChevronRight } from "./icons";
 import { cx, Skeleton, Spinner, Tooltip } from "./primitives";
@@ -65,6 +64,7 @@ import {
   useGlide,
 } from "./StatisticsCharts";
 import { Action, Chip, Choice, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
+import { PlanWindow } from "./ThreadUsage";
 
 /** How many top-level threads the page draws before Show all. */
 const THREAD_LIMIT = 10;

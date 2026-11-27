@@ -10,7 +10,6 @@ import {
   refreshBackoff,
   type UsageAnswer,
   usageAutoRead,
-  usagePressTarget,
   usageView,
   watchUsageRefresh,
 } from "./usagePage";
@@ -211,16 +210,6 @@ describe("a partial plans answer", () => {
   test("the page's own whole read replaces the list", () => {
     const merged = answeredPlans([claude, work, codex], [codex], true);
     expect(merged).toEqual([codex]);
-  });
-});
-
-describe("a press on the composer's usage meter", () => {
-  test("opens Settings' Usage page", () => {
-    expect(usagePressTarget(false)).toBe("usage");
-  });
-
-  test("closes the page it is already on", () => {
-    expect(usagePressTarget(true)).toBe(null);
   });
 });
 
