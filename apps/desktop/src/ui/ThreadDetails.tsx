@@ -83,7 +83,7 @@ export function threadCounts(items: readonly TranscriptItem[]) {
   return { messages, tools, startedAt };
 }
 
-export function ThreadDetails() {
+export function ThreadDetails({ className }: { className?: string } = {}) {
   const id = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const worktree = useApp((s) => (s.selectedId ? worktreeOf(s, s.selectedId) : undefined));
@@ -167,7 +167,7 @@ export function ThreadDetails() {
   const openChanges = () => showPanel("changes");
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 [&>*]:shrink-0">
+    <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 [&>*]:shrink-0", className)}>
       <div className="px-2">
         <Property label="Status">
           <StatusIcon status={status} size={13} />
