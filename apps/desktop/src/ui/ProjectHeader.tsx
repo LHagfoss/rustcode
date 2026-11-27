@@ -88,6 +88,7 @@ export function ProjectHeader({
           "flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-left font-medium text-body text-fg/90",
           SIDEBAR_ROW_RADIUS,
           SIDEBAR_ROW_HOVER,
+          "hover:glass-filter active:glass-filter",
         )}
       >
         {open ? (
