@@ -33,8 +33,9 @@ pub fn listening() -> bool {
         .is_some_and(|arg| arg == LISTEN_ARG)
 }
 
-/// Serve every engine that connects, one at a time, until stdin closes (the
-/// app quit) or the user stops the worker. Never returns.
+/// Serve every engine that connects, each on a thread of its own so an idle
+/// connection never holds up a permission check, until stdin closes (the app
+/// quit) or the user stops the worker. Never returns.
 pub(super) fn listen(handle: fn(Op) -> Result<Value, String>) -> ! {
     std::thread::spawn(|| {
         let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
@@ -55,7 +56,7 @@ pub(super) fn listen(handle: fn(Op) -> Result<Value, String>) -> ! {
         let Ok(reader) = stream.try_clone() else {
             continue;
         };
-        super::serve_lines(BufReader::new(reader), stream, handle);
+        std::thread::spawn(move || super::serve_lines(BufReader::new(reader), stream, handle));
     }
     std::process::exit(0)
 }
