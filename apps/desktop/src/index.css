@@ -622,7 +622,23 @@
 }
 .rc-wave > span[aria-hidden] {
   animation: rc-wave 1.8s ease-in-out infinite;
-  animation-delay: calc(var(--rc-wave-i) * 90ms);
+  animation-delay: calc(var(--rc-wave-i) * 90ms - var(--rc-wave-phase, 0ms));
+}
+.rc-wave-line > span[aria-hidden] {
+  animation-duration: 2.4s;
+  animation-delay: calc(var(--rc-wave-i) * 70ms - var(--rc-wave-phase, 0ms));
+}
+@keyframes rc-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.rc-breathe {
+  animation: rc-breathe 1.6s ease-in-out infinite;
 }
 
 /*
@@ -799,6 +815,9 @@
     animation: none;
     color: var(--rc-text-muted);
     background: none;
+  }
+  .rc-breathe {
+    animation: none;
   }
   .rc-wave > span[aria-hidden] {
     animation: none;
