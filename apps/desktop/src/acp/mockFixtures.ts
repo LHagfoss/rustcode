@@ -77,6 +77,38 @@ export function mockSettingsSet(
   return next;
 }
 
+/** Desktop control on a Mac that has not granted its permissions yet. */
+export const MOCK_DESKTOP_CONTROL: JsonObject = {
+  enabled: false,
+  platform: "macos",
+  supported: true,
+  reason: null,
+  accessibility: false,
+  screen_recording: false,
+  executable: "/Applications/RustCode.app/Contents/MacOS/rc",
+};
+
+/**
+ * `_rustcode/settings/set` with desktop control's status kept, as the engine
+ * reports it: asking for the permissions grants both in the mock.
+ */
+export function mockDesktopSettingsSet(
+  machine: JsonObject,
+  projects: Record<string, JsonObject>,
+  params: JsonObject,
+): JsonObject {
+  const before = obj(machine["desktop-control"]);
+  const next = mockSettingsSet(machine, projects, params);
+  const asked = obj(next["desktop-control"]);
+  if (!before || !asked || asked === before) return next;
+  const granted = asked.request_permissions === true;
+  const desktop = { ...before, enabled: asked.enabled === true };
+  return {
+    ...next,
+    "desktop-control": granted ? { ...desktop, accessibility: true, screen_recording: true } : desktop,
+  };
+}
+
 /** The local mock's skills; their text is served only by `_rustcode/skills/get`. */
 export const MOCK_SKILLS: JsonObject[] = [
   {

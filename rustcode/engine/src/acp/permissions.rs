@@ -249,7 +249,11 @@ pub(crate) fn grants_snapshot(config: &crate::config::AppConfig) -> serde_json::
             })
         })
         .collect();
-    serde_json::json!({ "grants": grants, "browser": crate::computer_use::grants::snapshot() })
+    serde_json::json!({
+        "grants": grants,
+        "browser": crate::computer_use::grants::snapshot(),
+        "desktop": crate::computer_use::desktop::snapshot(),
+    })
 }
 
 /// `_rustcode/permissions/revoke`: drop one timed approval and answer with the
@@ -259,6 +263,10 @@ pub(crate) fn grants_snapshot(config: &crate::config::AppConfig) -> serde_json::
 pub(crate) fn revoke_grant(config: &mut crate::config::AppConfig, id: &str) -> serde_json::Value {
     if let Some(session_id) = id.strip_prefix(crate::computer_use::grants::ID_PREFIX) {
         crate::computer_use::unregister(session_id);
+        return grants_snapshot(config);
+    }
+    if let Some(session_id) = id.strip_prefix(crate::computer_use::desktop::ID_PREFIX) {
+        crate::computer_use::desktop::unregister(session_id);
         return grants_snapshot(config);
     }
     let before = config.timed_command_approvals.len();

@@ -76,6 +76,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   // Voice is this app's on this machine; computer use is this machine's server setting.
   { section: "voice", title: "Voice", kind: "machine" },
   { section: "voice", title: "Computer use", kind: "machine" },
+  { section: "voice", title: "Desktop control", kind: "machine" },
   // Credentials and accounts never leave their machine.
   { section: "connections", title: "GitHub", kind: "machine" },
   { section: "connections", title: "Model accounts", kind: "machine" },

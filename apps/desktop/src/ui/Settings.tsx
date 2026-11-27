@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
+import { DesktopControlGroup } from "./DesktopControlGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
 import { ProjectMemory } from "./ProjectMemory";
 import { TextGeneration } from "./TextGeneration";
@@ -844,13 +845,14 @@ function VoicePage() {
         <Group title="Voice and computer use">
           <Row
             title={`Set these on ${remote.name} itself`}
-            subtitle="Dictation and browser tools are kept by each machine."
+            subtitle="Dictation, browser tools and desktop control are kept by each machine."
           />
         </Group>
       ) : (
         <>
           <VoiceGroup />
           <ComputerUseGroup />
+          <DesktopControlGroup />
         </>
       )}
     </>

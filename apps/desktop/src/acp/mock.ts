@@ -4,14 +4,15 @@ import {
   COMMANDS,
   configOptions,
   MOCK_CHECK_RUNS,
+  MOCK_DESKTOP_CONTROL,
   MOCK_PULLS,
   MOCK_REPORTS,
   MOCK_SKILLS,
   type MockConnectRequest,
   type MockOptions,
   mockContext,
+  mockDesktopSettingsSet,
   mockSettingsAnswer,
-  mockSettingsSet,
   withoutSkillContent,
 } from "./mockFixtures";
 import { mockGit, mockGitRun, mockQrRows } from "./mockGit";
@@ -2266,11 +2267,12 @@ export class MockEngine {
           allowed_domains: [],
           browser_available: false,
         };
+        this.serverSettings["desktop-control"] ??= { ...MOCK_DESKTOP_CONTROL };
         const keys = arr(params.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
         return mockSettingsAnswer(this.serverSettings, this.projectSettings, keys, str(params.project));
       }
       case "_rustcode/settings/set": {
-        this.serverSettings = mockSettingsSet(this.serverSettings, this.projectSettings, params);
+        this.serverSettings = mockDesktopSettingsSet(this.serverSettings, this.projectSettings, params);
         return mockSettingsAnswer(this.serverSettings, this.projectSettings, [], str(params.project));
       }
       case "_rustcode/harnesses":

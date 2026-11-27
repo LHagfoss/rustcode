@@ -764,7 +764,7 @@ async fn call_inside(
         }
         return forward.call(inside_request(identity, tool, args)).await;
     }
-    if crate::computer_use::is_tool(tool) {
+    if crate::computer_use::is_tool(tool) || crate::computer_use::desktop::is_tool(tool) {
         return forward.call(inside_request(identity, tool, args)).await;
     }
     // The block check is answered here: it needs no client and no thread, only
@@ -1138,6 +1138,9 @@ fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
     listed.extend(crate::computer_use::tools(
         &crate::computer_use::Settings::load(),
     ));
+    listed.extend(crate::computer_use::desktop::tools(
+        &crate::computer_use::desktop::DesktopSettings::load(),
+    ));
     listed
 }
 
@@ -1287,7 +1290,7 @@ fn search_tools(version: u8, offered: Offered, query: &str) -> CallAnswer {
 }
 
 fn response_content(tool: &str, answer: &CallAnswer) -> Value {
-    if tool == "browser_screenshot" && answer.success {
+    if matches!(tool, "browser_screenshot" | "computer_screenshot") && answer.success {
         if let Ok(body) = serde_json::from_str::<Value>(&answer.content) {
             if let Some(data) = body.get("data").and_then(Value::as_str) {
                 return json!([{"type":"image","mimeType":"image/png","data":data}]);

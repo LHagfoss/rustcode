@@ -116,6 +116,13 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Desktop control's worker (`rc computer-worker`, ADR 0011): AppKit for the
+# agent's cursor, ScreenCaptureKit's completion blocks and the main queue.
+objc2 = "0.6.4"
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+
 [target.'cfg(windows)'.dependencies]
 # Interface addresses for the remote gateway's listen plan; mdns-sd already
 # builds it, with the same features.

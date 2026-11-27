@@ -1,6 +1,7 @@
 # 0011: OS computer use runs in a separate worker, behind the RustCode MCP server
 
-Status: proposed, 2026-11-26 (#4369). Code today: `rustcode/engine/src/computer_use.rs`
+Status: accepted, 2026-11-27. Phases 1–4 have landed on macOS (`rustcode/engine/src/computer_worker/`,
+`rustcode/engine/src/computer_use/desktop.rs`); see *Implementation notes* below. Proposed 2026-11-26 (#4369). Code today: `rustcode/engine/src/computer_use.rs`
 (browser tools), `rustcode/engine/src/orchestration/mcp_server.rs` (the per-thread
 RustCode MCP server), `rustcode/engine/src/desktop_control.rs` (client-owned bridge with
 no client), `rustcode/engine/src/clipboard.rs`. Docs: [computer-use.md](../computer-use.md),
@@ -127,6 +128,30 @@ does not work for headless machines or external harnesses, and nothing implement
 4. **Accessibility**: `computer_snapshot` and act-by-ref on all three APIs.
 5. **Wayland input** via RemoteDesktop portal and libei, after verifying compositor support.
 6. **Remote grants**: driving another paired machine's desktop.
+
+## Implementation notes (2026-11-27)
+
+What the first slice built, and where it departs from the plan above:
+
+- **macOS first.** Capture, input and accessibility are written against the platform APIs
+  directly (CoreGraphics, the Accessibility C API, ScreenCaptureKit and AppKit through `objc2`)
+  instead of `xcap` and `enigo`: background input needs events posted to one process
+  (`CGEventPostToPid`) and actions by ref need `AXUIElement`, which neither crate offers.
+  Windows, X11 and Wayland report "not supported yet".
+- **Process model.** `rc computer-worker` is the same `rc` binary started with one argument,
+  speaking JSON lines over stdin and stdout rather than a socket. A closed stdin ends it; a
+  dedicated signed helper binary is left for when release signing (#2034) needs it.
+- **Background first.** Clicks press the element through Accessibility, typing inserts at the
+  caret (`AXSelectedText`), keys and pixel clicks go to the target process. The user's pointer
+  and focus are never taken, so the "pause on physical input" rule is not needed for these
+  actions and is not built.
+- **Visible activity and stop.** The agent's own cursor (drawn by RustCode, excluded from
+  captures) glides to each target; a menu bar item names the app and its **Stop** ends the
+  worker, which ends every grant. A global shortcut is not built.
+- **Pixels.** `x` and `y` are pixels of the latest screenshot of that window, converted by the
+  worker, rather than display points.
+- **Not yet:** the built-in harness's tools, the user-configurable sensitive-app list (a fixed
+  list asks every time), a cap on actions per turn, and remote grants (phase 6).
 
 ## Consequences
 

@@ -481,6 +481,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
+dependencies = [
+ "objc2",
+]
+
+[[package]]
 name = "blocking"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1156,6 +1165,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.1",
+ "block2",
+ "libc",
  "objc2",
 ]
 
@@ -3616,10 +3627,12 @@ dependencies = [
  "anyhow",
  "aws-lc-rs",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "chrono-tz",
  "cron",
  "discord-rich-presence",
+ "dispatch2",
  "flate2",
  "fs2",
  "futures-util",
@@ -3633,6 +3646,7 @@ dependencies = [
  "keyring",
  "libc",
  "mdns-sd",
+ "objc2",
  "open",
  "qrcode",
  "rand 0.10.2",

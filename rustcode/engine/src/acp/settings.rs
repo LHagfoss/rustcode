@@ -46,6 +46,7 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
     REGISTRY.get_or_init(|| {
         vec![
             ("computer-use", SettingType::Object, json!({})),
+            ("desktop-control", SettingType::Object, json!({})),
             ("default-permission-mode", SettingType::Text, json!("ask")),
             ("resume-after-restart", SettingType::Boolean, json!(true)),
             ("continue-after-limit", SettingType::Boolean, json!(true)),
@@ -268,6 +269,8 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         let (key, _, default) = registry_entry(key).expect("checked above");
         let (value, source) = if key == "computer-use" {
             (crate::computer_use::settings_value(), "machine")
+        } else if key == "desktop-control" {
+            (crate::computer_use::desktop::settings_value(), "machine")
         } else if let Some(value) = overrides.get(key) {
             (value.clone(), "project")
         } else if let Some(value) = stored.get(key) {
@@ -405,6 +408,11 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
                 .map_err(|e| agent_client_protocol::Error::invalid_params().data(e))?;
             continue;
         }
+        if known == "desktop-control" {
+            crate::computer_use::desktop::save_settings(value)
+                .map_err(|e| agent_client_protocol::Error::invalid_params().data(e))?;
+            continue;
+        }
         values.insert(known.to_owned(), value.clone());
     }
     write_file(&path, &file)
@@ -416,7 +424,8 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
 /// label (the Settings row's) and, for a text key, the values it accepts.
 fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
     match key {
-        "computer-use" => ("Computer use (browser and desktop control)", None),
+        "computer-use" => ("Computer use (browser tools)", None),
+        "desktop-control" => ("Desktop control (see and drive this computer's apps)", None),
         "default-permission-mode" => ("Default access", Some(&["ask", "edits", "full"])),
         "resume-after-restart" => ("Continue threads after a restart", None),
         "continue-after-limit" => ("Continue threads on their own after a usage limit", None),

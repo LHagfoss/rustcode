@@ -1,4 +1,6 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
+pub mod desktop;
+mod desktop_worker;
 pub mod grants;
 pub mod panel;
 mod proxy;
@@ -233,6 +235,7 @@ pub fn unregister(id: &str) {
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
     grants::revoke(id);
+    desktop::unregister(id);
 }
 
 /// The internal job that answers the page's current URL.
