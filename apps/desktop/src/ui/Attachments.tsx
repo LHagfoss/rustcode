@@ -2,7 +2,7 @@
 // QuestionCard): reading pasted, dropped and picked files into attachments under the composer's
 // limits (state/compose.ts), and the strip of thumbnails and chips that shows them with Remove.
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { readImage } from "../lib/native";
 import { basename } from "../lib/paths";
 import {
@@ -14,10 +14,10 @@ import {
 } from "../state/compose";
 import { toast } from "../state/store";
 import { localId } from "../state/thread";
-import { FileText, X } from "./icons";
+import { ChevronUp, FileText, X } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { PasteChip } from "./PasteChip";
-import { cx, Pill, Tooltip } from "./primitives";
+import { cx, Tooltip } from "./primitives";
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -90,8 +90,6 @@ export async function attachmentsFromPaths(
   return out;
 }
 
-const IMAGE_PREVIEW_LIMIT = 3;
-
 export function AttachmentStrip({
   attachments,
   onRemove,
@@ -105,75 +103,95 @@ export function AttachmentStrip({
   const [expanded, setExpanded] = useState(false);
   const images = attachments.filter((a) => a.kind === "image");
   const pictures = images.map((a) => ({ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }));
-  const shown = expanded ? images : images.slice(0, IMAGE_PREVIEW_LIMIT);
-  const hiddenCount = images.length - IMAGE_PREVIEW_LIMIT;
+  const grid = useRef<HTMLDivElement>(null);
+  const [columns, setColumns] = useState(1);
+  const hasImages = images.length > 0;
+  useLayoutEffect(() => {
+    const element = grid.current;
+    if (!hasImages || !element) return;
+    const measure = () => {
+      const tracks = getComputedStyle(element).gridTemplateColumns;
+      setColumns(Math.max(1, tracks.split(" ").length));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasImages]);
+  const hiddenCount = images.length > columns ? images.length - columns + 1 : 0;
+  const shown = expanded || !hiddenCount ? images : images.slice(0, columns - 1);
   const thumbnails = shown.map((a, index) => (
-    <div key={a.id} className="relative shrink-0 rc-in">
+    <div key={a.id} className="group relative min-w-0 rc-in">
       <button
         type="button"
         aria-label={`Open ${a.name}`}
         onClick={() => openLightbox(pictures, index)}
-        className="block rounded-lg"
+        className="block aspect-square w-full overflow-hidden rounded-lg bg-code-bg ring-1 ring-inset ring-border-strong hover:ring-fg-muted"
       >
-        <img
-          src={pictures[index]?.src}
-          alt={a.name}
-          title={a.name}
-          className="size-16 rounded-lg object-cover shadow-1"
-        />
+        <img src={pictures[index]?.src} alt={a.name} title={a.name} className="size-full object-contain" />
       </button>
       {/* Inside the corner, so the strip's scroll never crops it. */}
       <button
         type="button"
         aria-label={`Remove ${a.name}`}
         onClick={() => onRemove(a.id)}
-        className="rc-glass absolute top-1.5 right-1.5 flex size-[20px] items-center justify-center rounded-full text-fg shadow-1 hover:bg-surface-3"
+        className="rc-glass absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-full text-fg-muted shadow-1 hover:bg-surface-3 hover:text-fg [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
       >
-        <X size={12} strokeWidth={2.5} />
+        <X size={12} strokeWidth={2} />
       </button>
     </div>
   ));
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
-    <div className={cx("flex shrink-0 gap-2 overflow-x-auto", className)}>
-      {thumbnails.slice(0, IMAGE_PREVIEW_LIMIT)}
-      {hiddenCount > 0 && (
-        <Pill
-          type="button"
-          aria-label={
-            expanded
-              ? "Show fewer images"
-              : `Show ${hiddenCount} more ${hiddenCount === 1 ? "image" : "images"}`
-          }
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-          className="shrink-0 self-center"
+    <div className={cx("flex min-w-0 shrink-0 flex-col gap-2", className)}>
+      {hasImages && (
+        <div
+          ref={grid}
+          className="grid max-h-56 content-start grid-cols-[repeat(auto-fill,minmax(min(100%,4rem),1fr))] gap-2 overflow-y-auto"
         >
-          {expanded ? "Less" : `+${hiddenCount}`}
-        </Pill>
+          {thumbnails}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              aria-label={
+                expanded
+                  ? "Show fewer images"
+                  : `Show ${hiddenCount} more ${hiddenCount === 1 ? "image" : "images"}`
+              }
+              aria-expanded={expanded}
+              onClick={() => setExpanded(!expanded)}
+              className="flex aspect-square w-full items-center justify-center rounded-lg bg-fill-subtle text-callout font-medium tabular-nums text-fg-muted ring-1 ring-inset ring-border hover:bg-fill hover:text-fg"
+            >
+              {expanded ? <ChevronUp size={16} /> : `+${hiddenCount}`}
+            </button>
+          )}
+        </div>
       )}
-      {thumbnails.slice(IMAGE_PREVIEW_LIMIT)}
-      {attachments.map((a) =>
-        // A long paste keeps its size in the chip, and its text in the panel it opens.
-        a.kind === "text" ? (
-          <PasteChip key={a.id} text={a.text} onRemove={() => onRemove(a.id)} />
-        ) : a.kind === "file" ? (
-          <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
-            <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2 text-callout rc-in">
-              <FileText size={12} className="text-fg-muted" />
-              <span className="max-w-[200px] truncate">{a.name}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${a.name}`}
-                onClick={() => onRemove(a.id)}
-                className="text-fg-faint hover:text-fg"
-              >
-                <X size={12} />
-              </button>
-            </span>
-          </Tooltip>
-        ) : null,
+      {attachments.some((a) => a.kind !== "image") && (
+        <div className="flex items-start gap-2 overflow-x-auto">
+          {attachments.map((a) =>
+            // A long paste keeps its size in the chip, and its text in the panel it opens.
+            a.kind === "text" ? (
+              <PasteChip key={a.id} text={a.text} onRemove={() => onRemove(a.id)} />
+            ) : a.kind === "file" ? (
+              <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
+                <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2 text-callout rc-in">
+                  <FileText size={12} className="text-fg-muted" />
+                  <span className="max-w-[200px] truncate">{a.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${a.name}`}
+                    onClick={() => onRemove(a.id)}
+                    className="text-fg-faint hover:text-fg"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              </Tooltip>
+            ) : null,
+          )}
+        </div>
       )}
     </div>
   );
