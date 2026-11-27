@@ -114,19 +114,19 @@ built-in harness does not offer these tools yet.
 
 ### Enable
 
-Off by default, per machine. Open **Settings → Voice & computer use** on the
-Mac itself and turn on **Desktop control**. macOS then asks for
+On by default, per machine; turn it off under **Settings → Voice & computer
+use** › **Desktop control** on the Mac itself. Nothing runs until macOS grants
 **Accessibility** (to read apps and act on them) and **Screen Recording** (for
-window screenshots); the section shows both and has **Ask macOS** to show the
-prompts again. macOS lists the permission under the binary Settings names,
+window screenshots); the section shows both and **Ask macOS** shows the
+prompts. macOS lists the permission under the binary Settings names,
 usually RustCode's bundled `rc`. Or set it in `config.toml`:
 
 ```toml
 [desktop_control]
-enabled = true
+enabled = false
 ```
 
-Start a new thread after turning it on.
+Start a new thread after changing it.
 
 ### How an agent works
 
