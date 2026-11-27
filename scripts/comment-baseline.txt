@@ -486,7 +486,7 @@
 15 apps/desktop/src/ui/HeaderButtonsSetting.tsx
 4 apps/desktop/src/ui/HubGroup.tsx
 3 apps/desktop/src/ui/Inbox.test.ts
-29 apps/desktop/src/ui/Inbox.tsx
+25 apps/desktop/src/ui/Inbox.tsx
 2 apps/desktop/src/ui/IssueReportDialog.tsx
 3 apps/desktop/src/ui/JobRunBar.tsx
 23 apps/desktop/src/ui/Lightbox.tsx
