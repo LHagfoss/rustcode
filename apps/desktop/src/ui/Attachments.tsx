@@ -17,7 +17,7 @@ import { localId } from "../state/thread";
 import { ChevronUp, FileText, X } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { PasteChip } from "./PasteChip";
-import { cx, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -152,8 +152,8 @@ export function AttachmentStrip({
         >
           {thumbnails}
           {hiddenCount > 0 && (
-            <button
-              type="button"
+            <Pill
+              quiet
               aria-label={
                 expanded
                   ? "Show fewer images"
@@ -161,10 +161,10 @@ export function AttachmentStrip({
               }
               aria-expanded={expanded}
               onClick={() => setExpanded(!expanded)}
-              className="flex aspect-square w-full items-center justify-center rounded-lg bg-fill-subtle text-callout font-medium tabular-nums text-fg-muted ring-1 ring-inset ring-border hover:bg-fill hover:text-fg"
+              className="aspect-square h-auto! w-full rounded-lg! bg-fill-subtle px-0! tabular-nums ring-1 ring-inset ring-border"
             >
               {expanded ? <ChevronUp size={16} /> : `+${hiddenCount}`}
-            </button>
+            </Pill>
           )}
         </div>
       )}
