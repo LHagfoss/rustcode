@@ -32,7 +32,7 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { orderedOptions, QuestionCard, RiskBadge } from "./AttentionCards";
-import { CircleAlert, CircleCheck, CornerDownRight, Hand, MessageCircleQuestion, X } from "./icons";
+import { ChevronDown, CircleAlert, CircleCheck, CornerDownRight, Hand, MessageCircleQuestion } from "./icons";
 import { ViewHeader } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill, Tooltip } from "./primitives";
@@ -152,7 +152,7 @@ function KindIcon({ kind }: { kind: InboxItem["kind"] }) {
   return <Hand size={14} className="text-warning" />;
 }
 
-/** The answers, with their digit hints: shown on the row the keyboard is on, or hovered. */
+/** The answers, with their digit hints: shown on the selected row. */
 function RowActions({
   item,
   onRun,
@@ -202,19 +202,20 @@ function InboxGroupHeader({ group, onOpen }: { group: InboxGroup; onOpen: () => 
 
 /**
  * One request under its thread's header: what it wants, its age, and one compact
- * answer at rest. The full answers with their digit keys appear on the row the
- * keyboard is on, or under the pointer: the list stays scannable at rest.
+ * answer at rest. The selected row shows all answers with their digit keys.
  */
 function InboxRow({
   item,
   active,
   now,
+  onSelect,
   onOpen,
   onRun,
 }: {
   item: InboxItem;
   active: boolean;
   now: number;
+  onSelect: () => void;
   onOpen: () => void;
   onRun: (action: RowAction) => void;
 }) {
@@ -234,8 +235,8 @@ function InboxRow({
       data-inbox-key={item.key}
       aria-current={active || undefined}
       className={cx(
-        "group flex items-start gap-2 rounded-lg px-2 py-1.5",
-        active ? "bg-fill" : "hover:bg-fill-subtle",
+        "flex items-start gap-2 rounded-row px-2 py-2",
+        active ? "bg-surface" : "hover:bg-fill-subtle",
       )}
     >
       <span className="mt-1 shrink-0">
@@ -249,20 +250,16 @@ function InboxRow({
               <RowActions item={item} onRun={onRun} withoutAnswers />
             </span>
           ) : (
-            // The selected row reads its question whole, so only a truncated one needs the tip.
-            <Tooltip label={active ? undefined : item.detail}>
-              <button
-                type="button"
-                onClick={onOpen}
-                className={cx(
-                  "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
-                  // The selected row reads its question whole: the answers drop to their own line.
-                  active ? "break-words whitespace-normal" : "truncate",
-                )}
-              >
-                {item.detail}
-              </button>
-            </Tooltip>
+            <button
+              type="button"
+              onClick={onOpen}
+              className={cx(
+                "min-w-0 flex-1 basis-32 text-left text-callout hover:underline",
+                active ? "wrap-anywhere text-fg" : "truncate text-fg-muted",
+              )}
+            >
+              {item.detail}
+            </button>
           )}
           {risk && risk.level !== "safe" && <RiskBadge risk={risk} />}
           {item.pending > 1 && (
@@ -271,38 +268,28 @@ function InboxRow({
             </span>
           )}
           <span className="shrink-0 text-caption text-fg-faint tabular">{relativeAge(item.at, now)}</span>
-          {compact && (
-            <span
-              className={cx("shrink-0", active ? "hidden" : "group-hover:hidden group-focus-within:hidden")}
-            >
-              <Pill size="sm" prominent={compact.primary} onClick={() => onRun(compact)}>
-                {compact.label}
-              </Pill>
-            </span>
+          {!active && compact && (
+            <Pill size="sm" prominent={compact.primary} onClick={() => onRun(compact)} className="max-w-full">
+              <span className="min-w-0 truncate">{compact.label}</span>
+            </Pill>
           )}
         </div>
-        <span
-          className={cx(
-            "min-w-0 flex-wrap items-center gap-1.5",
-            opensCard ? "hidden" : active ? "flex" : "hidden group-hover:flex group-focus-within:flex",
-          )}
-        >
-          <RowActions item={item} onRun={onRun} />
-        </span>
+        {active && !opensCard && (
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 pt-1">
+            <RowActions item={item} onRun={onRun} />
+          </div>
+        )}
         {opensCard && item.request && <QuestionCard request={item.request} keys={false} />}
       </div>
-      {/* The row's own x: the quick way out for a pointer, beside the answers the
-          hovered line offers and the digit key that does the same. */}
-      <Tooltip label="Dismiss">
-        <button
-          type="button"
-          onClick={() => onRun(dismissAction(item))}
-          aria-label={`Dismiss ${item.title}`}
-          className="mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
-        >
-          <X size={13} />
-        </button>
-      </Tooltip>
+      <button
+        type="button"
+        aria-label={`Request actions: ${item.detail}`}
+        aria-expanded={active}
+        onClick={onSelect}
+        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        <ChevronDown size={14} className={active ? "rotate-180" : undefined} />
+      </button>
     </li>
   );
 }
@@ -450,6 +437,7 @@ export function Inbox() {
         if (!items.length) return;
         e.preventDefault();
         setActive((at) => {
+          if (at < 0) return e.key === "ArrowDown" ? 0 : items.length - 1;
           const next = at + (e.key === "ArrowDown" ? 1 : -1);
           return Math.min(items.length - 1, Math.max(0, next));
         });
@@ -505,17 +493,18 @@ export function Inbox() {
           {items.length > 0 ? (
             <section aria-label="Waiting on you" className="flex flex-col">
               <span className="px-2 pb-1 font-medium text-caption text-fg-faint">Waiting on you</span>
-              <ul ref={list} className="flex flex-col">
+              <ul ref={list} className="flex flex-col gap-3">
                 {groups.map((group, g) => (
                   <li key={`${group.threadId}:${group.items[0]!.key}`} className="flex flex-col">
                     <InboxGroupHeader group={group} onOpen={() => selectThread(group.threadId)} />
-                    <ul className="flex flex-col">
+                    <ul className="flex flex-col gap-1">
                       {group.items.map((item, i) => (
                         <InboxRow
                           key={item.key}
                           item={item}
                           active={starts[g]! + i === active}
                           now={now}
+                          onSelect={() => setActive((at) => (at === starts[g]! + i ? -1 : starts[g]! + i))}
                           onOpen={() => selectThread(item.threadId)}
                           onRun={(action) => run(item, action)}
                         />
