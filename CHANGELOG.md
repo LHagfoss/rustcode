@@ -1,3 +1,30 @@
+## [v1.56.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.56.1) - 2026-11-27
+
+### Features
+- Show shorter release notes and direct pull request links in What's New. (#4546)
+- Match slash-command pills across the composer and chat, and run standalone commands with Enter. (#4549)
+- Fix multi-window synchronization for scheduled messages, wait timers, and primary-window handoff. (#4550)
+- Keep the animated Working status beside the turn timer with a softer highlight. (#4551)
+- Relay newly learned fleet entries and renames across connected peers within a single sync round. (#4552)
+- Stop browser preview screencasts automatically when the last watching client disconnects. (#4553)
+- Find plan usage and context together under Activity in Thread info. (#4554)
+- Open the composer’s permission menu above its button. (#4555)
+- Enable live steering during Antigravity CLI turns. (#4556)
+- Fix Smart UI tables dropping rows that start with HTML links and breaking table badges and inline code mid-word. (#4557)
+- Fix Smart UI `:: tab` sections ending with `:: end` splitting into separate stacked single-tab bars instead of one tab set. (#4558)
+- Prevent concurrent thread metadata updates from overwriting each other by locking `metadata.json` writes per thread. (#4559)
+- Consolidate thread status, pin, snooze, and title into locked `metadata.json` with backward-compatible fallback for legacy sidecar files. (#4560)
+- Write saved tool outputs, MCP binary artifacts, image attachments, and turn performance reports atomically so crashes cannot leave truncated files. (#4561)
+- Swipe desktop toasts left to dismiss them with smoother motion. (#4563)
+- Agents can call RustCode's tools, request credentials privately and keep dev servers running from the shell with `rc tools`, `rc secret` and `rc terminal`. (#4562)
+- Desktop control on macOS: agents can see and use your Mac's apps with their own cursor, after you allow each app (Settings › Voice & computer use). (#4564)
+- Run pull request merges and worktree cleanup on the paired machine that owns the thread. (#4566)
+- Allow threads on paired machines to control your Mac's desktop through the `computer_*` tools with a `machine` argument, approved on the controlled Mac. (#4567)
+- Keep the Thread info toggle in the chat header when the right sidebar is open. (#4568)
+- Align the macOS window controls and add space above New thread. (#4569)
+- Reveal closed Threads and Thread info sidebars by hovering over the window edges. (#4570)
+- Keep Needs you rows stable on hover and expand request actions with a chevron or the arrow keys. (#4572)
+- Reduce the gap between project groups in the thread sidebar to 2 px. (#4571)
 ## [v1.56.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.56.0) - 2026-11-27
 
 ### Features
