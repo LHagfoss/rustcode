@@ -11,6 +11,9 @@ const styles = {
   code: "rounded-xs bg-fill-strong [box-decoration-break:clone]",
 } as const;
 
+/** A whole fence, one block behind its lines: its line break after is the block's own edge. */
+const codeBlock = "block rounded-sm bg-fill-strong";
+
 const markdown = new RegExp(
   [
     /(?<code>^ {0,3}(?<fence>`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?(?:^ {0,3}\k<fence>[ \t]*$|(?![\s\S]))))/.source,
@@ -60,6 +63,20 @@ function HeadingPreview({ source, label, level }: { source: string; label: strin
         {label}
       </span>
     </span>
+  );
+}
+
+function fenceRuns(block: string) {
+  const open = block.indexOf("\n");
+  if (open < 0) return <span className={styles.marker}>{block}</span>;
+  const close = /\n {0,3}(?:`{3,}|~{3,})[ \t]*$/.exec(block);
+  const bodyEnd = close && close.index >= open ? close.index : block.length;
+  return (
+    <>
+      <span className={styles.marker}>{block.slice(0, open)}</span>
+      {block.slice(open, bodyEnd)}
+      {bodyEnd < block.length && <span className={styles.marker}>{block.slice(bodyEnd)}</span>}
+    </>
   );
 }
 
@@ -140,6 +157,15 @@ export function draftMirror(
           cursor = to;
           continue;
         }
+      }
+      if (kind === "code" && from === match.index && to === end) {
+        runs.push(
+          <span key={from} className={codeBlock}>
+            {fenceRuns(text.slice(from, to))}
+          </span>,
+        );
+        cursor = to < offset && text[to] === "\n" ? to + 1 : to;
+        continue;
       }
       runs.push(
         <span key={from} className={styles[kind ?? "code"]}>

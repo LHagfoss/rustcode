@@ -189,7 +189,14 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
               <span className="font-medium text-caption text-fg-muted tabular">{left}% left</span>
             </span>
           )}
-          {fraction !== null && <ContextGauge fraction={fraction} />}
+          {fraction !== null && (
+            <span className="flex items-center gap-1">
+              <ContextGauge fraction={fraction} />
+              <span className="font-medium text-caption text-fg-muted tabular">
+                {percentOf(usage!.used, usage!.size)}
+              </span>
+            </span>
+          )}
           {low && <span className="size-1.5 rounded-full bg-warning" />}
         </button>
       </HoverCard.Trigger>

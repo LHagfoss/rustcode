@@ -83,6 +83,7 @@ import {
 } from "../state/store";
 import { isRunning, localId, type ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
+import { doublesTokenSpace } from "../state/tokenSpace";
 import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
 import { ComposerDrawer } from "./ComposerDrawer";
 import {
@@ -103,6 +104,7 @@ import {
   keywordEntries,
   NOT_EXPANDED,
 } from "./composerMentions";
+import { DeclineNotice, sendTip } from "./DeclineNotice";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
 import { draftMirror, listContinuation } from "./DraftMirror";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
@@ -361,6 +363,12 @@ export const Composer = memo(function Composer({
   const drawerRef = useRef<HTMLDivElement>(null);
   // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
   const history = useRef<{ draft: string; index: number } | null>(null);
+  const tokenEnd = useRef<number | null>(null);
+  const placeAfterToken = (caret: number) => {
+    tokenEnd.current = caret;
+    setCaret(caret);
+    requestAnimationFrame(() => field.current?.setSelectionRange(caret, caret));
+  };
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const highlightedDraft = useMemo(
     () =>
@@ -678,8 +686,7 @@ export const Composer = memo(function Composer({
     noteRecentFile(cwdForFiles, path);
     const next = insertRef(draft, at, path);
     update(next.text);
-    setCaret(next.caret);
-    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
+    placeAfterToken(next.caret);
   };
 
   const complete = (command: SlashCommand, run: boolean) => {
@@ -704,8 +711,7 @@ export const Composer = memo(function Composer({
     // (the harness reads a slash command only at the start of a prompt).
     const next = insertCommand(draft, slash, command.name);
     update(next.text);
-    setCaret(next.caret);
-    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
+    placeAfterToken(next.caret);
   };
 
   const addMention = (mention: Mention) => {
@@ -718,8 +724,7 @@ export const Composer = memo(function Composer({
     // The id travels with the message, kept beside the text: two threads may share a title, and
     // the draft's own words say only the title (state/compose.ts `Mention`).
     change((e) => ({ ...e, mentions: [...(e.mentions ?? []), mention] }));
-    setCaret(next.caret);
-    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
+    placeAfterToken(next.caret);
   };
 
   // A group's keyword is written at the token, so the drawer stays open on that group and the next
@@ -964,6 +969,10 @@ export const Composer = memo(function Composer({
     });
   };
 
+  const declines =
+    !queuedEdit &&
+    (!!draft.trim() || hasExtras(extras)) &&
+    !!approval?.options.some((o) => o.kind === "reject_once" || o.kind === "reject_always");
   const placeholder = offline
     ? offReconnecting
       ? `Reconnecting${offMachine ? ` to ${offMachine}` : ""}… Messages can be sent once it is back…`
@@ -1121,6 +1130,7 @@ export const Composer = memo(function Composer({
               </Pill>
             </div>
           )}
+          {declines && <DeclineNotice waiting={thread?.permissions.filter((p) => !p.question).length ?? 0} />}
           {extras.attachments.length > 0 && (
             <AttachmentStrip
               attachments={extras.attachments}
@@ -1196,6 +1206,13 @@ export const Composer = memo(function Composer({
                 ref={field}
                 value={draft}
                 onChange={(e) => {
+                  const afterToken = tokenEnd.current;
+                  tokenEnd.current = null;
+                  if (doublesTokenSpace(draft, e.target.value, afterToken)) {
+                    const at = afterToken ?? 0;
+                    requestAnimationFrame(() => field.current?.setSelectionRange(at, at));
+                    return;
+                  }
                   history.current = null;
                   setCaret(e.target.selectionStart);
                   setSelectionEnd(e.target.selectionEnd);
@@ -1334,7 +1351,7 @@ export const Composer = memo(function Composer({
                   </button>
                 </Tooltip>
               ) : queuedEdit ? null : (
-                <Tooltip {...tooltipBelowCard} label="Send (⏎)">
+                <Tooltip {...tooltipBelowCard} label={sendTip(declines)}>
                   <button
                     type="button"
                     aria-label="Send"

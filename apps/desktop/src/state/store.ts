@@ -201,6 +201,7 @@ import { capServerLogLine } from "../lib/diagnostics";
 import { parseOverrides } from "../lib/keys";
 import { parseNotifySoundTone, parseNotifySoundVolume } from "../lib/notifySound";
 import { setShellTransport } from "../lib/shell";
+import { writeStorage } from "../lib/storage";
 import { ThemeMethod } from "../lib/themes";
 import {
   applyWindowTitle,
@@ -231,6 +232,7 @@ import {
   syncWaitTimers,
   watchRunningThreads,
 } from "./continueThreads";
+import { DRAFT_EXTRAS_KEY, parseExtrasBook, persistableExtras } from "./draftExtras";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import {
   type EngineEvent,
@@ -561,7 +563,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   harnessCommands: parseHarnessCommands(stored(STORAGE.harnessCommands)),
   sessionCommands: {},
   drafts: parseDrafts(stored(DRAFTS_KEY)),
-  extras: {},
+  extras: parseExtrasBook(stored(DRAFT_EXTRAS_KEY)),
   scheduled: parseScheduleBook(stored(SCHEDULED_KEY)),
   settings: null,
   settingsMachine: null,
@@ -1516,6 +1518,7 @@ let draftsSave: ReturnType<typeof setTimeout> | undefined;
 
 function writeDrafts() {
   store(DRAFTS_KEY, JSON.stringify(persistable(get().drafts)));
+  writeStorage(DRAFT_EXTRAS_KEY, persistableExtras(get().extras));
 }
 
 function saveDrafts() {
@@ -1537,6 +1540,7 @@ export function flushDrafts() {
 export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
   set((s) => ({ extras: { ...s.extras, [key]: fn(s.extras[key] ?? emptyExtras) } }));
   if (hasExtras(get().extras[key])) noteTyping(key);
+  saveDrafts();
 }
 
 // ---------------------------------------------------------------- permission loading
