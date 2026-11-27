@@ -13,10 +13,9 @@ import {
   type UsageWindow,
   windowTitle,
 } from "../acp/rustcode";
-import { modelName, type SessionUsage } from "../acp/types";
+import type { SessionUsage } from "../acp/types";
 import { useHoverTip } from "../lib/hover";
 import { paceLabel, planPace } from "../lib/planPace";
-import { layoutTiles } from "../lib/treemap";
 import { autoCompactBeforeUsage, autoCompactThresholdFor } from "../state/autoCompactRun";
 import {
   onlyCachedPlan,
@@ -28,10 +27,10 @@ import {
   submit,
   useApp,
 } from "../state/store";
-import { formatTokens, isRunning, relativeAge } from "../state/thread";
+import { formatTokens, isRunning } from "../state/thread";
 import { isRemoteThread } from "../state/threadKeys";
 import { usagePressTarget } from "../state/usagePage";
-import { cx, Pill, Segments, surfaceCollisionPadding, Tooltip, tipSurface } from "./primitives";
+import { cx, Pill, Segments, surfaceCollisionPadding, tipSurface } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -45,31 +44,6 @@ const PLAN_SHOWN_BELOW = 50;
 function planTint(left: number) {
   return left < 5 ? "bg-danger" : left < 20 ? "bg-warning" : "bg-accent";
 }
-
-/**
- * One fill per category, used by both the bar's segments and the tile map so
- * they are the same colour (mixed over the raised surface, not transparent,
- * which would take the colour of whatever each one happens to sit on).
- */
-const CATEGORY_FILL: Record<string, string> = {
-  "User messages": "var(--rc-accent)",
-  "Agent responses": "color-mix(in srgb, var(--rc-accent) 72%, var(--rc-surface-2))",
-  "Tool calls": "color-mix(in srgb, var(--rc-accent) 50%, var(--rc-surface-2))",
-  Subagents: "color-mix(in srgb, var(--rc-accent) 36%, var(--rc-surface-2))",
-  "Compacted history": "color-mix(in srgb, var(--rc-accent) 24%, var(--rc-surface-2))",
-  "System prompt": "var(--rc-text-muted)",
-  "System tools": "color-mix(in srgb, var(--rc-text-muted) 65%, var(--rc-surface-2))",
-  Skills: "color-mix(in srgb, var(--rc-text-muted) 40%, var(--rc-surface-2))",
-};
-const categoryColor = (name: string) => CATEGORY_FILL[name] ?? "var(--rc-text-faint)";
-
-/** Text on a tile: the pane colour on the opaque fills, the body ink on the
- * ones that approach the surface. */
-const CATEGORY_INK: Record<string, string> = {
-  "User messages": "var(--rc-bg)",
-  "System prompt": "var(--rc-bg)",
-};
-const categoryInk = (name: string) => CATEGORY_INK[name] ?? "var(--rc-text)";
 
 const percentOf = (part: number, whole: number) =>
   whole > 0 ? `${part / whole < 0.01 && part > 0 ? "<1" : Math.round((part / whole) * 100)}%` : "";
@@ -175,7 +149,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           }}
           className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
         >
-          {left !== null && left < PLAN_SHOWN_BELOW && (
+          {left !== null && (left < PLAN_SHOWN_BELOW || fraction === null) && (
             <span className="flex items-center gap-1.5">
               <span className="h-[5px] w-4 overflow-hidden rounded-full bg-fg-faint">
                 <span
@@ -214,11 +188,17 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
         >
           <UsageCard
             plan={plan}
-            cached={fromCache}
             usage={usage}
             before={before}
             autoCompactAt={autoCompactAt}
-            openSettings={usageOpen ? undefined : () => openSettings("usage")}
+            openSettings={
+              usageOpen
+                ? undefined
+                : () => {
+                    tip.dismiss();
+                    openSettings("usage");
+                  }
+            }
             onCompact={
               running || !usage?.size
                 ? undefined
@@ -234,11 +214,6 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   );
 }
 
-/**
- * What fills the context window: a stacked bar with the automatic compaction point, a tile map of
- * the categories, and the biggest items in the category under the pointer. A harness that reports
- * only a total keeps the total-only view and its one-line explanation; nothing is invented.
- */
 export function ContextInspector({
   usage,
   before,
@@ -252,42 +227,26 @@ export function ContextInspector({
   onCompact?: () => void;
 }) {
   const [view, setView] = useState<"before" | "after">("after");
-  const [picked, setPicked] = useState<string | null>(null);
   const snapshot = view === "before" && before ? before : usage;
   const detail = snapshot.context;
-  const used = snapshot.used;
-  const shown = detail?.categories.filter((c) => c.tokens > 0) ?? [];
-  const free = Math.max(0, detail?.free ?? usage.size - used);
-  const fraction = Math.min(1, used / usage.size);
-  const largest = shown.reduce<(typeof shown)[number] | undefined>(
-    (best, category) => (!best || category.tokens > best.tokens ? category : best),
-    undefined,
-  );
-  const active = shown.find((c) => c.name === picked) ?? largest;
-  const pickedCategory = shown.find((c) => c.name === picked);
-  const compactAt = detail?.compactAt;
+  const { used, size } = snapshot;
+  const fraction = Math.min(1, used / size);
+  const compactAt = [detail?.compactAt, autoCompactAt]
+    .filter((value): value is number => value !== undefined && value > 0 && value < size)
+    .sort((a, b) => a - b)[0];
   const compactedAfter = !!before && !!before.context && !!detail;
   const comparable =
     !!before &&
     (compactedAfter
       ? (detail?.compactions ?? 0) > (before.context?.compactions ?? 0) || usage.used < before.used
       : usage.used < before.used);
-  const tiles = layoutTiles(
-    shown.map((category) => ({ key: category.name, value: category.tokens })),
-    100,
-    100,
-    1.4,
-  );
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-0.5">
         <span className="font-semibold text-body">Context</span>
         <span className="text-callout text-fg-muted tabular">
-          <span className="font-medium text-fg">{percentOf(used, usage.size)} used</span>
-          <span className="text-fg-faint">
-            {" "}
-            · {formatTokens(used)} of {formatTokens(usage.size)}
-          </span>
+          {snapshot.estimated && "≈"}
+          {formatTokens(used)} / {formatTokens(size)}
         </span>
       </div>
       {comparable && (
@@ -307,177 +266,35 @@ export function ContextInspector({
           role="meter"
           aria-label="Context used"
           aria-valuemin={0}
-          aria-valuemax={usage.size}
-          aria-valuenow={used}
-          className="flex h-[8px] gap-px overflow-hidden rounded-full bg-fill-strong"
+          aria-valuemax={size}
+          aria-valuenow={Math.min(used, size)}
+          className="flex h-[6px] overflow-hidden rounded-full bg-fill-strong"
         >
-          {shown.length ? (
-            shown.map((c) => {
-              const lit = pickedCategory?.name === c.name;
-              return (
-                <span
-                  key={c.name}
-                  className="h-full transition-[width,opacity] duration-300 ease-snappy first:rounded-l-full"
-                  style={{
-                    width: `${(c.tokens / usage.size) * 100}%`,
-                    background: categoryColor(c.name),
-                    opacity: pickedCategory && !lit ? 0.35 : 1,
-                  }}
-                />
-              );
-            })
-          ) : (
-            <span
-              className="h-full rounded-full transition-[width] duration-300 ease-snappy"
-              style={{ width: `${fraction * 100}%`, background: contextTint(fraction) }}
-            />
-          )}
-        </div>
-        {compactAt !== undefined && compactAt > 0 && compactAt < usage.size && (
           <span
-            aria-hidden
-            title={`Automatic compaction at ${formatTokens(compactAt)}`}
-            className="absolute inset-y-0 w-px bg-bg/80"
-            style={{ left: `${(compactAt / usage.size) * 100}%` }}
+            className="h-full rounded-full"
+            style={{ width: `${fraction * 100}%`, background: contextTint(fraction) }}
           />
-        )}
-        {autoCompactAt !== undefined && autoCompactAt > 0 && autoCompactAt < usage.size && (
+        </div>
+        {compactAt !== undefined && (
           <span
             aria-hidden
-            title={`RustCode compacts at ${formatTokens(autoCompactAt)}`}
-            className="absolute inset-y-0 w-px bg-accent/80"
-            style={{ left: `${(autoCompactAt / usage.size) * 100}%` }}
+            className="absolute inset-y-0 w-px bg-fg-muted"
+            style={{ left: `${(compactAt / size) * 100}%` }}
           />
         )}
       </div>
-      {compactAt !== undefined && compactAt > 0 && compactAt < usage.size && (
-        <p className="px-0.5 text-caption text-fg-faint">Compacts itself at {formatTokens(compactAt)}</p>
-      )}
-      {autoCompactAt !== undefined && autoCompactAt > 0 && autoCompactAt < usage.size && (
-        <p className="px-0.5 text-caption text-fg-faint">Auto-compacts at {formatTokens(autoCompactAt)}</p>
-      )}
-      {shown.length === 0 && (
-        <p className="px-0.5 text-caption text-fg-muted">
-          This harness reports its totals only, not what fills the window.{" "}
-          {autoCompactAt !== undefined && autoCompactAt > 0
-            ? `RustCode compacts it above ${formatTokens(autoCompactAt)}.`
-            : "RustCode is not compacting it automatically; the harness may compact on its own when the window runs low."}
-        </p>
-      )}
-      {shown.length > 0 && (
-        <div className="relative h-[132px] w-full overflow-hidden rounded-lg bg-fill-subtle">
-          {tiles.map((tile) => {
-            const category = shown.find((c) => c.name === tile.key)!;
-            const lit = active?.name === category.name;
-            const share = percentOf(category.tokens, usage.size);
-            // Enough room for the full name and a number under it: otherwise no text, only the
-            // tooltip. A cut-off "Ski…" says less than no label at all.
-            const roomy = tile.height > 26 && tile.width > category.name.length * 2.2 + 6;
-            const label = `${category.name} · ${formatTokens(category.tokens)} · ${share}`;
-            return (
-              <Tooltip key={tile.key} label={roomy ? undefined : label} side="top">
-                <button
-                  type="button"
-                  aria-label={label}
-                  aria-pressed={lit}
-                  onPointerEnter={() => setPicked(category.name)}
-                  onFocus={() => setPicked(category.name)}
-                  onClick={() => setPicked(category.name)}
-                  className={cx(
-                    "absolute cursor-pointer overflow-hidden rounded-xs text-left transition-[left,top,width,height] duration-300 ease-snappy motion-reduce:transition-none",
-                    lit && "z-10 outline outline-1 outline-fg/70",
-                  )}
-                  style={{
-                    left: `${tile.x}%`,
-                    top: `${tile.y}%`,
-                    width: `${tile.width}%`,
-                    height: `${tile.height}%`,
-                    background: categoryColor(category.name),
-                    color: categoryInk(category.name),
-                  }}
-                >
-                  {roomy && (
-                    <span className="pointer-events-none absolute inset-x-1.5 top-1 flex flex-col">
-                      <span className="truncate font-medium text-caption">{category.name}</span>
-                      <span className="truncate text-caption tabular opacity-80">
-                        {formatTokens(category.tokens)}
-                      </span>
-                    </span>
-                  )}
-                </button>
-              </Tooltip>
-            );
-          })}
-        </div>
-      )}
-      {active && (
-        <div className="mx-0.5 flex flex-col gap-1 border-border border-t pt-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-callout font-medium">{active.name}</span>
-            <span className="text-caption text-fg-muted tabular">
-              {formatTokens(active.tokens)} · {percentOf(active.tokens, usage.size)}
-            </span>
-          </div>
-          {active.items?.length ? (
-            <ul className="flex max-h-[132px] flex-col overflow-y-auto">
-              {active.items.map((item, index) => (
-                <li key={`${item.name}-${index}`} className="flex items-center gap-2 py-[2px] text-caption">
-                  <span className="flex-1 truncate text-fg-muted" title={item.name}>
-                    {item.name}
-                  </span>
-                  <span className="w-12 text-right text-fg-faint tabular">
-                    {item.tokens === undefined ? "—" : formatTokens(item.tokens)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-caption text-fg-muted">This harness reports the category's total only.</p>
+      {(compactAt !== undefined || onCompact) && (
+        <div className="flex items-center justify-between gap-2">
+          {compactAt !== undefined && (
+            <span className="text-caption text-fg-muted">Auto-compacts at {formatTokens(compactAt)}</span>
+          )}
+          {onCompact && (
+            <Pill onClick={onCompact} className="ml-auto">
+              Compact now
+            </Pill>
           )}
         </div>
       )}
-      {shown.length > 0 && (
-        <ul className="mx-0.5 flex flex-col border-border border-t pt-1">
-          <li className="flex items-center gap-2 py-[2px] text-caption">
-            <span className="size-2 shrink-0 rounded-xs bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--rc-border-strong)]" />
-            <span className="flex-1 text-fg-muted">Free</span>
-            <span className="text-fg-muted tabular">{formatTokens(free)}</span>
-            <span className="w-9 text-right text-fg-faint tabular">{percentOf(free, usage.size)}</span>
-          </li>
-        </ul>
-      )}
-      <ContextFooter usage={usage} />
-      {onCompact && (
-        <div className="flex items-center justify-between gap-2">
-          <Pill onClick={onCompact} className="self-start">
-            Compact now
-          </Pill>
-          <span className="text-caption text-fg-faint">Keeps a summary of the dropped work</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Everything the card's context section needs, including the comparison snapshot. */
-function ContextFooter({ usage }: { usage: SessionUsage }) {
-  const parts = [
-    usage.inputTokens !== undefined && `${formatTokens(usage.inputTokens)} in`,
-    usage.outputTokens !== undefined && `${formatTokens(usage.outputTokens)} out`,
-    !!usage.cachedTokens && `${formatTokens(usage.cachedTokens)} cached`,
-  ].filter(Boolean);
-  const compactions = usage.context?.compactions ?? 0;
-  const notes = [
-    modelName(usage.context?.model),
-    usage.estimated && "estimated until the next reply",
-    compactions > 0 &&
-      `compacted ${compactions === 1 ? "once" : `${compactions} times`}${usage.context?.reclaimed ? `, ${formatTokens(usage.context.reclaimed)} freed` : ""}`,
-  ].filter(Boolean);
-  if (!parts.length && !notes.length) return null;
-  return (
-    <div className="mx-0.5 flex flex-col gap-0.5 border-border border-t pt-2 text-caption text-fg-muted">
-      {parts.length > 0 && <span className="tabular">Thread total: {parts.join(" · ")}</span>}
-      {notes.length > 0 && <span className="text-fg-faint">{notes.join(" · ")}</span>}
     </div>
   );
 }
@@ -488,7 +305,6 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
  */
 function UsageCard({
   plan,
-  cached,
   usage,
   before,
   autoCompactAt,
@@ -496,7 +312,6 @@ function UsageCard({
   onCompact,
 }: {
   plan?: PlanUsage;
-  cached?: boolean;
   usage?: SessionUsage;
   before?: SessionUsage | null;
   autoCompactAt?: number;
@@ -506,28 +321,14 @@ function UsageCard({
   const windows = plan
     ? [...plan.windows].sort((a, b) => (a.minutes ?? Infinity) - (b.minutes ?? Infinity))
     : [];
-  const age = plan?.fetchedAt
-    ? Date.now() - plan.fetchedAt < 60_000
-      ? "just now"
-      : relativeAge(plan.fetchedAt)
-    : undefined;
   return (
     <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
-      <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <span className="font-semibold text-body">Usage</span>
-        {plan?.source === "codex" && <span className="text-caption text-fg-faint">from the Codex CLI</span>}
-      </div>
       {windows.map((w) => (
-        <PlanWindow key={windowTitle(w)} window={w} />
+        <PlanWindow key={windowTitle(w)} window={w} compact />
       ))}
-      {plan?.fetchedAt && (
-        <span className={cx("px-0.5 text-caption", plan.stale ? "text-warning" : "text-fg-faint")}>
-          {plan.stale ? "Could not refresh · " : ""}
-          {cached ? `Numbers from ${age}` : `Updated ${age}`}
-        </span>
-      )}
+      {plan?.stale && <span className="text-caption text-warning">Quota could not refresh</span>}
       {usage?.size ? (
-        <div className="mx-0.5 border-border border-t pt-3">
+        <div className={cx(windows.length > 0 && "border-border border-t pt-3")}>
           <ContextInspector
             usage={usage}
             before={before}
@@ -540,9 +341,9 @@ function UsageCard({
         <button
           type="button"
           onClick={onOpenSettings}
-          className="cursor-pointer px-0.5 text-left text-caption text-fg-faint hover:text-fg-muted"
+          className="cursor-pointer rounded-md px-2 py-1 text-left text-caption text-fg-muted hover:bg-fill hover:text-fg"
         >
-          Open Usage in Settings
+          Usage settings
         </button>
       )}
     </div>
@@ -550,7 +351,15 @@ function UsageCard({
 }
 
 /** One window: its name and reset, a bar of what is left (bright: still left at the reset at this rate), the numbers. */
-export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: string }) {
+export function PlanWindow({
+  window: w,
+  title,
+  compact,
+}: {
+  window: UsageWindow;
+  title?: string;
+  compact?: boolean;
+}) {
   const left = leftPercent(w);
   const reset = resetLabel(w);
   const pace = planPace(w);
@@ -558,7 +367,11 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
     <div className="flex flex-col gap-1.5 px-0.5">
       <div className="flex items-baseline justify-between gap-3 text-callout">
         <span className="font-medium">{title ?? windowTitle(w)}</span>
-        {reset && <span className="text-caption text-fg-muted">{reset}</span>}
+        {compact ? (
+          <span className="text-caption tabular">{left}% left</span>
+        ) : (
+          reset && <span className="text-caption text-fg-muted">{reset}</span>
+        )}
       </div>
       <div
         role="meter"
@@ -602,19 +415,28 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
           </>
         )}
       </div>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className={cx("font-medium text-caption tabular", left < 20 ? "text-warning" : "text-fg")}>
-          {left}% left
-        </span>
-        {pace && (
-          <span
-            data-pace={pace.kind}
-            className={cx("text-caption", pace.kind === "runsOut" ? "text-warning" : "text-fg-muted")}
-          >
-            {paceLabel(pace)}
+      {compact ? (
+        (reset || pace?.kind === "runsOut") && (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-caption text-fg-muted">
+            {reset && <span>{reset}</span>}
+            {pace?.kind === "runsOut" && <span className="text-warning">May run out early</span>}
+          </div>
+        )
+      ) : (
+        <div className="flex items-baseline justify-between gap-3">
+          <span className={cx("font-medium text-caption tabular", left < 20 ? "text-warning" : "text-fg")}>
+            {left}% left
           </span>
-        )}
-      </div>
+          {pace && (
+            <span
+              data-pace={pace.kind}
+              className={cx("text-caption", pace.kind === "runsOut" ? "text-warning" : "text-fg-muted")}
+            >
+              {paceLabel(pace)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
