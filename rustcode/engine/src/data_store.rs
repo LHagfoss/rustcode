@@ -1695,6 +1695,8 @@ struct CreatedFile {
     created_at_ms: Option<i64>,
     #[serde(default)]
     parent: Option<rustcode_session::SessionParent>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1741,20 +1743,23 @@ fn facts(dir: &Path) -> FolderFacts {
         .as_ref()
         .and_then(|file| file.cwd.clone())
         .or_else(|| workspace.and_then(|file| file.cwd));
+    let created_at_ms = created.as_ref().and_then(|file| file.created_at_ms);
     let created_at = harness_file
         .as_ref()
         .and_then(|file| file.created_at.clone())
+        .or_else(|| created_at_ms.map(millis_to_rfc3339))
+        .or_else(|| modified_rfc3339(&dir.join("history.json")));
+    let title = harness_file
+        .as_ref()
+        .and_then(|file| file.title.clone())
+        .or_else(|| text_file(&dir.join("title.txt")))
         .or_else(|| {
             created
-                .and_then(|file| file.created_at_ms)
-                .map(millis_to_rfc3339)
-        })
-        .or_else(|| modified_rfc3339(&dir.join("history.json")));
+                .and_then(|f| f.title)
+                .filter(|t| !t.trim().is_empty())
+        });
     FolderFacts {
-        title: harness_file
-            .as_ref()
-            .and_then(|file| file.title.clone())
-            .or_else(|| text_file(&dir.join("title.txt"))),
+        title,
         project: project_of(Some(dir), cwd.as_deref()),
         cwd,
         harness: harness_file

@@ -62,9 +62,12 @@ fn rfc3339(time: chrono::DateTime<chrono::Utc>) -> String {
 /// The status the desktop app shows: a settled thread stays `done` while its
 /// last turn winds down, a live turn comes next (from the share, else from the
 /// turn locks of whichever process runs it), then what the store holds.
-fn status_of(directory: &Path, activity: Option<SessionActivity>) -> &'static str {
-    let stored = read_json(&directory.join("status.json"))
-        .and_then(|value| value.get("status")?.as_str().map(str::to_owned));
+fn status_of_metadata(
+    directory: &Path,
+    metadata: Option<&SessionMetadata>,
+    activity: Option<SessionActivity>,
+) -> &'static str {
+    let stored = SessionStore::load_session_status_in(directory, metadata);
     if stored.as_deref() == Some("done") {
         return "done";
     }
@@ -82,6 +85,12 @@ fn status_of(directory: &Path, activity: Option<SessionActivity>) -> &'static st
     }
 }
 
+#[cfg(test)]
+fn status_of(directory: &Path, activity: Option<SessionActivity>) -> &'static str {
+    let metadata = rustcode_session::load_session_metadata_in(directory);
+    status_of_metadata(directory, metadata.as_ref(), activity)
+}
+
 fn stored_status(stored: Option<&str>) -> &'static str {
     match stored {
         Some("review") => "review",
@@ -90,10 +99,16 @@ fn stored_status(stored: Option<&str>) -> &'static str {
     }
 }
 
-fn snoozed_until(directory: &Path) -> Option<String> {
-    let until = read_json(&directory.join("snooze.json"))?.as_u64()?;
+fn snoozed_until_metadata(directory: &Path, metadata: Option<&SessionMetadata>) -> Option<String> {
+    let until = SessionStore::load_session_snoozed_until_in(directory, metadata)?;
     let wakes = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(i64::try_from(until).ok()?)?;
     (wakes > chrono::Utc::now()).then(|| rfc3339(wakes))
+}
+
+#[cfg(test)]
+fn snoozed_until(directory: &Path) -> Option<String> {
+    let metadata = rustcode_session::load_session_metadata_in(directory);
+    snoozed_until_metadata(directory, metadata.as_ref())
 }
 
 /// A folder the desktop app never lists as a project: a drive's root, or
@@ -177,9 +192,9 @@ pub(super) fn entry(
         workspace: workspace.map(|cwd| cwd.to_string_lossy().into_owned()),
         updated_at,
         message_count: meta.message_count as u64,
-        status: Some(status_of(&directory, live.activity).to_owned()),
-        pinned: directory.join("pin.json").is_file(),
-        snoozed_until: snoozed_until(&directory),
+        status: Some(status_of_metadata(&directory, metadata.as_ref(), live.activity).to_owned()),
+        pinned: SessionStore::load_session_pinned_in(&directory, metadata.as_ref()),
+        snoozed_until: snoozed_until_metadata(&directory, metadata.as_ref()),
         harness: Some(
             harness_field("harness").unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned()),
         ),
@@ -253,7 +268,7 @@ pub(super) fn list_projects(entries: &[RemoteSavedSession]) -> Result<RemoteResu
     })
 }
 
-type Stamp = [Option<(SystemTime, u64)>; 3];
+type Stamp = [Option<(SystemTime, u64)>; 4];
 
 fn stamp_of(path: &Path) -> Option<(SystemTime, u64)> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -292,7 +307,8 @@ impl SavedIndex {
             };
             let stamp = [
                 stamp_of(&path),
-                stamp_of(&directory.join("title.txt")),
+                stamp_of(&directory.join(rustcode_session::LEGACY_TITLE_FILE)),
+                stamp_of(&directory.join(rustcode_session::SESSION_METADATA_FILE)),
                 stamp_of(&directory.join(rustcode_session::SESSION_WORKSPACE_FILE)),
             ];
             let cached = self.metas.get(&path).filter(|(known, _)| *known == stamp);
