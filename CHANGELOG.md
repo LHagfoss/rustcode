@@ -1,3 +1,21 @@
+## [v1.56.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.56.0) - 2026-11-27
+
+### Features
+- The strip under the composer shows what a running turn is doing and the thread's changed lines, which open Review. (#4535)
+- The working indicator in the chat shows an animated dot grid and a one-word status such as Thinking or Churning. (#4541)
+- Jobs classify run outcomes as quiet, all clear, needs attention, or blocked, strip inline Markdown from verdicts, and title scheduled run threads with the job name. (#4540)
+- Jobs cards and Review triage actions are clearer, the run timeline is clickable and shows each run's cost, and cross-platform path problems are flagged. (#4542)
+- The composer warns before a send declines a waiting approval, keeps pastes and mentions across a reload, and draws code blocks in a draft as one block. (#4527)
+- The New thread prompt has a clearer layout and simpler workspace controls beneath it. (#4537)
+- Pasted image previews fit the composer width and wrap when expanded; one image beyond the first row shows +1. (#4538, #4539)
+- The composer usage hover is shorter, so quota, resets, and context fit at a glance. (#4536)
+- The side panel's tabs slide between views, and its toggle is an icon that stays in one place open or closed. (#4526)
+- Sidebar rows share one shape and hover/active colour, working threads show a spinner on their project mark, and a dragged row blurs what it passes. (#4534)
+- Toast notifications swipe to dismiss left or right. (#4529)
+- Remote MCP servers such as Opper stay signed in across app restarts, and an offline start retries instead of asking for a new login. (#4531)
+- Thread and harness lists keep loading when the computer is under heavy load. (#4533)
+- Fixed: the composer's usage card no longer disappears or fails to open while a thread is streaming. (#4543)
+- The Homebrew formula's homepage is the RustCode website. (#4528)
 ## [v1.55.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.55.0) - 2026-11-26
 
 ### Features
