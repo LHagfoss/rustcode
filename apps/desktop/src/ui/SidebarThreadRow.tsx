@@ -521,15 +521,14 @@ const STATUS_TINT: Record<RowStatusKind, string> = {
  */
 function RowStatusLabel({ status }: { status: RowStatus }) {
   const kind = status.kind;
+  if (kind === "working") return null;
   const word = kind === "needs" ? (status.approval ? "Approval" : "Question") : status.label;
   return (
     <span
       title={status.title ?? status.label}
       className={cx("inline-flex shrink-0 items-center gap-1 font-medium", STATUS_TINT[kind])}
     >
-      {kind === "working" ? (
-        <CircleDashed size={12} className="shrink-0 motion-safe:animate-[spin_3s_linear_infinite]" />
-      ) : kind === "needs" ? (
+      {kind === "needs" ? (
         status.approval ? (
           <ShieldQuestion size={12} className="shrink-0" />
         ) : (
@@ -606,28 +605,17 @@ const ROW_RIGHT =
 const COMPACT_ROW = "grid h-[34px] grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-2 px-2";
 
 /** The compact row's leading dot, in the tone the detailed row's chip takes for the same state. */
-const COMPACT_DOT: Record<CompactMark, string> = {
+const COMPACT_DOT: Record<Exclude<CompactMark, "working">, string> = {
   needs: "bg-warning motion-safe:animate-pulse",
-  working: "bg-accent",
   failed: "bg-danger",
   unread: "bg-success",
 };
 
-/**
- * The compact row's one leading icon: the project's mark, with the row's status as a dot on it.
- * A working thread swaps the mark for the spinner, so what runs shows at a glance down the list.
- */
 function RowIcon({ mark, project, className }: { mark?: CompactMark; project: string; className?: string }) {
-  if (mark === "working")
-    return (
-      <span aria-hidden className="flex size-5 items-center justify-center">
-        <Spinner size={14} className="text-accent" />
-      </span>
-    );
   return (
     <span aria-hidden className="relative flex size-5 items-center justify-center">
       <ProjectMark name={project} size={16} radius="rounded-inline" className={className} />
-      {mark && (
+      {mark && mark !== "working" && (
         <span
           className={cx(
             "-right-0.5 -top-0.5 absolute size-2 rounded-full ring-2 ring-[var(--rc-sidebar-bg)]",
@@ -905,6 +893,8 @@ export const ThreadRow = memo(function ThreadRow({
   // one wakes, else its age, with a settled thread's check before it.
   const time = (
     <span className="flex min-w-0 items-center gap-1">
+      {chip?.kind === "working" && <Spinner size={10} />}
+      {chip?.kind === "working" && <span className="sr-only">Working</span>}
       {done && !chip && <Check size={12} className="shrink-0" />}
       <span className="min-w-0 truncate tabular">
         {chip?.kind === "working" && startedAt !== undefined ? (
@@ -987,9 +977,12 @@ export const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
+              data-sidebar-current={lit && !dragging && !picked ? "" : undefined}
               className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
-              <RowFill selected={lit || !!dragging} picked={picked} lifted={dragging} />
+              {(!lit || picked || dragging) && (
+                <RowFill selected={!!dragging} picked={picked} lifted={dragging} />
+              )}
               {compact ? (
                 <>
                   <RowIcon mark={compactMark(chip)} project={project} className={markTint} />
@@ -1033,7 +1026,7 @@ export const ThreadRow = memo(function ThreadRow({
                   {/* Line 1: the title, then its state and time (hover actions take their place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
-                      <ProjectMark name={project} size={14} className={markTint} />
+                      <RowIcon mark={compactMark(chip)} project={project} className={markTint} />
                       {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                       {branch && (
                         <span
@@ -1166,9 +1159,10 @@ export const PendingRow = memo(function PendingRow({
           tabIndex={navActive ? 0 : -1}
           onClick={() => selectThread(pending.id)}
           aria-current={selected ? "page" : undefined}
+          data-sidebar-current={selected ? "" : undefined}
           className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
         >
-          <RowFill selected={selected} />
+          {!selected && <RowFill selected={false} />}
           {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
           <span className={cx(ROW_LINE, compact && "col-span-full")}>
             <span className={ROW_LEFT}>
