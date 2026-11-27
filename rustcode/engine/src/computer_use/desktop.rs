@@ -30,11 +30,18 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// `[desktop_control]` in the user's config.toml.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+/// `[desktop_control]` in the user's config.toml. On unless the user turned it
+/// off: macOS permissions and the per-app approval card still gate every action.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct DesktopSettings {
     pub enabled: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 impl DesktopSettings {
@@ -716,18 +723,10 @@ pub(crate) fn save_settings(value: &Value) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.to_string()),
     };
-    let mut file: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
-    if file.get("desktop_control").is_none() {
-        file["desktop_control"] = toml::Value::Table(Default::default());
-    }
-    file["desktop_control"]["enabled"] = toml::Value::Boolean(enabled);
+    let updated = with_enabled(&text, enabled)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let temporary = path.with_extension("toml.tmp");
-    std::fs::write(
-        &temporary,
-        toml::to_string_pretty(&file).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    std::fs::write(&temporary, updated).map_err(|e| e.to_string())?;
     crate::atomic_file::replace_file(&temporary, &path).map_err(|e| e.to_string())?;
     if enabled && value["request_permissions"].as_bool() == Some(true) {
         computer_worker::permissions(true);
@@ -738,9 +737,41 @@ pub(crate) fn save_settings(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// `config.toml` text with `[desktop_control] enabled` set, creating the
+/// table when the file has none yet.
+fn with_enabled(text: &str, enabled: bool) -> Result<String, String> {
+    let mut file: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
+    let section = file
+        .entry("desktop_control")
+        .or_insert_with(|| toml::Value::Table(Default::default()))
+        .as_table_mut()
+        .ok_or("desktop_control in config.toml is not a table")?;
+    section.insert("enabled".into(), toml::Value::Boolean(enabled));
+    toml::to_string_pretty(&file).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_the_switch_adds_the_table_a_config_lacks() {
+        let saved = with_enabled("theme = \"dark\"\n", true).unwrap();
+        let file: toml::Table = toml::from_str(&saved).unwrap();
+        assert_eq!(file["theme"].as_str(), Some("dark"));
+        assert_eq!(file["desktop_control"]["enabled"].as_bool(), Some(true));
+        let off = with_enabled(&saved, false).unwrap();
+        let file: toml::Table = toml::from_str(&off).unwrap();
+        assert_eq!(file["desktop_control"]["enabled"].as_bool(), Some(false));
+        assert!(with_enabled("desktop_control = 1\n", true).is_err());
+    }
+
+    #[test]
+    fn desktop_control_is_on_until_the_user_turns_it_off() {
+        assert!(DesktopSettings::default().enabled);
+        let off: DesktopSettings = toml::from_str("enabled = false").unwrap();
+        assert!(!off.enabled);
+    }
 
     #[test]
     fn tool_calls_become_worker_requests_without_display_fields() {
