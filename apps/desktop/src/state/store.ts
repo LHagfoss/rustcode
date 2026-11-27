@@ -272,7 +272,7 @@ import { parseRecapMinutes } from "./recap";
 import { resetRemoteStatusReads } from "./remoteAccess";
 import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll } from "./runStatePoll";
 import { parseScheduleBook, SCHEDULED_KEY } from "./schedule";
-import { resetScheduledSends, restoreScheduled } from "./scheduledSends";
+import { continueDueScheduled, resetScheduledSends, restoreScheduled } from "./scheduledSends";
 import type { SidebarOrder } from "./sidebarOrder";
 import { resetStops, setStopSink } from "./stopTrace";
 import {
@@ -320,7 +320,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { noticeOnlyHistory } from "./topLevel";
-import { isPrimaryWindow } from "./windowSync";
+import { isPrimaryWindow, isWindowRoleKnown, primaryRoleChanges, whenPrimaryWindow } from "./windowSync";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
 
 export {
@@ -924,21 +924,29 @@ async function handshake(): Promise<void> {
     restoreQueuedThreads();
     void subscribePullWatches(conn).catch(() => {});
     void subscribeWorkflows(conn).catch(() => {});
-    if (isPrimaryWindow()) {
-      restoreScheduled();
-      void syncLinkBook().then(() => wakeTick());
-    }
     const selected = get().selectedId;
     if (selected) void openThread(selected);
-    if (connection === conn && isPrimaryWindow()) void resumeInterrupted(interrupted);
-    if (connection === conn && isPrimaryWindow()) {
-      syncWaitTimers();
-      void continueDueThreads();
-      void continueInternetThreads();
-    }
+    runPrimaryStartup(conn, interrupted);
   } catch (error) {
     engineEvent({ type: "closed", detail: errorText(error) });
   }
+}
+
+function runPrimaryStartup(conn: AcpConnection, interrupted: string[]): void {
+  const alreadySecondary = isWindowRoleKnown() && !isPrimaryWindow();
+  const roleEpoch = primaryRoleChanges();
+  whenPrimaryWindow(() => {
+    if (connection !== conn) return;
+    restoreScheduled();
+    void continueDueScheduled();
+    void syncLinkBook().then(() => wakeTick());
+    if (!alreadySecondary && primaryRoleChanges() - roleEpoch <= 1) {
+      void resumeInterrupted(interrupted);
+    }
+    syncWaitTimers();
+    void continueDueThreads();
+    void continueInternetThreads();
+  });
 }
 
 /** Which v2 methods the engine has: -32601 hides a feature, any other answer (even invalid params) shows it. */
