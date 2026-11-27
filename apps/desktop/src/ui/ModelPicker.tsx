@@ -1275,6 +1275,7 @@ export function ModelPicker({ thread }: { thread?: ThreadState }) {
       onOpenChange={setOpen}
       role="dialog"
       label="Model"
+      tooltip={displayName ?? label}
       // The card focuses its own control (the search field, which the panel does on mount) so the
       // arrow keys act on what the card is for the moment it opens.
       onOpenAutoFocus={(event) => event.preventDefault()}
@@ -1288,7 +1289,6 @@ export function ModelPicker({ thread }: { thread?: ThreadState }) {
         <button
           type="button"
           aria-label="Model"
-          title={displayName ?? label}
           className="flex h-[30px] min-w-0 items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
