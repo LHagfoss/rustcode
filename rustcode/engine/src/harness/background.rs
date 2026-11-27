@@ -151,6 +151,10 @@ impl Background {
         effects
     }
 
+    pub(crate) fn in_prompt(&self) -> bool {
+        self.in_prompt
+    }
+
     /// A `session/prompt` request is starting.
     pub(crate) fn begin_prompt(&mut self) -> Option<Activity> {
         self.in_prompt = true;
