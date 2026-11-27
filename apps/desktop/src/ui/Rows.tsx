@@ -17,6 +17,7 @@ import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../stat
 import { stateOf } from "../state/host";
 import { LINK_LABEL, parseDelivered } from "../state/orchestration";
 import { harnessDenialText } from "../state/permissions";
+import { type PullRequestEvent, pullRequestEvent } from "../state/pullRequestEvent";
 import {
   editMessage,
   forkThread,
@@ -60,11 +61,13 @@ import {
   ExternalLink,
   FileText,
   GitFork,
+  GitMerge,
   Globe,
   Hourglass,
   Image as ImageIcon,
   Layers,
   MessageCircleQuestion,
+  MessageSquare,
   MessageSquareQuote,
   MessagesSquare,
   MoveRight,
@@ -115,6 +118,7 @@ export const UserRow = memo(function UserRow({
   before,
   after,
   newDay,
+  stacked,
 }: {
   item: Item<"user">;
   threadId?: string;
@@ -131,6 +135,8 @@ export const UserRow = memo(function UserRow({
   after?: boolean;
   /** The first message of its day (`newDayMessages`): its time stays in view, with the day. */
   newDay?: boolean;
+  /** The row above is a wake divider too: this one joins its list instead of drawing its own rules. */
+  stacked?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { text, paths, lost } = useMemo(() => splitImageMarkers(stripMarks(item.text)), [item.text]);
@@ -166,7 +172,7 @@ export const UserRow = memo(function UserRow({
   const storedPictures = useStoredImages(threadId ?? "", stored);
   // A turn the app woke the thread for (a delegate finished, or asks): a
   // divider row like a compaction, never a message that reads as the user's.
-  if (item.wake) return <WakeRow text={item.text} flat />;
+  if (item.wake) return <WakeRow text={item.text} flat stacked={stacked} />;
   // The app carrying the thread on after it compacted it: the same kind of divider.
   if (item.continued) {
     return <NoticeRow item={{ kind: "notice", id: item.id, text: noticeLine(item.text), tone: "info" }} />;
@@ -386,14 +392,19 @@ function ReplySideChatButton({ threadId, reply }: { threadId: string; reply: str
   );
 }
 
+const INTERIM_NOTE = "text-callout! leading-chat-sub! text-fg-muted!";
+
 export const AssistantRow = memo(function AssistantRow({
   item,
   streaming = false,
   threadId,
+  interim = false,
 }: {
   item: Item<"assistant">;
   streaming?: boolean;
   threadId?: string;
+  /** A note written between steps of the work, not the answer: it reads one step quieter. */
+  interim?: boolean;
 }) {
   const segments = useMemo(() => splitReply(item.text, !streaming), [item.text, streaming]);
   const reveal = useApp((s) => s.animateStreaming);
@@ -409,7 +420,7 @@ export const AssistantRow = memo(function AssistantRow({
           revealKey={item.id}
           // `.rc-stream` fades each block in. With the per-word reveal on, that would fade a block
           // again as it stops being the last one, so the reveal covers it instead.
-          className={streaming && !reveal ? "rc-stream" : undefined}
+          className={cx(streaming && !reveal && "rc-stream", interim && INTERIM_NOTE) || undefined}
         />
       </div>
     );
@@ -920,11 +931,17 @@ export { HandoffRow } from "./HandoffRow";
  * Its words come from the text alone (`state/wakeNotice.ts`), so a thread
  * reloaded from history shows the row it showed live.
  */
-export function WakeRow({ text, flat }: { text: string; flat?: boolean }) {
+export function WakeRow({ text, flat, stacked }: { text: string; flat?: boolean; stacked?: boolean }) {
   const notice = useMemo(() => wakeNotice(text), [text]);
   if (!notice) {
+    const line = wakeLine(text);
     return (
-      <NoticeRow flat={flat} item={{ kind: "notice", id: "wake", text: wakeLine(text), tone: "info" }} />
+      <NoticeRow
+        flat={flat}
+        stacked={stacked}
+        event={pullRequestEvent(line)}
+        item={{ kind: "notice", id: "wake", text: line, tone: "info" }}
+      />
     );
   }
   const marks = notice.finished.filter((d) => d.harness).slice(0, 3);
@@ -985,11 +1002,17 @@ export function NoticeRow({
   item,
   action,
   flat,
+  stacked,
+  event,
 }: {
   item: Item<"notice">;
   action?: ReactNode;
   /** A wake divider sits in the transcript's own rhythm, without the padding a card needs. */
   flat?: boolean;
+  /** Under another divider: one more line of the same list, without rules of its own. */
+  stacked?: boolean;
+  /** What a pull request did, so a merge and a failure do not look alike. */
+  event?: PullRequestEvent;
 }) {
   // Something that happened to the thread (it compacted), not a problem: a divider, like a switch.
   // Said many times in a row it is still one line, with the count on its end.
@@ -1002,9 +1025,9 @@ export function NoticeRow({
         className={cx("flex items-center gap-3 text-caption text-fg-muted", flat ? "py-0" : "py-1")}
         role="separator"
       >
-        <span className="h-px flex-1 bg-border" />
-        <span className="flex min-w-0 items-center gap-1.5">
-          {item.progress ? <Spinner size={12} /> : <Layers size={12} className="shrink-0 text-fg-faint" />}
+        <span className={cx("h-px flex-1", !stacked && "bg-border")} />
+        <span className={cx("flex min-w-0 items-center gap-1.5", event === "failed" && "text-fg")}>
+          {item.progress ? <Spinner size={12} /> : <NoticeIcon event={event} />}
           <span className="truncate">{item.text}</span>
           {times}
           {item.setting === "auto-compact" && (
@@ -1017,7 +1040,7 @@ export function NoticeRow({
             </button>
           )}
         </span>
-        <span className="h-px flex-1 bg-border" />
+        <span className={cx("h-px flex-1", !stacked && "bg-border")} />
       </div>
     );
   return (
@@ -1025,6 +1048,13 @@ export function NoticeRow({
       {item.text} {times}
     </Callout>
   );
+}
+
+function NoticeIcon({ event }: { event?: PullRequestEvent }) {
+  if (event === "merged") return <GitMerge size={12} className="shrink-0 text-success" />;
+  if (event === "failed") return <CircleX size={12} className="shrink-0 text-danger" />;
+  if (event === "comment") return <MessageSquare size={12} className="shrink-0 text-fg-faint" />;
+  return <Layers size={12} className="shrink-0 text-fg-faint" />;
 }
 
 /** What a finished turn changed and which checks it ran, completing the engine's checkpoint chip
