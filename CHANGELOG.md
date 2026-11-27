@@ -1,3 +1,16 @@
+## [v1.56.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.56.2) - 2026-11-27
+
+### Features
+- Add a Director job that unblocks stopped threads. (#4583)
+- Merge a worktree thread's pull request automatically once its checks pass. (#4579)
+- Add review guides to pull requests. (#4581)
+- Animate the working indicator across the whole turn. (#4578)
+- Quiet progress notes and group pull request updates. (#4584)
+- Record merges of pull requests whose thread had already settled. (#4577)
+- Stop the desktop control switch from crashing the server. (#4574)
+- Pulse a running tool icon by opacity only. (#4582)
+- Darken pasted image thumbnails on hover. (#4576)
+- Slide the open-row fill to nav rows without bolding them. (#4575)
 ## [v1.56.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.56.1) - 2026-11-27
 
 ### Features
