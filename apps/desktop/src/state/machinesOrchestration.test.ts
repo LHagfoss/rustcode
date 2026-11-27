@@ -1077,3 +1077,39 @@ describe("fleet access from remote threads and remote command execution", () => 
     expect(answer).toMatchObject({ success: true, output: "ok", machine_id: LINUX });
   });
 });
+
+describe("merge_when_green from a thread on another machine", () => {
+  test("waits and merges on that machine, in its folder, never on this computer (issue 4565)", async () => {
+    const { resolveGrant } = await import("./host");
+    const pull = {
+      number: 4562,
+      title: "Add rc tools",
+      state: "open",
+      branch: "feat/cli-rc-tools",
+      ci: "pending",
+    };
+    const { conn, sent } = recordingConnection("remote-1", {
+      "_rustcode/pulls/state": () => ({ branch: "feat/cli-rc-tools", pull }),
+      "_rustcode/pulls/merge": (params) => ({
+        number: params.number,
+        state: "merged",
+        merged: true,
+        waitedSecs: 1,
+      }),
+    });
+    watchMachineConnection(LINUX, conn);
+    withRemoteThread();
+    const pending = answerOrchestration(
+      { sessionId: "remote-1", tool: "merge_when_green", args: { number: 4562 } },
+      LINUX,
+    );
+    for (let i = 0; i < 100 && useApp.getState().grant === null; i++) await sleep(10);
+    resolveGrant("once");
+    expect(await pending).toMatchObject({ number: 4562, state: "watching" });
+    for (let i = 0; i < 100 && !sent().some((f) => f.method === "_rustcode/pulls/merge"); i++)
+      await sleep(10);
+    const merge = sent().find((frame) => frame.method === "_rustcode/pulls/merge");
+    expect(merge?.params).toMatchObject({ cwd: LINUX_PROJECT, number: 4562 });
+    expect(connectionFor(LOCAL_HOST)).toBeNull();
+  });
+});

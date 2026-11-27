@@ -245,13 +245,15 @@ async function mergeTracked(
   const finishMerge = async (): Promise<JsonObject> => {
     // The engine's merge loop runs under the call's id, so a drop ends it before it merges.
     const mergeId = call.number ? undefined : call.callId;
+    const host = splitThreadKey(target.id).host;
     const stopMerge = () => {
-      if (mergeId) void request(Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
+      if (mergeId) void requestOn(host, Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
     };
     if (tracked) tracked.onDrop.add(stopMerge);
     let result: Json;
     try {
-      result = await request(
+      result = await requestOn(
+        host,
         Method.pullMerge,
         {
           cwd: projectOf(target),
@@ -349,7 +351,8 @@ export async function cleanupWorktree(
   if (no) return failureJson(no);
   let result: Json;
   try {
-    result = await request(
+    result = await requestOn(
+      splitThreadKey(target.id).host,
       V2Method.worktreeCleanup,
       {
         path: target.worktree.path,
