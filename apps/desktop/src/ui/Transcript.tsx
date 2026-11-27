@@ -106,7 +106,7 @@ import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from 
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
 import { paintMatches, searchable, selecting } from "./transcriptFind";
-import { estimatedRowHeight, rowGap } from "./transcriptHeight";
+import { estimatedRowHeight, flowRow, isWakeRow, rowGap } from "./transcriptHeight";
 import { useNow, useTurnSettle } from "./transcriptTiming";
 import { UpdatesRow } from "./UpdatesRow";
 
@@ -1259,12 +1259,14 @@ export function Transcript({
                         after={rows[v.index - 1]?.item?.kind === "user"}
                         before={rows[v.index + 1]?.item?.kind === "user"}
                         newDay={newDays.has(item.id)}
+                        stacked={!!item.wake && isWakeRow(rows[v.index - 1])}
                       />
                     ) : item?.kind === "assistant" ? (
                       <AssistantRow
                         item={item}
                         threadId={thread.id}
                         streaming={running && v.index === lastIndex}
+                        interim={flowRow(rows[v.index + 1])}
                       />
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={running && !item.done && v.index === lastIndex} />

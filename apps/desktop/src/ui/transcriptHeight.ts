@@ -73,7 +73,7 @@ const FOOTER_GAP = 16;
 const TURN_GAP = 28;
 
 /** A step of the work: one line of the turn's process, not its answer. */
-function flowRow(row: Row | undefined): boolean {
+export function flowRow(row: Row | undefined): boolean {
   if (!row) return false;
   if (row.group || row.agents || row.threads) return true;
   return row.item?.kind === "tool" || row.item?.kind === "thought";
@@ -86,8 +86,14 @@ function flowRow(row: Row | undefined): boolean {
  * leaves this out measures a gap taller a frame later — and the pinned transcript takes that
  * difference back in one step, moving every row above it, the message just sent included.
  */
+/** A divider the app woke the thread with: a run of them reads as one list. */
+export function isWakeRow(row: Row | undefined): boolean {
+  return row?.item?.kind === "user" && !!row.item.wake;
+}
+
 export function rowGap(rows: readonly Row[], index: number): number {
   if (index <= 0) return 0;
+  if (isWakeRow(rows[index]) && isWakeRow(rows[index - 1])) return FLOW_GAP;
   const item = rows[index]?.item;
   const prev = rows[index - 1]?.item;
   if (flowRow(rows[index]) && (flowRow(rows[index - 1]) || rows[index - 1]?.fold)) return FLOW_GAP;
