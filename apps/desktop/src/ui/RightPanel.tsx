@@ -5,13 +5,12 @@
 // it. The card is a second card beside the chat's, on the same ground with the
 // same edge and corners, the window's whole height: it renders into the slot
 // after the main card (`PANEL_SLOT_ID`, App.tsx), so the chat's card narrows
-// as it opens instead of being drawn over, and it carries the panel's toggle
-// itself (ui/PanelToggle.tsx). A narrow window opens it as a sheet over a
+// as it opens instead of being drawn over. A narrow window opens it as a sheet over a
 // scrim instead.
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
-// default), Escape inside the panel and the toggle on the card close it, focus moves in when a shortcut
+// default), Escape inside the panel and the toggle close it, focus moves in when a shortcut
 // opens it with nothing focused, and closing hands the focus back to the
 // header's toggle. The card is beside the composer rather than over it, so a
 // field being typed in always keeps the keyboard.
@@ -151,6 +150,7 @@ function headerToggle(): HTMLElement | null {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
+  const hasHeaderToggle = useApp((s) => s.headerButtons.includes("details"));
   // A side chat opened beside this thread gives its tab that name.
   const peekIsSideChat = useApp((s) => {
     const parent = s.sessions.find((x) => x.id === s.peekId)?.parent;
@@ -350,7 +350,7 @@ export function RightPanel() {
         active={kind}
         onSelect={showPanel}
         height={(overHeader ? HEADER_HEIGHT : 44) + 1}
-        end={<PanelToggle />}
+        end={sheet || !hasHeaderToggle ? <PanelToggle /> : undefined}
       />
       <div
         key={kind}

@@ -1359,8 +1359,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   header's row. The chat lane always has its card's whole width.
   A pane's header row is a 44px band of tabs (`role="tablist"`): Thread info,
   Changes, Pull requests, Issues and Preview, plus the beside thread while it shows,
-  each a quiet icon `Pill` with the open one filled and named; the panel's toggle
-  ("Thread info", `ui/PanelToggle.tsx`) closes it from the band's right end, icon only;
+  each a quiet icon `Pill` with the open one filled and named. The panel's toggle
+  ("Thread info", `ui/PanelToggle.tsx`) sits in the chat header. A sheet or a panel
+  with the header toggle hidden provides a close control at the right end of its tabs.
   a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
   pane is wide enough for split, the git button (commit, push, pull, open a pull

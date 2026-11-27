@@ -3,7 +3,7 @@ import { appPlatform } from "../lib/platform";
 import { toggleRightPanel, useApp, useShortcutHint } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
 import { PanelRight } from "./icons";
-import { cx, Tooltip } from "./primitives";
+import { Tooltip } from "./primitives";
 import { windowControlsInset } from "./WindowControls";
 
 /** What the toggle says, wherever it stands. */
@@ -15,7 +15,7 @@ function subscribe(onChange: () => void) {
 }
 
 /**
- * Whether the open card starts at the window's top and carries the toggle: a docked card does, a
+ * Whether the open card starts at the window's top: a docked card does, a
  * sheet (a narrow window) does not, nor does a window that draws its own controls at the top right
  * (Windows), where the card starts under the header's row.
  */
@@ -26,12 +26,7 @@ export function useCardOverHeader(): boolean {
   );
 }
 
-/**
- * The side panel's toggle, an icon alone: the header carries it while the panel is closed, and the
- * panel's card carries it while open, on the same spot at the card's top right (ui/RightPanel.tsx). Its
- * `data-panel-toggle` takes the keyboard back when a panel closes.
- */
-export function PanelToggle({ className }: { className?: string }) {
+export function PanelToggle() {
   const open = useApp((s) => !!s.panel);
   const key = useShortcutHint("toggle-panel");
   return (
@@ -42,10 +37,7 @@ export function PanelToggle({ className }: { className?: string }) {
         aria-pressed={open}
         data-panel-toggle
         onClick={toggleRightPanel}
-        className={cx(
-          "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
-          className,
-        )}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
       >
         <PanelRight size={16} />
       </button>

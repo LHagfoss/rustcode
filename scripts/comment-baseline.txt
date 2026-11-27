@@ -543,7 +543,7 @@
 2 apps/desktop/src/ui/RestartToApply.tsx
 21 apps/desktop/src/ui/Review.tsx
 12 apps/desktop/src/ui/RightPanel.test.ts
-52 apps/desktop/src/ui/RightPanel.tsx
+51 apps/desktop/src/ui/RightPanel.tsx
 9 apps/desktop/src/ui/RollingNumber.tsx
 5 apps/desktop/src/ui/Rows.test.ts
 48 apps/desktop/src/ui/Rows.tsx
