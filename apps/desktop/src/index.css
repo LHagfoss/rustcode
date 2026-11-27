@@ -1381,6 +1381,13 @@ aside[aria-hidden="true"] + .rc-main-panel {
   background: var(--rc-composer-footer-bg);
   @apply glass-filter;
 }
+.rc-composer-plain-footer .rc-composer-footer {
+  margin-inline: 0;
+  margin-top: 0;
+  padding: 4px 8px 0;
+  background: transparent;
+  backdrop-filter: none;
+}
 /* A drawer is read, not looked through: the sidebar's own solid hue rather than the card's glass,
    its foot cut where the box begins. Its top corners are the box's own radius, one inset inside
    them, and the lift it shares with the card is the only edge it gets. */
