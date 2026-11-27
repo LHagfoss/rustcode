@@ -125,8 +125,10 @@ export function delegationAllowed(
     | "handoff"
     | "project"
     | "schedule"
-    | "exec",
+    | "exec"
+    | "desktop",
 ): boolean {
+  if (kind === "desktop") return false;
   if (mode === "full") return true;
   // Answering a request grants a delegate what it asked for, so it is not part of editing either.
   return mode === "edits" && (kind === "read" || kind === "organize");

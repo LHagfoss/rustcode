@@ -980,7 +980,8 @@ export interface GrantAsk {
     | "handoff"
     | "project"
     | "schedule"
-    | "exec";
+    | "exec"
+    | "desktop";
   caller: string;
   callerTitle: string;
   /** A request that needs individual approval, even in a Full access thread. */
@@ -1000,6 +1001,10 @@ export interface GrantAsk {
   standalone?: boolean;
   /** The paired machine a start or a message acts on, named on the card; absent for this computer. */
   machine?: string;
+  /** The remote machine asking to control this computer's desktop. */
+  fromMachine?: string;
+  /** Whether the target desktop app always asks on every action (password managers, System Settings). */
+  sensitive?: boolean;
 }
 
 export type GrantChoice = "always" | "once" | "deny";

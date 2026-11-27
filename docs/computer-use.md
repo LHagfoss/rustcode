@@ -170,3 +170,29 @@ Turning the switch off, closing the thread, or revoking `desktop:<thread>`
 through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
 (`rc computer-worker`) starts on the first desktop call and exits after two
 idle minutes; its log is `<config>/computer-use/desktop-worker.log`.
+
+### Across paired machines
+
+Every `computer_*` tool accepts an optional `machine` argument (the machine id
+or name from `list_machines`). A thread running on another paired computer—for
+example a headless Linux server—can control your Mac's desktop while the
+RustCode desktop app is open on the Mac and Desktop control is switched on
+there:
+
+- On machines where desktop control is off or unsupported locally, the seven
+  `computer_*` tools remain discoverable through `tool_search` (`computer`)
+  whenever an app supporting orchestration version 23 or newer is attached.
+- The call routes from the remote thread's engine through the RustCode app on
+  the controlled computer to that computer's local engine
+  (`_rustcode/desktop/call`).
+- `_rustcode/desktop/call` is never exposed over remote ACP (`acp_relay.rs`),
+  and remote `_rustcode/settings/set` cannot enable `desktop-control`: no
+  paired device can turn desktop control on or drive a desktop without the app
+  open on that computer.
+- The approval dialog opens on the controlled computer, names the remote
+  machine and thread, redacts typed text, and is never auto-approved by Full
+  access. The menu bar indicator names both the app and the remote machine
+  (for example `Safari · Ubuntu VPS`).
+- Remote `computer_screenshot` results that exceed 600 KiB as PNG are
+  re-encoded as JPEG at the same pixel dimensions so they stay inside the
+  remote ACP frame limit without shifting click coordinates.

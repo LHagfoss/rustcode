@@ -47,6 +47,7 @@ import { type Json, type JsonObject, obj, RpcError } from "../acp/jsonrpc";
 import { delegateParent, Method } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
 import { cleanupWorktree, handoffWorktree, mergeWhenGreen, worktreeStatus } from "./hostDelegates";
+import { runDesktopControl } from "./hostDesktop";
 import {
   answerRequest,
   compactSession,
@@ -460,7 +461,7 @@ export function ruleThread(s: AppState, id: string): RuleThread | undefined {
 let resolveAsk: ((choice: GrantChoice) => void) | null = null;
 
 /** Ask once; a second request while one waits is refused, and the agent can try again. */
-function ask(question: GrantAsk, call?: Droppable): Promise<GrantChoice> | Failure {
+export function askUserGrant(question: GrantAsk, call?: Droppable): Promise<GrantChoice> | Failure {
   if (useApp.getState().grant) return failure("busy", "another thread's request is waiting for the user");
   // The grant dialog names the caller and the request; a toast under it would repeat them.
   return new Promise((resolve) => {
@@ -508,6 +509,8 @@ export function verb(q: GrantAsk): string {
       return q.onceOnly ? `create the loop “${q.target}”` : `change the loop “${q.target}”`;
     case "exec":
       return `run a command on ${q.target}`;
+    case "desktop":
+      return `control ${q.target} on this computer`;
   }
 }
 
@@ -536,6 +539,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   project: "update_project",
   schedule: "schedule_task",
   exec: "run_machine_command",
+  desktop: "computer_click",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -555,6 +559,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   project: "Changed a project",
   schedule: "Changed loops",
   exec: "Ran a machine command",
+  desktop: "Controlled an app",
 };
 
 export async function permitted(
@@ -597,7 +602,7 @@ export async function permitted(
     // The call's row and its notice above are the record; no toast repeats an allowed call.
     return null;
   }
-  const asked = ask(question, call);
+  const asked = askUserGrant(question, call);
   if (isFailure(asked)) return asked;
   const choice = await asked;
   // Answered after the call was dropped: the card is gone or was answered too late, and neither
@@ -885,6 +890,8 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       return runMachineCommand(machine, caller, call);
     }
+    case "computer_desktop":
+      return runDesktopControl(caller, call, callerHost);
     case "search_sessions": {
       const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);

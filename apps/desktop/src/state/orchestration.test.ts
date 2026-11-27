@@ -400,7 +400,7 @@ describe("orchestration rules", () => {
     // below 18, `create_loop` below 19, `compact_session` below 20, `update_loop` below 21,
     // and `run_machine_command` below 22, and refuses a call that carries one: the app speaks
     // the newest, so it is offered all of them.
-    expect(CAPABILITY_VERSION).toBe(22);
+    expect(CAPABILITY_VERSION).toBe(23);
   });
 
   test("run_machine_command parses command, machine, cwd and timeout and rejects bad values", () => {

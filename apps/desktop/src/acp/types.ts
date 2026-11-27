@@ -116,6 +116,8 @@ export const Method = {
   projectClone: "_rustcode/project/clone",
   /** Run a shell command on a machine in the fleet (`engine/src/acp/machine_exec.rs`). */
   machineExec: "_rustcode/machine/exec",
+  /** Run one desktop-control tool on this computer (`engine/src/acp/desktop_call.rs`). */
+  desktopCall: "_rustcode/desktop/call",
   /**
    * Update RustCode on a machine when another asks (`engine/src/acp/machine_update.rs`): `start`,
    * `status`, and `claim` for the app on that machine.
