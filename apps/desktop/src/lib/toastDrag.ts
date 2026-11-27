@@ -1,50 +1,17 @@
-// Pure drag math and one DOM guard (ui/Toaster.tsx): the card slides toward its own edge only
-// (left in the bottom-left corner) and rubber-bands any other way; past 48px or a quick flick that
-// way it dismisses, and a barely-moving press is a click. A drag never selects text: the guard
-// turns selection off and blocks `selectstart` until released, and every way a drag ends
-// releases it.
-
 /** How far a drag must travel to dismiss the toast. */
 export const TOAST_DISMISS_PX = 48;
 /** A flick faster than this, in px/ms over the whole drag, dismisses short of 48px. */
 export const TOAST_FLICK_SPEED = 0.5;
 /** ...but only once it has gone this far, so a fast twitch is not a dismissal. */
 export const TOAST_FLICK_PX = 12;
-/** Every way but right resists. */
-const RESIST = 6;
 /** Less travel than this, end to end, is a click on the card rather than a drag. */
 export const TOAST_CLICK_PX = 4;
 export const TOAST_DRAG_MS = 160;
 
-export interface DragState {
-  /** Sideways offset: full to the right, resisted to the left. */
-  dx: number;
-  /** Vertical offset, resisted both ways. */
-  dy: number;
-  /** How far it has travelled toward the edge, for the fade. */
-  away: number;
-  dismiss: boolean;
-}
-
-/**
- * `ms` is how long the drag has lasted, for a flick; omit it while the pointer moves. `sign` is
- * the dismissing side: 1 for right, -1 for left.
- */
-export function dragState(
-  dx: number,
-  dy: number,
-  ms = Number.POSITIVE_INFINITY,
-  sign: 1 | -1 = 1,
-): DragState {
-  const toward = dx * sign;
-  const followX = toward > 0 ? dx : dx / RESIST;
-  const flick = toward >= TOAST_FLICK_PX && toward / Math.max(ms, 1) > TOAST_FLICK_SPEED;
-  return {
-    dx: followX,
-    dy: dy / RESIST,
-    away: Math.max(0, toward),
-    dismiss: toward > TOAST_DISMISS_PX || flick,
-  };
+export function dragState(dx: number, ms = Number.POSITIVE_INFINITY) {
+  const away = Math.abs(dx);
+  const flick = away >= TOAST_FLICK_PX && away / Math.max(ms, 1) > TOAST_FLICK_SPEED;
+  return { dx, away, dismiss: away > TOAST_DISMISS_PX || flick };
 }
 
 /** Opacity while dragging: it fades as it travels, never below 0.2. */
@@ -52,9 +19,9 @@ export function dragOpacity(away: number): number {
   return Math.max(0.2, 1 - away / 200);
 }
 
-/** Where a dismissed card flies to: off the window's edge on its side. */
-export function toastExit(sign: 1 | -1): string {
-  return `translateX(${sign * 120}%)`;
+/** Where a dismissed card flies to: in the direction of the swipe. */
+export function toastExit(dx: number): string {
+  return `translateX(${Math.sign(dx) * 120}%)`;
 }
 
 /** A press and release this close together is a click on the card: it dismisses. */
