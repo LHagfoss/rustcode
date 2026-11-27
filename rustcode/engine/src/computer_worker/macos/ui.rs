@@ -1,41 +1,47 @@
 //! What the user sees while an agent drives this Mac: the agent's own cursor,
-//! which glides to each element before it acts and names the app it is
-//! controlling. Desktop control stops from Settings, or when the app quits.
+//! which glides to each element before it acts, floats gently for a while
+//! after, and then rests where it last acted, even across restarts of the
+//! app. Desktop control stops from Settings, or when the app quits.
 
 use super::ffi::{self, CGPoint, CGRect, CGSize};
 use crate::computer_worker::cursor_image;
-use crate::computer_worker::cursor_motion::{FRAMES_PER_SECOND, Glide, Point};
+use crate::computer_worker::cursor_motion::{FRAMES_PER_SECOND, Glide, Point, ease_in_out};
 use dispatch2::DispatchQueue;
 use objc2::msg_send;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject};
 use std::cell::RefCell;
 use std::ffi::{CString, c_void};
-use std::sync::Mutex;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const CURSOR_POINTS: f64 = 24.0;
-const LABEL_WIDTH: f64 = 150.0;
-const LABEL_HEIGHT: f64 = 18.0;
-const HIDE_AFTER: Duration = Duration::from_secs(4);
 const FADE_IN_FRAMES: u32 = 8;
-const FADE_OUT_FRAMES: u32 = 18;
 const SETTLE: Duration = Duration::from_millis(90);
 const PRESS: Duration = Duration::from_millis(110);
-const PRESSED_SCALE: f64 = 0.8;
+const PRESSED_SCALE: f64 = 0.82;
+const FLOAT_FRAMES_PER_SECOND: f64 = 30.0;
+const FLOAT_PERIOD_SECS: f64 = 4.0;
+const FLOAT_SWAY: f64 = 1.6;
+const FLOAT_BOB: f64 = 2.0;
+const FLOAT_LIFT: f64 = 1.6;
+const FLOAT_HOLD_SECS: f64 = 0.5;
+const FLOAT_EASE_IN_SECS: f64 = 0.8;
+const FLOAT_FOR_SECS: f64 = 30.0;
+const FLOAT_EASE_OUT_SECS: f64 = 1.2;
+const RESTING_POLL: Duration = Duration::from_millis(250);
 const ACCESSORY_POLICY: isize = 1;
 const BORDERLESS: usize = 0;
 const BUFFERED: usize = 2;
 const SCREEN_SAVER_LEVEL: isize = 1000;
 const ALL_SPACES_STATIONARY_IGNORES_CYCLE: usize = 1 | 16 | 64 | 256;
 const SHARING_NONE: usize = 0;
-const DEFAULT_LABEL: &str = "RustCode";
 const SCALE_PROPORTIONALLY_UP_OR_DOWN: usize = 3;
 
 struct Ui {
     window: Retained<AnyObject>,
-    label: Retained<AnyObject>,
     image: Retained<AnyObject>,
     image_frame: CGRect,
     size: CGSize,
@@ -47,23 +53,29 @@ thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
 }
 
-static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
+/// Where the cursor rests: the last point it acted on.
 static POSITION: Mutex<Option<CGPoint>> = Mutex::new(None);
+/// Where its tip is drawn now, float included.
+static DRAWN: Mutex<Option<CGPoint>> = Mutex::new(None);
+/// When it last came to rest, which starts its float.
+static RESTED: Mutex<Option<Instant>> = Mutex::new(None);
+static MOVING: AtomicBool = AtomicBool::new(false);
 static BEND_LEFT: AtomicBool = AtomicBool::new(true);
+static CLOCK: OnceLock<Instant> = OnceLock::new();
 
 fn class(name: &str) -> &'static AnyClass {
     let name = CString::new(name).expect("class names have no NUL");
     AnyClass::get(&name).unwrap_or_else(|| panic!("AppKit class {name:?} is missing"))
 }
 
-fn ns_string(text: &str) -> Retained<AnyObject> {
-    let text = CString::new(text.replace('\0', "")).expect("NULs were removed");
-    // SAFETY: the C string is valid UTF-8 for the call.
-    unsafe { msg_send![class("NSString"), stringWithUTF8String: text.as_ptr()] }
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Run AppKit on the main thread until the user stops the worker. Never returns.
-pub fn run_main_thread() -> ! {
+/// Run AppKit on the main thread until the user stops the worker. Never
+/// returns. `restore` brings the cursor back where it last rested, for the
+/// worker the app keeps running.
+pub fn run_main_thread(restore: bool) -> ! {
     autoreleasepool(|_| {
         // SAFETY: called once, on the main thread, before the run loop starts.
         unsafe {
@@ -71,7 +83,14 @@ pub fn run_main_thread() -> ! {
             let _: bool = msg_send![&app, setActivationPolicy: ACCESSORY_POLICY];
             let ui = build();
             UI.with(|slot| *slot.borrow_mut() = Some(ui));
-            std::thread::spawn(hide_when_idle);
+            if let Some(point) = restore.then(saved_position).flatten() {
+                *lock(&POSITION) = Some(point);
+                std::thread::spawn(move || {
+                    appear(point);
+                    *lock(&RESTED) = Some(Instant::now());
+                });
+            }
+            std::thread::spawn(float);
             let _: () = msg_send![&app, run];
         }
     });
@@ -81,17 +100,13 @@ pub fn run_main_thread() -> ! {
 unsafe fn build() -> Ui {
     let scale = 2.0;
     let cursor = cursor_image::draw(CURSOR_POINTS, scale);
-    let cursor_size = CGSize {
+    let size = CGSize {
         width: f64::from(cursor.width) / scale,
         height: f64::from(cursor.height) / scale,
     };
     let tip = CGPoint {
         x: cursor.tip.0 / scale,
         y: cursor.tip.1 / scale,
-    };
-    let size = CGSize {
-        width: cursor_size.width + 4.0 + LABEL_WIDTH,
-        height: cursor_size.height + LABEL_HEIGHT,
     };
     // SAFETY: the caller is on the main thread; every selector is AppKit's.
     unsafe {
@@ -121,48 +136,23 @@ unsafe fn build() -> Ui {
         ];
         let allocated: Allocated<AnyObject> = msg_send![class("NSImage"), alloc];
         let image: Retained<AnyObject> = msg_send![allocated, initWithData: &*data];
-        let _: () = msg_send![&image, setSize: cursor_size];
+        let _: () = msg_send![&image, setSize: size];
         let view: Retained<AnyObject> =
             msg_send![class("NSImageView"), imageViewWithImage: &*image];
         let _: () = msg_send![&view, setImageScaling: SCALE_PROPORTIONALLY_UP_OR_DOWN];
         let image_frame = CGRect {
-            origin: CGPoint {
-                x: 0.0,
-                y: LABEL_HEIGHT,
-            },
-            size: cursor_size,
+            origin: CGPoint::default(),
+            size,
         };
         let _: () = msg_send![&view, setFrame: image_frame];
         let _: () = msg_send![&content, addSubview: &*view];
 
-        let label: Retained<AnyObject> =
-            msg_send![class("NSTextField"), labelWithString: &*ns_string(DEFAULT_LABEL)];
-        let white: Retained<AnyObject> = msg_send![class("NSColor"), whiteColor];
-        let fill: Retained<AnyObject> = msg_send![
-            class("NSColor"),
-            colorWithSRGBRed: 232.0f64 / 255.0,
-            green: 116.0f64 / 255.0,
-            blue: 59.0f64 / 255.0,
-            alpha: 1.0f64
-        ];
-        let font: Retained<AnyObject> = msg_send![class("NSFont"), boldSystemFontOfSize: 11.0f64];
-        let _: () = msg_send![&label, setFont: &*font];
-        let _: () = msg_send![&label, setTextColor: &*white];
-        let _: () = msg_send![&label, setBackgroundColor: &*fill];
-        let _: () = msg_send![&label, setDrawsBackground: true];
-        let _: () = msg_send![
-            &label,
-            setFrame: CGRect::new(cursor_size.width * 0.6, 0.0, LABEL_WIDTH, LABEL_HEIGHT)
-        ];
-        let _: () = msg_send![&content, addSubview: &*label];
-
         Ui {
             window,
-            label,
             image: view,
             image_frame,
             size,
-            tip: CGPoint { x: tip.x, y: tip.y },
+            tip,
             shown: false,
         }
     }
@@ -174,16 +164,12 @@ fn primary_height() -> f64 {
 }
 
 /// Glide the agent's cursor to a global point (top-left origin, points)
-/// along an eased arc, from where it last was (or from the user's pointer
+/// along an eased arc, from where it is drawn (or from the user's pointer
 /// the first time), and give the user a moment to see where the agent is
-/// about to act.
+/// about to act. It rests there afterwards.
 pub fn glide(point: CGPoint) {
-    touch();
-    let from = POSITION
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .or_else(pointer_location)
-        .unwrap_or(point);
+    MOVING.store(true, Ordering::SeqCst);
+    let from = lock(&DRAWN).or_else(pointer_location).unwrap_or(point);
     let bend_left = BEND_LEFT.fetch_xor(true, Ordering::Relaxed);
     let plan = Glide::plan(motion_point(from), motion_point(point), bend_left);
     appear(from);
@@ -193,23 +179,20 @@ pub fn glide(point: CGPoint) {
             x: step.x,
             y: step.y,
         });
-        touch();
         std::thread::sleep(frame);
     }
-    *POSITION.lock().unwrap_or_else(|e| e.into_inner()) = Some(point);
+    *lock(&POSITION) = Some(point);
+    save_position(point);
     std::thread::sleep(SETTLE);
+    *lock(&RESTED) = Some(Instant::now());
+    MOVING.store(false, Ordering::SeqCst);
 }
 
 /// Show a press at the cursor's tip just before a click lands.
 pub fn press() {
-    touch();
     set_pressed(true);
     std::thread::sleep(PRESS);
     set_pressed(false);
-}
-
-fn touch() {
-    *LAST_MOVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
 }
 
 fn motion_point(point: CGPoint) -> Point {
@@ -228,6 +211,7 @@ fn pointer_location() -> Option<CGPoint> {
 }
 
 fn place(point: CGPoint) {
+    *lock(&DRAWN) = Some(point);
     let height = primary_height();
     DispatchQueue::main().exec_async(move || {
         UI.with(|slot| {
@@ -323,65 +307,101 @@ fn appear(point: CGPoint) {
     }
 }
 
-/// Name the app the agent is controlling in the cursor's label.
-pub fn set_activity(label: Option<String>) {
-    DispatchQueue::main().exec_async(move || {
-        UI.with(|slot| {
-            let slot = slot.borrow();
-            let Some(ui) = slot.as_ref() else { return };
-            let short = label.as_deref().unwrap_or(DEFAULT_LABEL);
-            let short: String = short.chars().take(28).collect();
-            // SAFETY: this runs on the main thread, which owns the label.
-            unsafe {
-                let _: () =
-                    msg_send![&ui.label, setStringValue: &*ns_string(&format!(" {short} "))];
-            }
-        });
-    });
+/// How far the float lifts the cursor off its resting point `secs` into its
+/// clock: a slow sway and bob that never snaps back, as its phase runs on
+/// across moves.
+fn float_offset(secs: f64) -> (f64, f64) {
+    let angle = secs.rem_euclid(FLOAT_PERIOD_SECS) / FLOAT_PERIOD_SECS * std::f64::consts::TAU;
+    (
+        FLOAT_SWAY * angle.sin(),
+        FLOAT_BOB * angle.cos() - FLOAT_LIFT,
+    )
 }
 
-fn hide_when_idle() {
-    let frame = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
+/// How strongly the cursor floats `rested` seconds after it came to rest:
+/// still for a moment, easing in, then easing out to lie still on its point.
+fn float_amplitude(rested: f64) -> f64 {
+    let rise = ease_in_out((rested - FLOAT_HOLD_SECS) / FLOAT_EASE_IN_SECS);
+    let fall = ease_in_out((rested - FLOAT_FOR_SECS) / FLOAT_EASE_OUT_SECS);
+    rise * (1.0 - fall)
+}
+
+fn float() {
+    let clock = *CLOCK.get_or_init(Instant::now);
+    let frame = Duration::from_secs_f64(1.0 / FLOAT_FRAMES_PER_SECOND);
+    let mut still_since: Option<Instant> = None;
     loop {
-        std::thread::sleep(Duration::from_millis(250));
-        let idle = LAST_MOVE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some_and(|at| at.elapsed() > HIDE_AFTER);
-        if !idle {
+        let rested = *lock(&RESTED);
+        let base = *lock(&POSITION);
+        let (Some(rested), Some(base)) = (rested, base) else {
+            std::thread::sleep(RESTING_POLL);
             continue;
-        }
-        let mut interrupted = false;
-        for step in (0..FADE_OUT_FRAMES).rev() {
-            if !still_idle() {
-                interrupted = true;
-                break;
-            }
-            set_alpha(f64::from(step) / f64::from(FADE_OUT_FRAMES));
+        };
+        if MOVING.load(Ordering::SeqCst) {
             std::thread::sleep(frame);
-        }
-        if interrupted || !still_idle() {
-            set_alpha(1.0);
             continue;
         }
-        *LAST_MOVE.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        DispatchQueue::main().exec_async(|| {
-            UI.with(|slot| {
-                let mut slot = slot.borrow_mut();
-                let Some(ui) = slot.as_mut() else { return };
-                // SAFETY: this runs on the main thread, which owns the window.
-                unsafe {
-                    let _: () = msg_send![&ui.window, orderOut: Option::<&AnyObject>::None];
-                }
-                ui.shown = false;
-            });
+        let since = rested.elapsed().as_secs_f64();
+        if since > FLOAT_FOR_SECS + FLOAT_EASE_OUT_SECS {
+            if still_since != Some(rested) {
+                place(base);
+                still_since = Some(rested);
+            }
+            std::thread::sleep(RESTING_POLL);
+            continue;
+        }
+        let amplitude = float_amplitude(since);
+        let (dx, dy) = float_offset(clock.elapsed().as_secs_f64());
+        place(CGPoint {
+            x: base.x + dx * amplitude,
+            y: base.y + dy * amplitude,
         });
+        std::thread::sleep(frame);
     }
 }
 
-fn still_idle() -> bool {
-    LAST_MOVE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some_and(|at| at.elapsed() > HIDE_AFTER)
+fn position_file() -> Option<PathBuf> {
+    crate::config::get_config_dir().map(|dir| dir.join("run").join("cursor-position"))
+}
+
+fn save_position(point: CGPoint) {
+    if let Some(path) = position_file() {
+        let _ = std::fs::write(path, format!("{} {}", point.x, point.y));
+    }
+}
+
+/// Where the cursor last rested, if that point is still on a display.
+fn saved_position() -> Option<CGPoint> {
+    let text = std::fs::read_to_string(position_file()?).ok()?;
+    let (x, y) = text.trim().split_once(' ')?;
+    let point = CGPoint {
+        x: x.parse().ok()?,
+        y: y.parse().ok()?,
+    };
+    let mut display = 0u32;
+    let mut count = 0u32;
+    // SAFETY: both outputs outlive the call, which writes at most one display.
+    let found = unsafe { ffi::CGGetDisplaysWithPoint(point, 1, &raw mut display, &raw mut count) };
+    (found == 0 && count > 0).then_some(point)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_float_eases_in_after_a_pause_and_settles_back_on_the_point() {
+        assert_eq!(float_amplitude(0.0), 0.0);
+        assert_eq!(float_amplitude(FLOAT_HOLD_SECS), 0.0);
+        assert_eq!(float_amplitude(FLOAT_HOLD_SECS + FLOAT_EASE_IN_SECS), 1.0);
+        assert_eq!(float_amplitude(FLOAT_FOR_SECS + FLOAT_EASE_OUT_SECS), 0.0);
+    }
+
+    #[test]
+    fn the_float_stays_within_a_few_points() {
+        for tenth in 0..40 {
+            let (dx, dy) = float_offset(f64::from(tenth) / 10.0);
+            assert!(dx.abs() <= FLOAT_SWAY && dy.abs() <= FLOAT_BOB + FLOAT_LIFT);
+        }
+    }
 }

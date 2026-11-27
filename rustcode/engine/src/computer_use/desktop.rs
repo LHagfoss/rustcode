@@ -633,18 +633,6 @@ pub async fn bridge(call: BridgeCall, cancel: &CancellationToken) -> Result<Valu
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let activity = match remote {
-        Some(from) => format!("{} · {from}", app.name),
-        None => app.name.clone(),
-    };
-    let _ = super::desktop_worker::call(
-        Op::Activity {
-            label: Some(activity),
-        },
-        ACTION_LIMIT,
-        cancel,
-    )
-    .await;
     let outcome = super::desktop_worker::call(op, ACTION_LIMIT, cancel).await;
     let mut fields = json!({
         "session_id": call.session_id,
@@ -705,14 +693,6 @@ async fn run(
         }
     }
     claim(&request.session_id, &app.key, &app.name)?;
-    let _ = super::desktop_worker::call(
-        Op::Activity {
-            label: Some(app.name.clone()),
-        },
-        ACTION_LIMIT,
-        cancel,
-    )
-    .await;
     let outcome = super::desktop_worker::call(op, ACTION_LIMIT, cancel).await;
     crate::logger::operational_event(
         "computer_use.action",

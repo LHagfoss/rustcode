@@ -153,10 +153,9 @@ Start a new thread after changing it.
    (`x`, `y` with `window_id`) are pixels of the latest screenshot of that
    window, for canvases and custom views without a usable tree.
 
-Before each action the **agent's cursor**, an arrow in RustCode's colour with
-the app's name, glides to where it is about to act, and hides after five idle
-seconds. It is drawn by RustCode in a click-through window that screen
-captures leave out.
+Before each action the **agent's cursor**, a rounded arrow in RustCode's
+colour, glides to where it is about to act and stays there afterwards. It is
+drawn by RustCode in a click-through window that screen captures leave out.
 
 ### Approval
 
@@ -174,13 +173,19 @@ captures leave out.
 
 The agent's cursor glides to each target on a short eased arc (longer moves
 take longer, up to about 0.7 s), starting from the user's pointer the first
-time, shrinks briefly on each click, and fades out after four idle seconds.
-Its label names the app being controlled; nothing is added to the menu bar.
+time, and shrinks briefly on each click. It then floats gently for half a
+minute and rests where it last acted, and the app's worker shows it there
+again after a restart (`<config>/run/cursor-position`). Its outline is Cua
+Driver's default cursor (MIT). Nothing is added to the menu bar.
 Turning the switch off, closing the thread, or revoking `desktop:<thread>`
 through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
 (`rc computer-worker`) runs as a child of the RustCode app, listening on
-`<config>/run/computer-worker.sock` for the engine (the same `rc` binary only),
-and starts again if it exits; its log is
+`<config>/run/computer-worker.sock` for the engine (the same `rc` binary, or
+one with the same stable signature, so an engine started before an update
+still connects), and starts again if it exits. When a check finds a
+permission missing, the worker asks a fresh copy of itself every three seconds
+for 15 minutes and starts over in place once the user has granted it, so a
+grant in System Settings applies without restarting the app; its log is
 `<config>/computer-use/hosted-worker.log`. With the app closed, the engine
 starts a worker of its own on the first desktop call, which exits after two
 idle minutes; its log is `<config>/computer-use/desktop-worker.log`.
@@ -205,8 +210,7 @@ there:
   open on that computer.
 - The approval dialog opens on the controlled computer, names the remote
   machine and thread, redacts typed text, and is never auto-approved by Full
-  access. The cursor's label names both the app and the remote machine
-  (for example `Safari · Ubuntu VPS`).
+  access.
 - Remote `computer_screenshot` results that exceed 600 KiB as PNG are
   re-encoded as JPEG at the same pixel dimensions so they stay inside the
   remote ACP frame limit without shifting click coordinates.

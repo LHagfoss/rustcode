@@ -6,6 +6,7 @@ mod ax;
 mod capture;
 mod ffi;
 mod input;
+pub mod signature;
 mod ui;
 
 use super::{MAX_ELEMENTS, Op, keys};
@@ -51,10 +52,6 @@ fn dispatch(op: Op) -> Result<Value, String> {
             "windows": capture::windows().iter().map(capture::Window::json).collect::<Vec<_>>(),
         })),
         Op::App { pid } => app(pid),
-        Op::Activity { label } => {
-            ui::set_activity(label);
-            Ok(json!({}))
-        }
         Op::Screenshot { pid, window_id } => screenshot(pid, window_id),
         Op::Snapshot {
             pid,

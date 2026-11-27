@@ -153,11 +153,11 @@ What the first slice built, and where it departs from the plan above:
   and focus.
 - **Hosted worker.** The app starts `rc computer-worker --listen` as its child, so macOS checks
   RustCode's own TCC grants rather than the bare `rc` binary's; the engine connects over
-  `<config>/run/computer-worker.sock` (same-binary peers only) and starts its own worker only
+  `<config>/run/computer-worker.sock` (same binary, or the same stable signature after an update) and starts its own worker only
   when no app is open.
 - **Visible activity and stop.** The agent's own cursor (drawn by RustCode, excluded from
   captures) glides to each target on an eased arc (`computer_worker/cursor_motion.rs`) and
-  names the app in its label. There is no menu bar item: the Settings switch, or quitting the
+  rests where it last acted, with no label. There is no menu bar item: the Settings switch, or quitting the
   app, ends the worker and every grant. A global shortcut is not built.
 - **Pixels.** `x` and `y` are pixels of the latest screenshot of that window, converted by the
   worker, rather than display points.

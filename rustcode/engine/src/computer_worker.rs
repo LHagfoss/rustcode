@@ -97,9 +97,6 @@ pub enum Op {
         #[serde(default)]
         foreground: bool,
     },
-    Activity {
-        label: Option<String>,
-    },
 }
 
 impl Op {
@@ -170,7 +167,7 @@ pub fn run() -> ! {
         }
         serve(macos::handle);
     });
-    macos::run_main_thread()
+    macos::run_main_thread(hosted::listening())
 }
 
 /// Run the worker until stdin closes. Never returns.
@@ -271,7 +268,6 @@ fn unsupported(op: Op) -> Result<Value, String> {
             "accessibility": Value::Null,
             "screen_recording": Value::Null,
         })),
-        Op::Activity { .. } => Ok(json!({})),
         _ => Err(unsupported_reason()
             .unwrap_or("Desktop control is not available here")
             .to_owned()),
