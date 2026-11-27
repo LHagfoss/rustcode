@@ -127,7 +127,7 @@ export function AttachmentStrip({
         type="button"
         aria-label={`Open ${a.name}`}
         onClick={() => openLightbox(pictures, index)}
-        className="block aspect-square w-full overflow-hidden rounded-lg bg-code-bg ring-1 ring-inset ring-border-strong hover:ring-fg-muted"
+        className="relative block aspect-square w-full overflow-hidden rounded-lg bg-code-bg after:pointer-events-none after:absolute after:inset-0 after:rounded-lg after:ring-1 after:ring-inset after:ring-border hover:after:bg-bg/30 focus-visible:outline-none focus-visible:after:ring-accent"
       >
         <img src={pictures[index]?.src} alt={a.name} title={a.name} className="size-full object-contain" />
       </button>
