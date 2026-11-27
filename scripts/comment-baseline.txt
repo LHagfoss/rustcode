@@ -466,7 +466,7 @@
 210 apps/desktop/src/ui/Composer.tsx
 30 apps/desktop/src/ui/ComposerDrawer.tsx
 30 apps/desktop/src/ui/ComposerFooter.tsx
-23 apps/desktop/src/ui/ComposerUsage.tsx
+21 apps/desktop/src/ui/ComposerUsage.tsx
 1 apps/desktop/src/ui/ComputerUseGroup.tsx
 9 apps/desktop/src/ui/ConnectRequests.tsx
 5 apps/desktop/src/ui/DelegateLanes.tsx
