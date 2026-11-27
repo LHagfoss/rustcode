@@ -1257,7 +1257,11 @@ export function Transcript({
                         elapsedMs={row.working.elapsedMs}
                       />
                     ) : row.activity ? (
-                      <LiveActivityRow label={row.activity} done={row.activityDone} />
+                      <LiveActivityRow
+                        label={row.activity}
+                        done={row.activityDone}
+                        seed={thread.turn?.startedAt ?? thread.enginePhase?.startedAt}
+                      />
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">
                         <span className="h-px flex-1 bg-border" />

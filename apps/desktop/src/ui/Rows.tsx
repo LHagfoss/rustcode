@@ -10,6 +10,7 @@ import { openPath } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
+import { splitWorkingLabel, turnFlavor } from "../lib/workingMotion";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
@@ -88,6 +89,7 @@ import { turnActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
 import { WorkflowCard } from "./WorkflowRuns";
+import { DotMatrix, WaveWord } from "./WorkingIndicator";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -460,9 +462,9 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
           className="-mx-0.5 flex min-h-6 min-w-0 max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
-            {live ? <Spinner size={12} /> : <Brain size={14} className="text-fg-faint" />}
+            {live ? <DotMatrix pattern="ripple" size={14} /> : <Brain size={14} className="text-fg-faint" />}
           </span>
-          <span className="shrink-0">{label}</span>
+          {live ? <WaveWord word="Thinking" /> : <span className="shrink-0">{label}</span>}
           {!open && preview && (
             <>
               <span aria-hidden className="size-0.5 shrink-0 rounded-full bg-fg-faint" />
@@ -1369,17 +1371,26 @@ export function WorkingRow({
 }
 
 /** The running turn's foot while nothing else shows it working: what it does now, shimmering. */
-export function LiveActivityRow({ label, done }: { label: string; done?: boolean }) {
+export function LiveActivityRow({ label, done, seed }: { label: string; done?: boolean; seed?: number }) {
+  const flavor = turnFlavor(seed);
+  const { word, detail } = splitWorkingLabel(label, flavor.word);
   return (
-    <div className="flex min-h-6 items-center gap-2 text-body" role="status" aria-live="polite">
+    <div className="flex min-h-6 min-w-0 items-center gap-2 text-body" role="status" aria-live="polite">
       <span className="flex w-[18px] shrink-0 justify-center">
         {done ? (
           <CircleCheck size={14} className="text-success rc-dot-in" aria-hidden />
         ) : (
-          <Spinner size={14} />
+          <DotMatrix pattern={flavor.pattern} size={16} />
         )}
       </span>
-      <span className={done ? "truncate text-fg-muted" : "rc-shimmer truncate"}>{label}</span>
+      {done ? (
+        <span className="truncate text-fg-muted">{label}</span>
+      ) : (
+        <>
+          <WaveWord word={word} />
+          {detail && <span className="min-w-0 truncate text-fg-faint">{detail}</span>}
+        </>
+      )}
     </div>
   );
 }
