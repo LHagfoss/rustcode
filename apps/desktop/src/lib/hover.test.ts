@@ -9,6 +9,7 @@ import {
   HOVER_SWITCH_MS,
   type HoverTiming,
   HoverTips,
+  scrollMovesTarget,
   tipTrack,
 } from "./hover";
 
@@ -156,5 +157,24 @@ describe("hover tip timing", () => {
     expect(cards.isOpen(a)).toBe(true);
     // The tracks the hook hands out are two, not one.
     expect(tipTrack("tooltip")).not.toBe(tipTrack("card"));
+  });
+});
+
+describe("scroll dismissal", () => {
+  const target = {};
+  const holder = { contains: (node: unknown) => node === target };
+  const elsewhere = { contains: () => false };
+
+  test("a scroller that holds the target, or the page, puts the tip out", () => {
+    expect(scrollMovesTarget(holder as unknown as EventTarget, target)).toBe(true);
+    expect(scrollMovesTarget(null, target)).toBe(true);
+  });
+
+  test("a streaming transcript or the card's own list scrolling keeps the tip", () => {
+    expect(scrollMovesTarget(elsewhere as unknown as EventTarget, target)).toBe(false);
+  });
+
+  test("a tip whose target is not known yet still closes on any scroll", () => {
+    expect(scrollMovesTarget(elsewhere as unknown as EventTarget, null)).toBe(true);
   });
 });
