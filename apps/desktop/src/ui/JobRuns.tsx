@@ -4,6 +4,8 @@
  */
 
 import { agoText, type LoopRun, runDurationText, runTimestampText } from "../state/loops";
+import { formatCost } from "../state/pricing";
+import { formatTokens } from "../state/thread";
 import { selectThread } from "../state/threadOpen";
 import { ArrowUpRight } from "./icons";
 import { cx, Spinner, Tooltip } from "./primitives";
@@ -116,8 +118,16 @@ export function RunHistory({ runs, onOpen }: { runs: readonly LoopRun[]; onOpen?
   );
 }
 
-/** Visual strip of up to 14 recent runs (oldest to newest), each with a tooltip summary. */
-export function RunTimelineStrip({ runs, now }: { runs: readonly LoopRun[]; now: number }) {
+/** Visual strip of up to 14 recent runs (oldest to newest), each clickable to jump to that run. */
+export function RunTimelineStrip({
+  runs,
+  now,
+  onSelectRun,
+}: {
+  runs: readonly LoopRun[];
+  now: number;
+  onSelectRun?: (runId: string) => void;
+}) {
   const recent = runs.slice(0, STRIP_RUNS).reverse();
   if (!recent.length) return null;
   return (
@@ -141,16 +151,26 @@ export function RunTimelineStrip({ runs, now }: { runs: readonly LoopRun[]; now:
                   : status.tone === "ok"
                     ? "bg-success"
                     : "bg-fill-strong";
+          const label = `${status.label} · ${runTimestampText(at, now)}${duration ? ` (${duration})` : ""} · ${runText(run)}`;
           return (
-            <Tooltip
-              key={run.id}
-              label={`${status.label} · ${runTimestampText(at, now)}${duration ? ` (${duration})` : ""} · ${runText(run)}`}
-            >
-              <span
-                role="img"
-                aria-label={`${status.label} at ${runTimestampText(at, now)}`}
-                className={cx("h-4 flex-1 max-w-8 rounded-xs", barTint)}
-              />
+            <Tooltip key={run.id} label={label}>
+              {onSelectRun ? (
+                <button
+                  type="button"
+                  aria-label={`Jump to ${status.label} run at ${runTimestampText(at, now)}`}
+                  onClick={() => onSelectRun(run.id)}
+                  className={cx(
+                    "h-4 flex-1 max-w-8 cursor-pointer rounded-xs transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+                    barTint,
+                  )}
+                />
+              ) : (
+                <span
+                  role="img"
+                  aria-label={`${status.label} at ${runTimestampText(at, now)}`}
+                  className={cx("h-4 flex-1 max-w-8 rounded-xs", barTint)}
+                />
+              )}
             </Tooltip>
           );
         })}
@@ -165,14 +185,17 @@ export function RunList({
   now,
   threadOf = runThread,
   onOpenThread,
+  highlightedRunId,
   detailed = false,
 }: {
   runs: readonly LoopRun[];
   now: number;
   /** App thread key (`host/id` or local `id`) to open for a run. */
   threadOf?: (run: LoopRun) => string | undefined;
-  /** After a run's thread opens: the dialog showing the list closes. */
-  onOpenThread?: () => void;
+  /** After a run's thread opens: the dialog showing the list closes or marks the run reviewed. */
+  onOpenThread?: (runId: string) => void;
+  /** Run id briefly highlighted after clicking its bar in the timeline strip. */
+  highlightedRunId?: string | null;
   /** Expanded presentation used in the Job Overview dialog. */
   detailed?: boolean;
 }) {
@@ -186,6 +209,7 @@ export function RunList({
         const actionable = run.state === "succeeded" && !run.quiet && !run.silent;
         const active = run.state === "running" || run.state === "claimed";
         const status = runStatusMeta(run);
+        const highlighted = highlightedRunId === run.id;
 
         if (detailed) {
           const badgeTone =
@@ -198,6 +222,8 @@ export function RunList({
                   : status.tone === "ok"
                     ? "bg-success/12 text-success"
                     : "bg-fill text-fg-muted";
+          const hasCost = typeof run.costUsd === "number" && Number.isFinite(run.costUsd) && run.costUsd >= 0;
+          const hasTokens = typeof run.tokens === "number" && Number.isFinite(run.tokens) && run.tokens > 0;
           const content = (
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -223,6 +249,17 @@ export function RunList({
                     {duration}
                   </span>
                 )}
+                {hasCost ? (
+                  <Tooltip label={hasTokens ? `${formatTokens(run.tokens!)} tokens` : undefined}>
+                    <span className="tabular rounded-xs bg-fill px-1.5 py-0.5 text-caption text-fg-muted">
+                      {formatCost(run.costUsd)}
+                    </span>
+                  </Tooltip>
+                ) : hasTokens ? (
+                  <span className="tabular rounded-xs bg-fill px-1.5 py-0.5 text-caption text-fg-muted">
+                    {formatTokens(run.tokens!)} tok
+                  </span>
+                ) : null}
               </div>
               <p
                 className={cx(
@@ -235,12 +272,19 @@ export function RunList({
             </div>
           );
           return (
-            <li key={run.id} className="flex min-w-0 rounded-lg bg-fill-subtle">
+            <li
+              key={run.id}
+              data-run-id={run.id}
+              className={cx(
+                "flex min-w-0 rounded-lg bg-fill-subtle transition-shadow",
+                highlighted && "bg-fill ring-1 ring-accent",
+              )}
+            >
               {threadId ? (
                 <button
                   type="button"
                   onClick={() => {
-                    onOpenThread?.();
+                    onOpenThread?.(run.id);
                     selectThread(threadId);
                   }}
                   className="group/run flex min-w-0 flex-1 items-start gap-3 rounded-lg px-3 py-3 text-left hover:bg-fill"
@@ -280,12 +324,12 @@ export function RunList({
           </>
         );
         return (
-          <li key={run.id} className="flex min-w-0">
+          <li key={run.id} data-run-id={run.id} className="flex min-w-0">
             {threadId ? (
               <button
                 type="button"
                 onClick={() => {
-                  onOpenThread?.();
+                  onOpenThread?.(run.id);
                   selectThread(threadId);
                 }}
                 className="group/run -mx-2 flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left text-caption hover:bg-fill-subtle"

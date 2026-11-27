@@ -5,10 +5,11 @@
  */
 
 import { Dialog } from "radix-ui";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { projectName } from "../acp/types";
 import { runThreadKey } from "../state/fleetLoops";
 import {
+  averageRunUsage,
   cancelLoopRun,
   isBlockedRun,
   type Loop,
@@ -20,7 +21,9 @@ import {
   setLoopPaused,
 } from "../state/loops";
 import { selfName, useLocalIdentity, useMachines } from "../state/machines";
+import { formatCost } from "../state/pricing";
 import { openSettings } from "../state/store";
+import { formatTokens } from "../state/thread";
 import { selectThread } from "../state/threadOpen";
 import {
   ArrowUpRight,
@@ -100,6 +103,7 @@ export function JobDetails({
   onEdit,
   onDuplicate,
   onDelete,
+  onRunOpened,
   act,
 }: {
   loop: Loop;
@@ -110,13 +114,24 @@ export function JobDetails({
   onEdit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onRunOpened?: (runId: string) => void;
   act: (what: string, run: () => Promise<void>) => void;
 }) {
   const returnFocus = useRef<HTMLElement | null>(null);
+  const runsRef = useRef<HTMLDivElement>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [runFilter, setRunFilter] = useState<RunFilter>("all");
+  const [highlightedRunId, setHighlightedRunId] = useState<string | null>(null);
   const machines = useMachines((s) => s.machines);
   const local = useLocalIdentity();
   const localName = local.displayName ?? selfName();
+
+  useEffect(
+    () => () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    },
+    [],
+  );
 
   const state = loopState(loop);
   const running = state === "running";
@@ -129,10 +144,27 @@ export function JobDetails({
   const succeededCount = loop.runs.filter((run) => run.state === "succeeded").length;
   const failedCount = loop.runs.filter(isFailedRun).length;
   const avgDuration = averageRunDuration(loop.runs);
+  const usage = averageRunUsage(loop.runs);
+  const hasUsageStat = usage.avgCostUsd !== undefined || usage.avgTokens !== undefined;
 
   const showFilter = failedCount > 0 && loop.runs.length > failedCount;
   const effectiveFilter: RunFilter = showFilter ? runFilter : "all";
   const visibleRuns = effectiveFilter === "failed" ? loop.runs.filter(isFailedRun) : loop.runs;
+
+  const jumpToRun = (runId: string) => {
+    const targetRun = loop.runs.find((run) => run.id === runId);
+    if (effectiveFilter === "failed" && targetRun && !isFailedRun(targetRun)) {
+      setRunFilter("all");
+    }
+    setHighlightedRunId(runId);
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightedRunId(null), 2_200);
+    requestAnimationFrame(() => {
+      runsRef.current
+        ?.querySelector(`[data-run-id="${CSS.escape(runId)}"]`)
+        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  };
 
   const togglePause = () =>
     act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused, loop.host));
@@ -241,6 +273,7 @@ export function JobDetails({
                     size="sm"
                     quiet
                     onClick={() => {
+                      if (latest) onRunOpened?.(latest.id);
                       onClose();
                       selectThread(latestThread);
                     }}
@@ -367,12 +400,17 @@ export function JobDetails({
                 </section>
               </div>
 
-              <div className="flex min-h-0 flex-col gap-4 p-6 min-[760px]:overflow-y-auto">
+              <div ref={runsRef} className="flex min-h-0 flex-col gap-4 p-6 min-[760px]:overflow-y-auto">
                 <section
                   aria-label="Run statistics"
                   className="flex flex-col gap-3 rounded-xl bg-fill-subtle p-4"
                 >
-                  <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <dl
+                    className={cx(
+                      "grid grid-cols-2 gap-3",
+                      hasUsageStat ? "sm:grid-cols-5" : "sm:grid-cols-4",
+                    )}
+                  >
                     <div className="flex flex-col-reverse">
                       <dt className="text-caption text-fg-muted">Runs</dt>
                       <dd className="tabular font-semibold text-title2 text-fg">{loop.runs.length}</dd>
@@ -403,10 +441,30 @@ export function JobDetails({
                       <dt className="text-caption text-fg-muted">Avg time</dt>
                       <dd className="tabular font-semibold text-title2 text-fg">{avgDuration ?? "—"}</dd>
                     </div>
+                    {hasUsageStat && (
+                      <Tooltip
+                        label={
+                          usage.avgCostUsd !== undefined && usage.avgTokens !== undefined
+                            ? `Average ${formatTokens(Math.round(usage.avgTokens))} tokens per run`
+                            : undefined
+                        }
+                      >
+                        <div className="flex flex-col-reverse">
+                          <dt className="text-caption text-fg-muted">
+                            {usage.avgCostUsd !== undefined ? "Avg cost" : "Avg tokens"}
+                          </dt>
+                          <dd className="tabular font-semibold text-title2 text-fg">
+                            {usage.avgCostUsd !== undefined
+                              ? formatCost(usage.avgCostUsd)
+                              : formatTokens(Math.round(usage.avgTokens ?? 0))}
+                          </dd>
+                        </div>
+                      </Tooltip>
+                    )}
                   </dl>
                   {loop.runs.length > 0 && (
                     <div className="border-t border-border pt-3">
-                      <RunTimelineStrip runs={loop.runs} now={now} />
+                      <RunTimelineStrip runs={loop.runs} now={now} onSelectRun={jumpToRun} />
                     </div>
                   )}
                 </section>
@@ -438,8 +496,12 @@ export function JobDetails({
                       detailed
                       runs={visibleRuns}
                       now={now}
+                      highlightedRunId={highlightedRunId}
                       threadOf={(run) => runThreadKey(loop, run, machines, localName)}
-                      onOpenThread={onClose}
+                      onOpenThread={(runId) => {
+                        onRunOpened?.(runId);
+                        onClose();
+                      }}
                     />
                   ) : (
                     <div className="flex flex-col items-center gap-2 rounded-xl bg-fill-subtle px-4 py-8 text-center">
@@ -474,9 +536,6 @@ export function JobDetails({
                 <Trash2 size={12} />
                 Delete
               </Pill>
-              <Dialog.Close asChild>
-                <Pill>Done</Pill>
-              </Dialog.Close>
             </footer>
           </Dialog.Content>
         </div>

@@ -616,38 +616,110 @@ export function loopNeedsAttention(loop: Loop): boolean {
   return loopState(loop) === "failing" || (!loop.paused && isBlockedRun(loop.runs[0]));
 }
 
-/** The last run, as the list says it. */
+/** The last run, as the list says it, with its relative age kept separate so clamping never clips it. */
 export function lastResult(
   loop: Loop,
   now = Date.now(),
-): { text: string; tone: "ok" | "warn" | "bad" | "muted" } {
+): { text: string; age?: string; tone: "ok" | "warn" | "bad" | "muted" } {
   const run = loop.runs[0];
   if (!run) return { text: "No runs yet", tone: "muted" };
   if (isActive(run)) return { text: "Running now", tone: "muted" };
-  const when = agoText(run.finishedAt ?? run.startedAt ?? run.scheduledAt, now);
+  const age = agoText(run.finishedAt ?? run.startedAt ?? run.scheduledAt, now);
   switch (run.state) {
     case "succeeded":
-      if (run.silent) return { text: `Script printed nothing ${when}`, tone: "ok" };
+      if (run.silent) return { text: "Script printed nothing", age, tone: "ok" };
       // A hub Loop's run ends once its machine has the thread (or the hub holds it for that machine).
       if (run.queued)
-        return { text: `Waiting for ${run.machine ?? "its machine"} (queued ${when})`, tone: "muted" };
-      if (run.machine) return { text: `Started on ${run.machine} ${when}`, tone: "ok" };
+        return { text: `Waiting for ${run.machine ?? "its machine"} (queued)`, age, tone: "muted" };
+      if (run.machine) return { text: `Started on ${run.machine}`, age, tone: "ok" };
       if (run.outcome === "blocked") {
         return {
-          text: run.verdict ? `Blocked: ${run.verdict} · ${when}` : `Blocked ${when}`,
+          text: run.verdict ? `Blocked: ${run.verdict}` : "Blocked",
+          age,
           tone: "warn",
         };
       }
       return run.quiet
-        ? { text: `Nothing to report ${when}`, tone: "ok" }
+        ? { text: "Nothing to report", age, tone: "ok" }
         : run.verdict
-          ? { text: `${run.verdict} · ${when}`, tone: "ok" }
-          : { text: `Finished ${when}`, tone: "ok" };
+          ? { text: run.verdict, age, tone: "ok" }
+          : { text: "Finished", age, tone: "ok" };
     case "cancelled":
-      return { text: run.skipped ? `Skipped ${when}: ${run.skipped}` : `Stopped ${when}`, tone: "muted" };
+      return { text: run.skipped ? `Skipped: ${run.skipped}` : "Stopped", age, tone: "muted" };
     default:
-      return { text: `Failed ${when}${run.error ? `: ${run.error}` : ""}`, tone: "bad" };
+      return { text: `Failed${run.error ? `: ${run.error}` : ""}`, age, tone: "bad" };
   }
+}
+
+/** Count grouped review rows per job so card badges sum to the Review tab badge. */
+export function unreviewedCountByLoop(
+  groups: readonly ReviewGroup[],
+  keyOf: (loop: Loop) => string,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const group of groups) {
+    const key = keyOf(group.item.loop);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** Average reported cost and tokens across runs that recorded them. */
+export function averageRunUsage(runs: readonly LoopRun[]): { avgCostUsd?: number; avgTokens?: number } {
+  let costSum = 0;
+  let costCount = 0;
+  let tokenSum = 0;
+  let tokenCount = 0;
+  for (const run of runs) {
+    if (typeof run.costUsd === "number" && Number.isFinite(run.costUsd) && run.costUsd >= 0) {
+      costSum += run.costUsd;
+      costCount += 1;
+    }
+    if (typeof run.tokens === "number" && Number.isFinite(run.tokens) && run.tokens > 0) {
+      tokenSum += run.tokens;
+      tokenCount += 1;
+    }
+  }
+  return {
+    ...(costCount > 0 ? { avgCostUsd: costSum / costCount } : {}),
+    ...(tokenCount > 0 ? { avgTokens: tokenSum / tokenCount } : {}),
+  };
+}
+
+const MACOS_PATH_RE = /(?:^|[\s"'`([=])(\/Users\/[^\s"'`),;]+)/;
+const LINUX_HOME_PATH_RE = /(?:^|[\s"'`([=])(\/home\/[^\s"'`),;]+)/;
+
+/** Warn when a prompt or pre-check script hardcodes a path from another OS than the target machine. */
+export function crossPlatformPathWarning({
+  platform,
+  workspace,
+  prompt,
+  script,
+}: {
+  platform?: string;
+  workspace: string;
+  prompt: string;
+  script?: string;
+}): string | null {
+  const combined = [prompt, script].filter(Boolean).join("\n");
+  if (!combined) return null;
+  const trimmedWorkspace = workspace.trim();
+  const isLinuxTarget =
+    platform === "linux" || trimmedWorkspace.startsWith("/home/") || trimmedWorkspace.startsWith("/root/");
+  if (isLinuxTarget) {
+    const match = MACOS_PATH_RE.exec(combined);
+    if (match?.[1]) {
+      return `This job targets a Linux machine, but mentions macOS path ${match[1]}. Use a Linux path or a path relative to the project folder.`;
+    }
+  }
+  const isMacTarget = platform === "macos" || trimmedWorkspace.startsWith("/Users/");
+  if (isMacTarget) {
+    const match = LINUX_HOME_PATH_RE.exec(combined);
+    if (match?.[1]) {
+      return `This job targets a macOS machine, but mentions Linux path ${match[1]}. Use a macOS path or a path relative to the project folder.`;
+    }
+  }
+  return null;
 }
 
 /** When the next run is, or why there is none. */
