@@ -229,7 +229,24 @@ export type Call =
     }
   | { tool: "list_scheduled_tasks" }
   | { tool: "delete_scheduled_task"; id: string }
-  | { tool: "run_scheduled_task_now"; id: string };
+  | { tool: "run_scheduled_task_now"; id: string }
+  | {
+      tool: "computer_desktop";
+      desktopTool: ComputerTool;
+      args: JsonObject;
+      machine?: string;
+      callId?: string;
+    };
+
+/** The desktop-control tools that may route to another machine's desktop (version 23). */
+export type ComputerTool =
+  | "computer_windows"
+  | "computer_snapshot"
+  | "computer_screenshot"
+  | "computer_click"
+  | "computer_type"
+  | "computer_key"
+  | "computer_scroll";
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -869,6 +886,22 @@ export function parseCall(params: JsonObject): Call | Failure {
       return tool === "delete_scheduled_task"
         ? { tool: "delete_scheduled_task", id }
         : { tool: "run_scheduled_task_now", id };
+    }
+    case "computer_windows":
+    case "computer_snapshot":
+    case "computer_screenshot":
+    case "computer_click":
+    case "computer_type":
+    case "computer_key":
+    case "computer_scroll": {
+      const callId = s(params.callId)?.trim() || undefined;
+      return {
+        tool: "computer_desktop",
+        desktopTool: tool,
+        args: args as JsonObject,
+        ...(callId ? { callId } : {}),
+        ...machineField(args),
+      };
     }
     default:
       return failure("invalid", "unknown tool");

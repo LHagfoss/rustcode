@@ -70,8 +70,9 @@ import { formatDuration } from "./thread";
  * Version 20 adds `compact_session`.
  * Version 21 adds `update_loop`.
  * Version 22 adds `run_machine_command` across all connected machines.
+ * Version 23 adds cross-machine desktop control (`computer_*` with `machine`).
  */
-export const CAPABILITY_VERSION = 22;
+export const CAPABILITY_VERSION = 23;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** One `read_session` page. */

@@ -175,6 +175,12 @@ fn every_dispatched_method_matches_its_request_type() {
         ),
         "method mismatch for machine_exec::MachineExecRequest"
     );
+    assert!(
+        <desktop_call::DesktopCallRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
+            "_rustcode/desktop/call"
+        ),
+        "method mismatch for desktop_call::DesktopCallRequest"
+    );
     assert!(<machine_update::MachineUpdateRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/machine/update"), "method mismatch for machine_update::MachineUpdateRequest");
     assert!(
         <projects::ProjectReadRequest as agent_client_protocol::JsonRpcMessage>::matches_method(

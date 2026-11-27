@@ -111,6 +111,9 @@ describe("delegationAllowed for managing threads", () => {
     // Answering a request hands a delegate what it asked for, so Auto-edit does not either.
     expect(delegationAllowed("edits", "answer")).toBe(false);
     expect(delegationAllowed("full", "answer")).toBe(true);
+    expect(delegationAllowed("ask", "desktop")).toBe(false);
+    expect(delegationAllowed("edits", "desktop")).toBe(false);
+    expect(delegationAllowed("full", "desktop")).toBe(false);
   });
 });
 

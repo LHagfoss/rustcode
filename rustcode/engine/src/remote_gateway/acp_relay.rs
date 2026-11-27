@@ -225,6 +225,33 @@ fn allowed(method: &str) -> bool {
             .any(|prefix| method.starts_with(prefix))
 }
 
+/// Refusal for one JSON-RPC request frame arriving from a remote device.
+/// Desktop control may only be enabled locally on the controlled computer.
+fn remote_frame_refusal(
+    access: super::access::Access,
+    value: &Value,
+    method: &str,
+) -> Option<String> {
+    if !allowed(method) {
+        return Some("method is not permitted over remote ACP".to_owned());
+    }
+    if let Some(message) = super::access::refusal(access, method) {
+        return Some(message);
+    }
+    if method == "_rustcode/settings/set"
+        && let Some(setting) = value
+            .get("params")
+            .and_then(|params| params.get("values"))
+            .and_then(|values| values.get("desktop-control"))
+        && setting.get("enabled").and_then(Value::as_bool) != Some(false)
+    {
+        return Some(
+            "desktop-control can only be enabled on this computer, never remotely".to_owned(),
+        );
+    }
+    None
+}
+
 /// Connect to the first engine of `config_directory` that answers, and relay
 /// between it and the device. An app-spawned engine publishes its own
 /// endpoint and a shared server `run/server.json`; either description can be
@@ -332,8 +359,10 @@ pub(super) async fn relay(
                         if !value.is_object() || value["jsonrpc"] != "2.0" { return Some(ErrorCode::InvalidFrame); }
                         if let Some(method) = value.get("method") {
                             let refused = match method.as_str() {
-                                Some(method) if allowed(method) => super::access::refusal(control.access(), method),
-                                _ => Some("method is not permitted over remote ACP".to_owned()),
+                                Some(method) => {
+                                    remote_frame_refusal(control.access(), &value, method)
+                                }
+                                None => Some("method is not permitted over remote ACP".to_owned()),
                             };
                             if let Some(message) = refused {
                                 if let Some(id) = value.get("id") {
@@ -661,11 +690,52 @@ mod tests {
             "_rustcode/data/query",
             "_rustcode/usage/plans",
             "_rustcode/worktrees/handoff",
+            "_rustcode/desktop/call",
             "_rustcode/unknown",
             "unknown",
         ] {
             assert!(!allowed(method), "{method}");
         }
+    }
+
+    #[test]
+    fn remote_settings_cannot_enable_desktop_control() {
+        let enable = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "_rustcode/settings/set",
+            "params": { "values": { "desktop-control": { "enabled": true } } }
+        });
+        assert!(
+            remote_frame_refusal(
+                super::super::access::Access::Full,
+                &enable,
+                "_rustcode/settings/set"
+            )
+            .is_some()
+        );
+        let disable = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "_rustcode/settings/set",
+            "params": { "values": { "desktop-control": { "enabled": false } } }
+        });
+        assert!(
+            remote_frame_refusal(
+                super::super::access::Access::Full,
+                &disable,
+                "_rustcode/settings/set"
+            )
+            .is_none()
+        );
+        assert!(
+            remote_frame_refusal(
+                super::super::access::Access::Full,
+                &json!({}),
+                "_rustcode/desktop/call"
+            )
+            .is_some()
+        );
     }
 
     #[test]

@@ -604,6 +604,16 @@ where
                                     ticker
                                 });
                         let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+                        let effective_tool =
+                            if offered.deferred && !identity.outside && tool == CALL_TOOL {
+                                params
+                                    .get("arguments")
+                                    .and_then(|a| a.get("name"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(tool)
+                            } else {
+                                tool
+                            };
                         let message = progress_message(tool, &params);
                         let waiting =
                             call(forward.as_ref(), &identity, &params, orchestration, offered);
@@ -635,7 +645,7 @@ where
                         let _ = sender.send(result(
                             id,
                             json!({
-                                "content": response_content(tool, &answer),
+                                "content": response_content(effective_tool, &answer),
                                 "isError": !answer.success,
                             }),
                         ));
@@ -1116,7 +1126,9 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 /// Every tool `rc tools` reaches for a thread (`cli_bridge`): the whole list,
 /// since a shell command costs no context until it is run.
 pub(super) fn cli_tools(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
-    all_tools(version, cli_offered(smart_ui, ask_user))
+    let mut listed = all_tools(version, cli_offered(smart_ui, ask_user));
+    listed.extend(crate::computer_use::desktop::remote_tools(version));
+    listed
 }
 
 /// One `rc tools call`, answered as a `tools/call` from the thread's harness.
@@ -1219,7 +1231,7 @@ const DIRECT_TOOLS: &[&str] = &[
 ];
 
 /// What the instructions add when the list is deferred.
-const DEFERRED_TOOLS_NOTE: &str = "Only a few RustCode tools are listed. Every tool named above is available: find it with `tool_search` (by name or purpose: delegate, wait, merge, settings, jobs, usage, data, worktrees, machines), then run it with `call_tool`.";
+const DEFERRED_TOOLS_NOTE: &str = "Only a few RustCode tools are listed. Every tool named above is available: find it with `tool_search` (by name or purpose: delegate, wait, merge, settings, jobs, usage, data, worktrees, machines, computer), then run it with `call_tool`.";
 
 /// The most tools one search returns.
 const SEARCH_RESULTS: usize = 5;
@@ -1260,13 +1272,14 @@ fn call_tool_entry() -> Value {
 /// [`TOOL_SEARCH`]'s answer: the best matches for `query` among the tools a
 /// list without deferral would hold, whole, so `call_tool` can be called next.
 fn search_tools(version: u8, offered: Offered, query: &str) -> CallAnswer {
-    let every = all_tools(
+    let mut every = all_tools(
         version,
         Offered {
             deferred: false,
             ..offered
         },
     );
+    every.extend(crate::computer_use::desktop::remote_tools(version));
     let terms: Vec<String> = query
         .to_lowercase()
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
@@ -1329,7 +1342,11 @@ fn response_content(tool: &str, answer: &CallAnswer) -> Value {
     if matches!(tool, "browser_screenshot" | "computer_screenshot") && answer.success {
         if let Ok(body) = serde_json::from_str::<Value>(&answer.content) {
             if let Some(data) = body.get("data").and_then(Value::as_str) {
-                return json!([{"type":"image","mimeType":"image/png","data":data}]);
+                let mime = body
+                    .get("mime_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("image/png");
+                return json!([{"type":"image","mimeType":mime,"data":data}]);
             }
         }
     }

@@ -1,7 +1,10 @@
 # 0011: OS computer use runs in a separate worker, behind the RustCode MCP server
 
-Status: accepted, 2026-11-27. Phases 1–4 have landed on macOS (`rustcode/engine/src/computer_worker/`,
-`rustcode/engine/src/computer_use/desktop.rs`); see *Implementation notes* below. Proposed 2026-11-26 (#4369). Code today: `rustcode/engine/src/computer_use.rs`
+Status: accepted, 2026-11-27. Phases 1–4 and Phase 6 (cross-machine control via
+the controlled computer's desktop app) have landed on macOS
+(`rustcode/engine/src/computer_worker/`, `rustcode/engine/src/computer_use/desktop.rs`,
+`rustcode/engine/src/acp/desktop_call.rs`, `apps/desktop/src/state/hostDesktop.ts`);
+see *Implementation notes* below. Proposed 2026-11-26 (#4369). Code today: `rustcode/engine/src/computer_use.rs`
 (browser tools), `rustcode/engine/src/orchestration/mcp_server.rs` (the per-thread
 RustCode MCP server), `rustcode/engine/src/desktop_control.rs` (client-owned bridge with
 no client), `rustcode/engine/src/clipboard.rs`. Docs: [computer-use.md](../computer-use.md),
@@ -150,8 +153,13 @@ What the first slice built, and where it departs from the plan above:
   worker, which ends every grant. A global shortcut is not built.
 - **Pixels.** `x` and `y` are pixels of the latest screenshot of that window, converted by the
   worker, rather than display points.
+- **Cross-machine control (phase 6).** Every `computer_*` tool accepts an optional `machine`
+  argument (orchestration version 23). Remote threads route through the controlled computer's
+  open RustCode app to its local-only `_rustcode/desktop/call` handler (blocked in
+  `acp_relay.rs`, and remote `_rustcode/settings/set` cannot enable `desktop-control`). Approval
+  always happens on the controlled computer and is never bypassed by Full access.
 - **Not yet:** the built-in harness's tools, the user-configurable sensitive-app list (a fixed
-  list asks every time), a cap on actions per turn, and remote grants (phase 6).
+  list asks every time), and a cap on actions per turn.
 
 ## Consequences
 

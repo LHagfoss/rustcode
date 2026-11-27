@@ -462,6 +462,24 @@ impl Hub {
                 .await;
         }
         if crate::computer_use::desktop::is_tool(&request.tool) {
+            if crate::computer_use::desktop::requested_machine(&request.args).is_some() {
+                return match client {
+                    Some(client) => {
+                        crate::computer_use::desktop::answer_via_client(
+                            client, version, &request, cancel,
+                        )
+                        .await
+                    }
+                    None => {
+                        crate::computer_use::desktop::answer_remote_without_client(
+                            &request,
+                            self.questions_for(&request),
+                            cancel,
+                        )
+                        .await
+                    }
+                };
+            }
             return crate::computer_use::desktop::answer(
                 &request,
                 self.questions_for(&request),

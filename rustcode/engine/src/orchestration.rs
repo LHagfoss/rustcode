@@ -156,7 +156,9 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = MACHINE_EXEC_VERSION;
+pub const VERSION: u8 = DESKTOP_REMOTE_VERSION;
+/// Version 23 adds cross-machine desktop control (`computer_*` with `machine`).
+pub const DESKTOP_REMOTE_VERSION: u8 = 23;
 /// Version 22 adds running shell commands on any machine in the fleet (`run_machine_command`).
 pub const MACHINE_EXEC_VERSION: u8 = 22;
 /// Version 21 adds updating, pausing and resuming Loops (`update_loop`).

@@ -238,13 +238,19 @@ export function GrantDialog() {
                 <Laptop size={12} /> On {grant.machine}, not this computer
               </span>
             )}
+            {grant.fromMachine && (
+              <span className="flex items-center gap-1.5 text-warning">
+                <Laptop size={12} /> From {grant.fromMachine}, controlling this computer
+              </span>
+            )}
+            {grant.sensitive && <span className="text-warning">Sensitive apps ask every time.</span>}
             {grant.project && (
               <span className="flex items-center gap-1.5 text-warning">
                 <GitBranch size={12} /> In another project: {grant.project}
               </span>
             )}
           </div>
-          {!grant.onceOnly && (
+          {!grant.onceOnly && grant.kind !== "desktop" && (
             <button
               type="button"
               className="text-left text-callout text-accent"
@@ -262,11 +268,21 @@ export function GrantDialog() {
           <div className="flex flex-wrap justify-end gap-2">
             <Pill onClick={() => resolveGrant("deny")}>{starts ? "Don’t Start" : "Don’t Allow"}</Pill>
             <Pill prominent={grant.onceOnly} onClick={() => resolveGrant("once")}>
-              {grant.onceOnly ? "Create loop" : starts ? "Start" : "Allow Once"}
+              {grant.onceOnly
+                ? grant.kind === "desktop"
+                  ? "Allow Once"
+                  : "Create loop"
+                : starts
+                  ? "Start"
+                  : "Allow Once"}
             </Pill>
             {!grant.onceOnly && (
               <Pill prominent autoFocus onClick={() => resolveGrant("always")}>
-                {starts ? "Start, and Allow for This Thread" : "Allow for This Thread"}
+                {grant.kind === "desktop"
+                  ? `Allow ${grant.target} for This Thread`
+                  : starts
+                    ? "Start, and Allow for This Thread"
+                    : "Allow for This Thread"}
               </Pill>
             )}
           </div>

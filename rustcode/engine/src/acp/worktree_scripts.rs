@@ -120,6 +120,6 @@ pub(super) fn dispatch(
                 Ok(())
             })
         }
-        _ => super::github_issues::dispatch(method, params, responder, connection, unhandled),
+        _ => super::desktop_call::dispatch(method, params, responder, connection, unhandled),
     }
 }
