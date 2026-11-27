@@ -1,11 +1,15 @@
 //! macOS desktop control: Accessibility for reading and acting by ref,
-//! events posted to the target process for keys, scrolls and pixel clicks,
-//! ScreenCaptureKit for window screenshots, and AppKit for the agent's cursor.
+//! events posted to the target process behind the user's windows for keys,
+//! scrolls and pixel clicks, ScreenCaptureKit for window screenshots, and
+//! AppKit for the agent's cursor.
 
 mod ax;
+mod background;
 mod capture;
 mod ffi;
 mod input;
+pub mod signature;
+mod skylight;
 mod ui;
 
 use super::{MAX_ELEMENTS, Op, keys};
@@ -40,7 +44,18 @@ thread_local! {
 
 /// Answer one request. Runs on the worker's request thread.
 pub fn handle(op: Op) -> Result<Value, String> {
-    autoreleasepool(|_| dispatch(op))
+    let input = matches!(
+        op,
+        Op::Click { .. } | Op::Type { .. } | Op::Key { .. } | Op::Scroll { .. }
+    );
+    if input {
+        ui::acting();
+    }
+    let answer = autoreleasepool(|_| dispatch(op));
+    if input {
+        ui::acting();
+    }
+    answer
 }
 
 fn dispatch(op: Op) -> Result<Value, String> {
@@ -51,10 +66,6 @@ fn dispatch(op: Op) -> Result<Value, String> {
             "windows": capture::windows().iter().map(capture::Window::json).collect::<Vec<_>>(),
         })),
         Op::App { pid } => app(pid),
-        Op::Activity { label } => {
-            ui::set_activity(label);
-            Ok(json!({}))
-        }
         Op::Screenshot { pid, window_id } => screenshot(pid, window_id),
         Op::Snapshot {
             pid,
@@ -75,6 +86,7 @@ fn dispatch(op: Op) -> Result<Value, String> {
             y,
             button,
             count,
+            foreground,
         } => {
             needs_accessibility()?;
             let right = match button.as_deref() {
@@ -82,17 +94,40 @@ fn dispatch(op: Op) -> Result<Value, String> {
                 Some("right") => true,
                 Some(other) => return Err(format!("unknown button '{other}'")),
             };
-            click(pid, element, window_id, x, y, right, count.unwrap_or(1))
+            let target = input_target(pid, foreground)?;
+            click(
+                target,
+                pid,
+                element,
+                window_id,
+                (x, y),
+                right,
+                count.unwrap_or(1),
+            )
         }
-        Op::Type { pid, element, text } => {
+        Op::Type {
+            pid,
+            element,
+            text,
+            foreground,
+        } => {
             needs_accessibility()?;
-            type_text(pid, element, &text)
+            let target = input_target(pid, foreground)?;
+            type_text(target, pid, element, &text)
         }
-        Op::Key { pid, key } => {
+        Op::Key {
+            pid,
+            key,
+            foreground,
+        } => {
             needs_accessibility()?;
             let combo = keys::parse(&key)?;
-            input::key(pid, combo)?;
-            Ok(json!({"pressed": key}))
+            let target = input_target(pid, foreground)?;
+            let session = background::Session::begin(target, pid, None);
+            let pressed = input::key(target, combo);
+            session.map(background::Session::end);
+            pressed?;
+            Ok(json!({"pressed": key, "how": how(foreground)}))
         }
         Op::Scroll {
             pid,
@@ -102,14 +137,33 @@ fn dispatch(op: Op) -> Result<Value, String> {
             y,
             dx,
             dy,
+            foreground,
         } => {
             needs_accessibility()?;
             let (point, _) = target_point(pid, element.as_deref(), window_id, x, y)?;
+            let target = input_target(pid, foreground)?;
             ui::glide(point);
-            input::scroll(pid, point, dx, dy)?;
-            Ok(json!({"scrolled": {"dx": dx, "dy": dy}}))
+            input::scroll(target, point, dx, dy)?;
+            Ok(json!({"scrolled": {"dx": dx, "dy": dy}, "how": how(foreground)}))
         }
     }
+}
+
+const FRONT_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Where an action's input goes; in the foreground, the app is brought to
+/// the front first so the system's input stream reaches it.
+fn input_target(pid: i32, foreground: bool) -> Result<input::Target, String> {
+    if !foreground {
+        return Ok(input::Target::Background(pid));
+    }
+    ax::Element::app(pid)?.bring_to_front()?;
+    std::thread::sleep(FRONT_SETTLE);
+    Ok(input::Target::Foreground)
+}
+
+fn how(foreground: bool) -> &'static str {
+    if foreground { "foreground" } else { "event" }
 }
 
 pub(super) fn status(prompt: bool) -> Value {
@@ -244,17 +298,20 @@ fn target_point(
 }
 
 fn click(
+    target: input::Target,
     pid: i32,
     element: Option<String>,
     window_id: Option<u32>,
-    x: Option<f64>,
-    y: Option<f64>,
+    (x, y): (Option<f64>, Option<f64>),
     right: bool,
     count: u8,
 ) -> Result<Value, String> {
     let (point, window) = target_point(pid, element.as_deref(), window_id, x, y)?;
     ui::glide(point);
+    ui::press();
+    let foreground = target == input::Target::Foreground;
     if let Some(element) = &element
+        && !foreground
         && !right
         && count == 1
     {
@@ -269,14 +326,24 @@ fn click(
             return Ok(json!({"clicked": element, "how": "accessibility"}));
         }
     }
-    input::click(pid, point, window, right, count)?;
+    let window = background::window(pid, window);
+    let session = background::Session::begin(target, pid, window.map(|window| window.id));
+    let clicked = input::click(target, point, window, right, count);
+    session.map(background::Session::end);
+    clicked?;
     Ok(json!({
         "clicked": element.unwrap_or_else(|| format!("{:.0},{:.0}", point.x, point.y)),
-        "how": "event",
+        "how": how(foreground),
     }))
 }
 
-fn type_text(pid: i32, element: Option<String>, text: &str) -> Result<Value, String> {
+fn type_text(
+    target: input::Target,
+    pid: i32,
+    element: Option<String>,
+    text: &str,
+) -> Result<Value, String> {
+    let foreground = target == input::Target::Foreground;
     if let Some(element) = &element {
         let point = with_ref(pid, element, |found| {
             if found.is_secure() {
@@ -295,10 +362,19 @@ fn type_text(pid: i32, element: Option<String>, text: &str) -> Result<Value, Str
         return Err("The focused field is a password field; hand it to the user instead".into());
     }
     if let Some(focused) = &focused
+        && !foreground
+        && !skylight::available()
         && focused.insert_text(text)?
     {
         return Ok(json!({"typed": text.chars().count(), "how": "accessibility"}));
     }
-    input::type_text(pid, text)?;
-    Ok(json!({"typed": text.chars().count(), "how": "event"}))
+    let window = focused
+        .as_ref()
+        .and_then(ax::Element::window)
+        .and_then(|window| window.window_id());
+    let session = background::Session::begin(target, pid, window);
+    let typed = input::type_text(target, text);
+    session.map(background::Session::end);
+    typed?;
+    Ok(json!({"typed": text.chars().count(), "how": how(foreground)}))
 }

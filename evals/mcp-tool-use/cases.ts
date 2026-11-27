@@ -42,6 +42,16 @@ const DONE_TURN = {
 
 export const CASES: Case[] = [
   {
+    id: "desktop-background-first",
+    source: "computer_click description: background input reaches Chromium and Electron apps",
+    prompt:
+      "Discord is open (pid 4242). Your last computer_snapshot of it showed the message box as ref e7. Click it so I can type there.",
+    checks: {
+      calls: [{ tool: "computer_click", args: { pid: 4242, ref: "e7" }, lacks: ["foreground"] }],
+      never: [{ tool: "computer_click", args: { foreground: true } }],
+    },
+  },
+  {
     id: "title-first",
     source: "MCP instructions › Name this thread first",
     prompt: "Fix the flaky login test in tests/login.test.ts.",

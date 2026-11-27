@@ -56,6 +56,11 @@ export function openMicrophoneSettings(): Promise<void> {
   return shellCall<void>("open_microphone_settings");
 }
 
+/** Opens the System Settings pane where RustCode gets one desktop-control permission. */
+export function openDesktopControlSettings(permission: "accessibility" | "screen_recording"): Promise<void> {
+  return shellCall<void>("open_desktop_control_settings", { permission });
+}
+
 // ---------------------------------------------------------------- the link scheme
 
 export type SchemeOwner = "this" | "other" | "none" | "unknown";

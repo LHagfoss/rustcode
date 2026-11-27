@@ -119,6 +119,13 @@ pub const STEPS: &[Step] = &[
         auto: true,
     },
     Step {
+        id: "desktop-control",
+        title: "Allow desktop control",
+        about: "Agents that use this computer's apps need Accessibility and Screen Recording. This asks macOS for both, for RustCode itself, so System Settings lists RustCode.",
+        os: &[Os::Macos],
+        auto: false,
+    },
+    Step {
         id: "server-service",
         title: "Run the RustCode server in the background",
         about: "Installs the server as a LaunchAgent, systemd user unit or logon task, so paired machines reach this computer with the app closed. See Machines.",
@@ -310,6 +317,7 @@ impl Host for System {
             "long-paths" => check_long_paths(),
             "desktop-entry" => check_desktop_entry(),
             "server-service" => check_server(),
+            "desktop-control" => check_desktop_control(),
             _ => Check::Unsupported("Unknown step.".into()),
         }
     }
@@ -321,9 +329,36 @@ impl Host for System {
             "user-path" => apply_user_path(),
             "desktop-entry" => apply_desktop_entry(),
             "server-service" => apply_server(),
+            "desktop-control" => apply_desktop_control(),
             _ => Err("This step has nothing to apply.".into()),
         }
     }
+}
+
+fn check_desktop_control() -> Check {
+    match crate::computer_worker_host::ask("status") {
+        Ok(status) => {
+            let missing = crate::computer_worker_host::missing(&status);
+            if missing.is_empty() {
+                Check::Satisfied("Accessibility and Screen Recording are on for RustCode.".into())
+            } else {
+                Check::Missing(format!("Not on for RustCode yet: {}.", missing.join(", ")))
+            }
+        }
+        Err(error) => Check::Unsupported(error),
+    }
+}
+
+fn apply_desktop_control() -> Result<String, String> {
+    let status = crate::computer_worker_host::ask("request_permissions")?;
+    let missing = crate::computer_worker_host::missing(&status);
+    if missing.is_empty() {
+        return Ok("Accessibility and Screen Recording are on for RustCode.".into());
+    }
+    Err(format!(
+        "macOS asked. Turn RustCode on in System Settings › Privacy & Security › {}, then run this step again.",
+        missing.join(" and ")
+    ))
 }
 
 fn home() -> Option<PathBuf> {
@@ -935,6 +970,7 @@ mod tests {
                 "stable-signature",
                 "cli-link",
                 "path-hint",
+                "desktop-control",
                 "server-service"
             ]
         );

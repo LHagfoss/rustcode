@@ -69,6 +69,7 @@ pub struct Opaque {
 }
 
 pub const kCFStringEncodingUTF8: u32 = 0x0800_0100;
+pub const kCFNumberSInt32Type: i32 = 3;
 pub const kCFNumberSInt64Type: i32 = 4;
 pub const kCFNumberFloat64Type: i32 = 6;
 pub const kAXValueCGPointType: u32 = 1;
@@ -116,7 +117,26 @@ unsafe extern "C" {
         value_callbacks: *const Opaque,
     ) -> CFDictionaryRef;
     pub fn CFNumberGetValue(number: CFTypeRef, kind: i32, out: *mut c_void) -> u8;
+    pub fn CFNumberCreate(allocator: CFTypeRef, kind: i32, value: *const c_void) -> CFTypeRef;
     pub fn CFBooleanGetValue(boolean: CFTypeRef) -> u8;
+}
+
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    pub static kSecGuestAttributePid: CFStringRef;
+    pub fn SecCodeCopySelf(flags: u32, code: *mut CFTypeRef) -> i32;
+    pub fn SecCodeCopyGuestWithAttributes(
+        host: CFTypeRef,
+        attributes: CFDictionaryRef,
+        flags: u32,
+        guest: *mut CFTypeRef,
+    ) -> i32;
+    pub fn SecCodeCopyDesignatedRequirement(
+        code: CFTypeRef,
+        flags: u32,
+        requirement: *mut CFTypeRef,
+    ) -> i32;
+    pub fn SecCodeCheckValidity(code: CFTypeRef, flags: u32, requirement: CFTypeRef) -> i32;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -165,6 +185,12 @@ unsafe extern "C" {
     pub fn CGRequestScreenCaptureAccess() -> bool;
     pub fn CGMainDisplayID() -> u32;
     pub fn CGDisplayBounds(display: u32) -> CGRect;
+    pub fn CGGetDisplaysWithPoint(
+        point: CGPoint,
+        max_displays: u32,
+        displays: *mut u32,
+        count: *mut u32,
+    ) -> i32;
     pub fn CGEventCreateMouseEvent(
         source: *const c_void,
         kind: u32,
@@ -185,6 +211,11 @@ unsafe extern "C" {
     pub fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
     pub fn CGEventSetLocation(event: CGEventRef, location: CGPoint);
     pub fn CGEventPostToPid(pid: i32, event: CGEventRef);
+    pub fn CGEventPost(tap: u32, event: CGEventRef);
+    pub fn CGEventCreate(source: *const c_void) -> CGEventRef;
+    pub fn CGEventSourceCreate(state: i32) -> *mut c_void;
+    pub fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
+    pub fn CGEventSourceSecondsSinceLastEventType(state: i32, kind: u32) -> f64;
     pub fn CGImageGetWidth(image: CGImageRef) -> usize;
     pub fn CGImageGetHeight(image: CGImageRef) -> usize;
     pub fn CGImageRelease(image: CGImageRef);

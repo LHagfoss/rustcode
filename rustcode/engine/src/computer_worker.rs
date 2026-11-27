@@ -4,11 +4,14 @@
 //! The engine starts it on the first desktop call and talks to it over
 //! stdin/stdout, one JSON request per line and one JSON answer per line. The
 //! worker holds the operating system's permissions (Accessibility and Screen
-//! Recording on macOS), shows the agent's own cursor and a menu bar item with
-//! Stop, and runs only actions the engine already approved. Stopping it is a
+//! Recording on macOS), shows the agent's own cursor, and runs only actions
+//! the engine already approved. Stopping it is a
 //! kill; a closed stdin ends it.
 
 pub mod cursor_image;
+pub mod cursor_motion;
+#[cfg(unix)]
+pub mod hosted;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -60,16 +63,22 @@ pub enum Op {
         button: Option<String>,
         #[serde(default)]
         count: Option<u8>,
+        #[serde(default)]
+        foreground: bool,
     },
     Type {
         pid: i32,
         #[serde(default, rename = "ref")]
         element: Option<String>,
         text: String,
+        #[serde(default)]
+        foreground: bool,
     },
     Key {
         pid: i32,
         key: String,
+        #[serde(default)]
+        foreground: bool,
     },
     Scroll {
         pid: i32,
@@ -85,10 +94,23 @@ pub enum Op {
         dx: i32,
         #[serde(default)]
         dy: i32,
+        #[serde(default)]
+        foreground: bool,
     },
-    Activity {
-        label: Option<String>,
-    },
+}
+
+impl Op {
+    /// Whether the action brings the app to the front and uses the system's
+    /// own input, for apps that ignore input sent to them in the background.
+    pub fn foreground(&self) -> bool {
+        match self {
+            Op::Click { foreground, .. }
+            | Op::Type { foreground, .. }
+            | Op::Key { foreground, .. }
+            | Op::Scroll { foreground, .. } => *foreground,
+            _ => false,
+        }
+    }
 }
 
 /// One request line.
@@ -140,21 +162,32 @@ pub fn requested() -> bool {
 #[cfg(target_os = "macos")]
 pub fn run() -> ! {
     std::thread::spawn(|| {
+        if hosted::listening() {
+            hosted::listen(macos::handle)
+        }
         serve(macos::handle);
     });
-    macos::run_main_thread()
+    macos::run_main_thread(hosted::listening())
 }
 
 /// Run the worker until stdin closes. Never returns.
 #[cfg(not(target_os = "macos"))]
 pub fn run() -> ! {
+    #[cfg(unix)]
+    if hosted::listening() {
+        hosted::listen(unsupported)
+    }
     serve(unsupported)
 }
 
 fn serve(handle: fn(Op) -> Result<Value, String>) -> ! {
-    let stdin = std::io::stdin();
-    let mut out = std::io::stdout();
-    for line in stdin.lock().lines() {
+    serve_lines(std::io::stdin().lock(), std::io::stdout(), handle);
+    std::process::exit(0)
+}
+
+/// Answer request lines from `input` on `out` until either side closes.
+fn serve_lines(input: impl BufRead, mut out: impl Write, handle: fn(Op) -> Result<Value, String>) {
+    for line in input.lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
@@ -176,7 +209,6 @@ fn serve(handle: fn(Op) -> Result<Value, String>) -> ! {
             break;
         }
     }
-    std::process::exit(0)
 }
 
 /// The platform this worker runs on, as `status` reports it.
@@ -202,10 +234,22 @@ pub fn unsupported_reason() -> Option<&'static str> {
 }
 
 /// Desktop control's permissions here, as Settings shows them; `prompt`
-/// asks the operating system to show its permission prompts.
+/// asks the operating system to show its permission prompts. The worker the
+/// RustCode app hosts answers when it runs, as its grants are the ones the
+/// tools use; `hosted` says which answered.
 #[cfg(target_os = "macos")]
 pub fn permissions(prompt: bool) -> Value {
-    macos::status(prompt)
+    let op = if prompt {
+        Op::RequestPermissions
+    } else {
+        Op::Status
+    };
+    let (mut value, hosted) = match hosted::ask(op) {
+        Some(value) => (value, true),
+        None => (macos::status(prompt), false),
+    };
+    value["hosted"] = json!(hosted);
+    value
 }
 
 /// Desktop control's permissions here: none apply where it is not supported.
@@ -224,7 +268,6 @@ fn unsupported(op: Op) -> Result<Value, String> {
             "accessibility": Value::Null,
             "screen_recording": Value::Null,
         })),
-        Op::Activity { .. } => Ok(json!({})),
         _ => Err(unsupported_reason()
             .unwrap_or("Desktop control is not available here")
             .to_owned()),
@@ -250,6 +293,7 @@ mod tests {
                 y: None,
                 button: None,
                 count: Some(2),
+                foreground: false,
             }
         );
         let status: Request = serde_json::from_str(r#"{"id":1,"op":"status"}"#).unwrap();

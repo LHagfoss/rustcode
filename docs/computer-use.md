@@ -117,9 +117,14 @@ built-in harness does not offer these tools yet.
 On by default, per machine; turn it off under **Settings → Voice & computer
 use** › **Desktop control** on the Mac itself. Nothing runs until macOS grants
 **Accessibility** (to read apps and act on them) and **Screen Recording** (for
-window screenshots); the section shows both and **Ask macOS** shows the
-prompts. macOS lists the permission under the binary Settings names,
-usually RustCode's bundled `rc`. Or set it in `config.toml`:
+window screenshots). The section shows each one with **Open System
+Settings** for the exact Privacy & Security list, and **Ask macOS** shows the
+prompts, as does the **Allow desktop control** step under **Settings › System
+setup**. While a permission is off the section checks again every two seconds,
+and a grant applies without restarting anything. While the app is open it hosts the worker, so macOS checks RustCode's
+own grants and lists them as **RustCode**. With the app closed the engine
+starts its own worker, which macOS treats as the bare `rc` binary (that
+Settings names) with grants of its own. Or set it in `config.toml`:
 
 ```toml
 [desktop_control]
@@ -134,20 +139,30 @@ Start a new thread after changing it.
 2. `computer_snapshot` reads one window's accessibility tree. Each element gets
    a ref such as `e12`. Password fields are marked and their values never
    listed; everything read is wrapped as untrusted screen content.
-3. `computer_click`, `computer_type` and `computer_scroll` act on a ref. A
-   click presses the element through Accessibility and typing inserts at its
-   caret, so the app works in the background: the user's pointer, keyboard
-   focus and front window stay theirs. Keys and pixel clicks are posted to the
-   app's own process.
+3. `computer_click`, `computer_type` and `computer_scroll` act on a ref, and
+   the app works behind the user's windows: the user's pointer, keyboard focus
+   and front window stay theirs. A click presses the element through
+   Accessibility when it can. Otherwise clicks, keys and typing are posted to
+   the app's process through WindowServer (`SLEventPostToPid`), after its
+   window is made key without being raised; keyboard events carry the
+   authentication message Chromium asks for, and a left click is preceded by a
+   move and an off-screen press, so Chromium and Electron apps (Discord, Slack,
+   Chrome, VS Code) take it as a real gesture. If the target brings itself to
+   the front anyway, the app the user was in goes back in front. This is Cua
+   Driver's recipe (MIT) on private interfaces; when they are missing the
+   public per-process post is used. Only when an app still ignores the input
+   does the agent pass `foreground: true`, which brings the app to the front
+   and sends the input through the system's own input stream (it moves the
+   user's pointer and takes focus). Foreground input is approved separately
+   from background control of the same app.
 4. `computer_screenshot` captures one window (ScreenCaptureKit, longest side
    1600 px). Pixel coordinates for `computer_click` and `computer_scroll`
    (`x`, `y` with `window_id`) are pixels of the latest screenshot of that
    window, for canvases and custom views without a usable tree.
 
-Before each action the **agent's cursor**, an arrow in RustCode's colour with
-the app's name, glides to where it is about to act, and hides after five idle
-seconds. It is drawn by RustCode in a click-through window that screen
-captures leave out.
+Before each action the **agent's cursor**, a rounded arrow in RustCode's
+colour, glides to where it is about to act and stays there afterwards. It is
+drawn by RustCode in a click-through window that screen captures leave out.
 
 ### Approval
 
@@ -163,12 +178,24 @@ captures leave out.
 
 ### Stop
 
-While the worker runs, the menu bar shows **◉ RustCode** with what it is
-controlling. **Stop desktop control** there ends the worker at once and every
-thread's desktop grants with it; the agent is told to ask before trying again.
+The agent's cursor glides to each target on a short eased arc (longer moves
+take longer, up to about 0.7 s), starting from the user's pointer the first
+time, and shrinks briefly on each click. It then floats gently for half a
+minute and rests where it last acted. It fades away as soon as the user moves
+their pointer or types, and comes back with the agent's next action, and the app's worker shows it there
+again after a restart (`<config>/run/cursor-position`). Its outline is Cua
+Driver's default cursor (MIT). Nothing is added to the menu bar.
 Turning the switch off, closing the thread, or revoking `desktop:<thread>`
 through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
-(`rc computer-worker`) starts on the first desktop call and exits after two
+(`rc computer-worker`) runs as a child of the RustCode app, listening on
+`<config>/run/computer-worker.sock` for the engine (the same `rc` binary, or
+one with the same stable signature, so an engine started before an update
+still connects), and starts again if it exits. When a check finds a
+permission missing, the worker asks a fresh copy of itself every three seconds
+for 15 minutes and starts over in place once the user has granted it, so a
+grant in System Settings applies without restarting the app; its log is
+`<config>/computer-use/hosted-worker.log`. With the app closed, the engine
+starts a worker of its own on the first desktop call, which exits after two
 idle minutes; its log is `<config>/computer-use/desktop-worker.log`.
 
 ### Across paired machines
@@ -191,8 +218,7 @@ there:
   open on that computer.
 - The approval dialog opens on the controlled computer, names the remote
   machine and thread, redacts typed text, and is never auto-approved by Full
-  access. The menu bar indicator names both the app and the remote machine
-  (for example `Safari · Ubuntu VPS`).
+  access.
 - Remote `computer_screenshot` results that exceed 600 KiB as PNG are
   re-encoded as JPEG at the same pixel dimensions so they stay inside the
   remote ACP frame limit without shifting click coordinates.

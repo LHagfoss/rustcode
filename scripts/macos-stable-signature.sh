@@ -31,7 +31,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-TARGET="${1:-$(command -v rustcode || true)}"
+TARGET="${1:-$(command -v rc || command -v rustcode || true)}"
 if [ -z "$TARGET" ] || [ ! -e "$TARGET" ]; then
     echo "Could not find rustcode; pass its path as the first argument." >&2
     exit 1
@@ -65,7 +65,11 @@ fi
 
 if [ -d "$TARGET" ]; then
     DESKTOP_IDENTIFIER="com.lhagfoss.rustcode.desktop"
-    codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" "$TARGET/Contents/MacOS/rustcode"
+    for CLI in "$TARGET/Contents/MacOS/rc" "$TARGET/Contents/MacOS/rustcode"; do
+        if [ -e "$CLI" ]; then
+            codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" "$CLI"
+        fi
+    done
     codesign --force --sign "$IDENTITY" --identifier "$DESKTOP_IDENTIFIER" "$TARGET/Contents/MacOS/rustcode-desktop"
     codesign --force --sign "$IDENTITY" --identifier "$DESKTOP_IDENTIFIER" "$TARGET"
     codesign --verify --deep --strict "$TARGET"
