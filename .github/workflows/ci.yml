@@ -263,6 +263,17 @@ jobs:
               # the files already past it may only shrink.
               run: python3 scripts/check-rust-size.py
 
+            - name: Install Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Test the eval graders
+              # evals/README.md: the evals call paid models and run by hand;
+              # their grading is plain logic and runs here.
+              working-directory: evals
+              run: bun test
+
             - name: Install Rust toolchain
               if: env.AFFECTED_PACKAGES != ''
               uses: dtolnay/rust-toolchain@stable

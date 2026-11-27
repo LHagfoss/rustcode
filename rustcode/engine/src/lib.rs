@@ -40,6 +40,7 @@ mod notifications;
 mod orchestration;
 pub mod permission_places;
 pub use orchestration::cli_bridge;
+pub use orchestration::mcp_manifest::{Offer as McpOffer, manifest as mcp_manifest};
 pub use orchestration::mcp_server::run as run_mcp_orchestrator;
 pub use orchestration::mcp_server::run_outside as run_mcp_connect;
 pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
