@@ -1,0 +1,128 @@
+name: UI screenshots
+
+# Before/after pictures of the desktop UI on a pull request that changes it.
+# Builds the mock (VITE_TRANSPORT=mock: no engine, no model) at the base and
+# at the head, photographs the same views in light and dark with
+# apps/desktop/scripts/ui-shots.ts, and comments a side-by-side table of the
+# views that changed. The pictures live on the `ui-screenshots` branch (never
+# merged), so the comment can show them inline.
+#
+# Advisory: every step that can fail is continue-on-error, so a flaky capture
+# never holds a merge. Pull requests from forks get a read-only token and are
+# skipped.
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - .github/workflows/ui-screenshots.yml
+            - apps/desktop/src/**
+            - apps/desktop/index.html
+            - apps/desktop/package.json
+            - apps/desktop/bun.lock
+            - apps/desktop/vite.config.ts
+            - apps/desktop/scripts/ui-shots.ts
+            - apps/desktop/scripts/uiShots.ts
+
+permissions:
+    contents: write
+    pull-requests: write
+
+concurrency:
+    group: ui-screenshots-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
+
+jobs:
+    shots:
+        name: UI screenshots
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ubuntu-24.04
+        timeout-minutes: 15
+        env:
+            PR: ${{ github.event.pull_request.number }}
+            HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+            GH_TOKEN: ${{ github.token }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  path: head
+
+            - uses: actions/checkout@v7
+              with:
+                  ref: ${{ github.event.pull_request.base.sha }}
+                  path: base
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Restore Bun's install cache
+              uses: actions/cache@v5
+              with:
+                  path: ~/.bun/install/cache
+                  key: bun-${{ runner.os }}-${{ hashFiles('head/apps/desktop/bun.lock') }}
+                  restore-keys: bun-${{ runner.os }}-
+
+            - name: Build and serve both mocks
+              id: serve
+              continue-on-error: true
+              run: |
+                  port=4301
+                  for side in base head; do
+                      dir="$GITHUB_WORKSPACE/$side/apps/desktop"
+                      (cd "$dir" && bun install --frozen-lockfile >/dev/null)
+                      (cd "$dir" && VITE_TRANSPORT=mock bunx vite build --outDir "$RUNNER_TEMP/site-$side" --emptyOutDir --logLevel error)
+                      (cd "$dir" && nohup bunx vite preview --outDir "$RUNNER_TEMP/site-$side" --host 127.0.0.1 --port "$port" --strictPort >"$RUNNER_TEMP/preview-$side.log" 2>&1 &)
+                      echo "$side=http://127.0.0.1:$port" >>"$GITHUB_OUTPUT"
+                      port=$((port + 1))
+                  done
+                  for url in http://127.0.0.1:4301 http://127.0.0.1:4302; do
+                      timeout 60 bash -c "until curl -sf $url >/dev/null; do sleep 1; done"
+                  done
+
+            - name: Photograph the views
+              id: capture
+              if: steps.serve.outcome == 'success'
+              continue-on-error: true
+              working-directory: head/apps/desktop
+              run: |
+                  bun scripts/ui-shots.ts capture "${{ steps.serve.outputs.base }}" "$RUNNER_TEMP/shots/before"
+                  bun scripts/ui-shots.ts capture "${{ steps.serve.outputs.head }}" "$RUNNER_TEMP/shots/after"
+
+            - name: Compare and publish
+              if: steps.capture.outcome == 'success'
+              continue-on-error: true
+              working-directory: head/apps/desktop
+              run: |
+                  short="${HEAD_SHA:0:12}"
+                  base_url="https://raw.githubusercontent.com/${{ github.repository }}/ui-screenshots/pr-$PR/$short"
+                  bun scripts/ui-shots.ts compare "$RUNNER_TEMP/shots/before" "$RUNNER_TEMP/shots/after" "$base_url" >"$RUNNER_TEMP/comment.md"
+                  cat "$RUNNER_TEMP/comment.md"
+
+                  changed=$(find "$RUNNER_TEMP/shots" -name '*.png' | wc -l)
+                  if [ "$changed" -gt 0 ]; then
+                      store="$RUNNER_TEMP/store"
+                      remote="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+                      if git clone -q --depth 1 --branch ui-screenshots "$remote" "$store" 2>/dev/null; then :; else
+                          git init -q "$store"
+                          git -C "$store" checkout -q --orphan ui-screenshots
+                          git -C "$store" remote add origin "$remote"
+                      fi
+                      mkdir -p "$store/pr-$PR/$short"
+                      cp -r "$RUNNER_TEMP/shots/before" "$RUNNER_TEMP/shots/after" "$store/pr-$PR/$short/"
+                      git -C "$store" add -A
+                      git -C "$store" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                          commit -q -m "ui screenshots for #$PR at $short"
+                      for attempt in 1 2 3 4 5; do
+                          git -C "$store" push -q origin ui-screenshots && break
+                          git -C "$store" pull -q --rebase origin ui-screenshots || true
+                      done
+                  fi
+
+                  existing=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+                      --jq '.[] | select(.body | startswith("<!-- rustcode-ui-screenshots -->")) | .id' | head -1)
+                  if [ -n "$existing" ]; then
+                      gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null
+                  elif [ "$changed" -gt 0 ]; then
+                      gh pr comment "$PR" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
+                  fi
