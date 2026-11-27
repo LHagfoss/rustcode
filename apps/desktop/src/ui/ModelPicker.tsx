@@ -17,7 +17,6 @@ import {
   type HarnessModel,
   modelName,
 } from "../acp/types";
-import { clip } from "../lib/clip";
 import {
   modelKey,
   readModelHistory,
@@ -890,10 +889,9 @@ export function filterModelRows(groups: ModelGroup[], provider: string, filter: 
   );
 }
 
-/** The model pill's name: the model's, clipped in a compact composer. The effort has its own pill. */
-export function pillLabel(model?: string | null, compact = false): string {
-  const name = model && model !== "default" ? model : "Model";
-  return compact && name.length > 14 ? `${clip(name, 13)}…` : name;
+export function pillLabel(model?: string | null): string {
+  if (!model || model === "default") return "Model";
+  return model.replace(/^(?:[\w.-]+\/)+(?=\S)/, "");
 }
 
 const NO_CONFIG: ConfigOption[] = [];
@@ -999,7 +997,7 @@ export function pickerModels(
   };
 }
 
-export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
+export function ModelPicker({ thread }: { thread?: ThreadState }) {
   // The computer this picker speaks for: an open thread's own machine, or for a new thread the one
   // **Run on** names. Its harnesses, models and logins are that machine's, read over its connection
   // (docs/desktop.md › Several machines).
@@ -1241,7 +1239,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     catalogName && catalogName !== model
       ? modelTitle(catalogName)
       : modelName(usageModelId(providerId, model ?? undefined));
-  const label = pillLabel(displayName, compact);
+  const label = pillLabel(displayName);
   // Why the current harness's model is not this card's to change (one that picks its own).
   const modelReason = controlDisabledReason("model", caps, harnessName);
   const traits = traitsLabel({
@@ -1290,12 +1288,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         <button
           type="button"
           aria-label="Model"
-          className="flex h-[30px] min-w-0 max-w-[280px] items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill data-[state=open]:bg-fill-strong @max-lg/composer:max-w-[200px]"
+          title={displayName ?? label}
+          className="flex h-[30px] min-w-0 items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
-          <span className="min-w-0 shrink truncate">{label}</span>
+          <span className="flex h-[1lh] min-w-0 flex-wrap items-start gap-x-1.5 overflow-hidden">
+            <span className="max-w-full truncate">{label}</span>
+            {traits && <span className="shrink-0 whitespace-nowrap text-fg-muted">{traits}</span>}
+          </span>
           {fast?.currentBool && <Zap size={12} className="shrink-0" fill="currentColor" />}
-          {traits && <span className="min-w-0 shrink-[2] truncate text-fg-muted">{traits}</span>}
           <ChevronUp
             size={12}
             strokeWidth={2.5}

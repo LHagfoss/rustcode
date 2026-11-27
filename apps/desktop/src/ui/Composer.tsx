@@ -1310,9 +1310,9 @@ export const Composer = memo(function Composer({
               }}
             />
             <span className="flex-1" />
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 [&>:not([aria-label=Model])]:shrink-0">
               {!offline && <DictationButton dictation={dictation} />}
-              <ModelPicker thread={thread} compact={compact} />
+              <ModelPicker thread={thread} />
               {queuedEdit ? (
                 <Tooltip {...tooltipBelowCard} label="Save in the queue (⏎)">
                   <button
