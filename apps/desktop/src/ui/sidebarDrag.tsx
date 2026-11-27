@@ -163,7 +163,6 @@ export function useThreadDrag({
   const lift = (p: Press) => {
     const { style } = p.el;
     style.zIndex = "20";
-    style.opacity = "0.85";
     style.willChange = "transform";
     style.transition = "none";
     setDraggedId(p.id);
@@ -197,7 +196,6 @@ export function useThreadDrag({
     const { style } = p.el;
     style.transform = "";
     style.zIndex = "";
-    style.opacity = "";
     style.willChange = "";
     style.transition = "";
     document.body.style.userSelect = "";

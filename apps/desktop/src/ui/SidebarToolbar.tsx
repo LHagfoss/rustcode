@@ -14,13 +14,16 @@ import { setView, toast, useApp } from "../state/store";
 import { startNewThreadFromContext } from "../state/threadOpen";
 import { ArrowDownUp, Check, LayoutGrid, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
+import { SIDEBAR_ROW_CURRENT, SIDEBAR_ROW_HOVER, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
 
 const TOOL_BUTTON =
   "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill data-[state=open]:text-fg";
 
 /** A row in the nav block over the search: New thread and the destinations beside the threads. */
-const NAV_ROW =
-  "flex h-8 w-full shrink-0 items-center gap-2 rounded-md px-3 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg";
+const NAV_ROW = cx(
+  "flex h-[34px] w-full shrink-0 items-center gap-2 px-3 font-medium text-callout text-fg-muted hover:text-fg",
+  SIDEBAR_ROW_RADIUS,
+);
 
 function NavRow({
   label,
@@ -37,7 +40,7 @@ function NavRow({
     <button
       type="button"
       aria-current={current ? "page" : undefined}
-      className={cx(NAV_ROW, current && "bg-fill-strong text-fg hover:bg-fill-strong")}
+      className={cx(NAV_ROW, current ? cx(SIDEBAR_ROW_CURRENT, "text-fg") : SIDEBAR_ROW_HOVER)}
       onClick={onClick}
     >
       {children}

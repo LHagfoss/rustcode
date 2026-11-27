@@ -126,6 +126,12 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
+import {
+  SIDEBAR_ROW_CURRENT,
+  SIDEBAR_ROW_GROUP_HOVER,
+  SIDEBAR_ROW_LIFTED,
+  SIDEBAR_ROW_RADIUS,
+} from "./sidebarRowStyle";
 import { ThreadHoverCard } from "./ThreadHoverCard";
 import { ThreadQuickActions } from "./ThreadQuickActions";
 
@@ -576,7 +582,7 @@ const NO_AGENTS: SubagentInfo[] = [];
  */
 export const ROW_HEIGHT = 54;
 /** Two lines: the title with its state and time; where it runs, its marks and its model. */
-const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
+const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center px-3";
 /** Line 2 starts where the title does, past the project mark (14px and its 6px gap). */
 const ROW_INDENT = "pl-5";
 /** `MouseEvent.button` of the middle button (a pressed scroll wheel): it settles the row. */
@@ -597,8 +603,7 @@ const ROW_RIGHT =
 // A grid, not a flex row: the sections fold inside an `auto` grid column (`Fold`), which grows to
 // its rows' min-content. A flex row's min-content is its whole title, so every row widened to the
 // longest one and pushed the age out of view; the title's `minmax(0,1fr)` track asks for nothing.
-const COMPACT_ROW =
-  "grid h-[32px] grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-2 rounded-lg px-1.5";
+const COMPACT_ROW = "grid h-[34px] grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-2 px-2";
 
 /** The compact row's leading dot, in the tone the detailed row's chip takes for the same state. */
 const COMPACT_DOT: Record<CompactMark, string> = {
@@ -608,8 +613,17 @@ const COMPACT_DOT: Record<CompactMark, string> = {
   unread: "bg-success",
 };
 
-/** The compact row's one leading icon: the project's mark, with the row's status as a dot on it. */
+/**
+ * The compact row's one leading icon: the project's mark, with the row's status as a dot on it.
+ * A working thread swaps the mark for the spinner, so what runs shows at a glance down the list.
+ */
 function RowIcon({ mark, project, className }: { mark?: CompactMark; project: string; className?: string }) {
+  if (mark === "working")
+    return (
+      <span aria-hidden className="flex size-5 items-center justify-center">
+        <Spinner size={14} className="text-accent" />
+      </span>
+    );
   return (
     <span aria-hidden className="relative flex size-5 items-center justify-center">
       <ProjectMark name={project} size={16} radius="rounded-inline" className={className} />
@@ -633,18 +647,19 @@ function RowIcon({ mark, project, className }: { mark?: CompactMark; project: st
  * the state changed. A child element mounts with the fill it is given, so the selected, picked
  * and hover states show.
  */
-function RowFill({ selected, picked, radius }: { selected: boolean; picked?: boolean; radius: string }) {
+function RowFill({ selected, picked, lifted }: { selected: boolean; picked?: boolean; lifted?: boolean }) {
   return (
     <span
       aria-hidden
       className={cx(
         "pointer-events-none absolute inset-0",
-        radius,
+        SIDEBAR_ROW_RADIUS,
+        lifted && SIDEBAR_ROW_LIFTED,
         picked
           ? "bg-accent/12"
           : selected
-            ? "bg-fill"
-            : "bg-transparent group-hover:bg-fill-subtle group-active:bg-fill",
+            ? SIDEBAR_ROW_CURRENT
+            : cx("bg-transparent", SIDEBAR_ROW_GROUP_HOVER),
       )}
     />
   );
@@ -974,7 +989,7 @@ export const ThreadRow = memo(function ThreadRow({
               aria-pressed={picked || undefined}
               className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
-              <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
+              <RowFill selected={lit || !!dragging} picked={picked} lifted={dragging} />
               {compact ? (
                 <>
                   <RowIcon mark={compactMark(chip)} project={project} className={markTint} />
@@ -1153,7 +1168,7 @@ export const PendingRow = memo(function PendingRow({
           aria-current={selected ? "page" : undefined}
           className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
         >
-          <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
+          <RowFill selected={selected} />
           {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
           <span className={cx(ROW_LINE, compact && "col-span-full")}>
             <span className={ROW_LEFT}>
