@@ -71,11 +71,16 @@ pub fn is_scratch_session_id(session_id: &str) -> bool {
 pub mod atomic_file;
 #[cfg(test)]
 mod history_write_tests;
+mod metadata;
 mod metadata_lock;
 mod search;
 mod workspace;
 
 pub use atomic_file::{replace_file, write_atomic};
+pub use metadata::{
+    LEGACY_PIN_FILE, LEGACY_SNOOZE_FILE, LEGACY_STATUS_FILE, LEGACY_TITLE_FILE,
+    LEGACY_USER_TITLED_FILE, SessionStatusRecord, load_session_metadata_in,
+};
 pub use metadata_lock::SESSION_METADATA_LOCK_FILE;
 pub use search::SessionSearchHit;
 pub use workspace::*;
@@ -862,6 +867,18 @@ pub struct SessionMetadata {
     /// renaming its own thread (issue 3599). False for older threads.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub user_titled: bool,
+    /// Saved title for this thread; replaces the legacy `title.txt` sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Stored thread status (`review`, `done`, or `stalled`; `idle` is absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<SessionStatusRecord>,
+    /// Whether the thread is pinned; replaces the legacy `pin.json` sidecar.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// Persisted snooze deadline in Unix milliseconds; replaces `snooze.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<u64>,
     /// The scheduled job whose run started this thread (`docs/daemon.md` ›
     /// Scheduled jobs). Such a thread belongs to the job's own view, never to
     /// the thread list. Absent for every other thread.
@@ -977,6 +994,10 @@ impl SessionMetadata {
             parent: None,
             repo: None,
             user_titled: false,
+            title: None,
+            status: None,
+            pinned: false,
+            snoozed_until: None,
             scheduled_job: None,
             machine_origins: std::collections::BTreeMap::new(),
         }
@@ -1299,11 +1320,6 @@ impl SessionStore {
         queue_history_write(path, history.messages(), history.revision());
     }
 
-    pub fn save_session_title(&self, session_id: &str, title: &str) {
-        let session_dir = self.ensure_session(session_id);
-        let _ = write_session_file(&session_dir, "title.txt", title.as_bytes());
-    }
-
     /// Persist the deterministic title derived from the first user prompt only
     /// when no explicit title has already been saved.
     pub fn save_session_title_if_absent(&self, session_id: &str, history: &[ChatMessage]) {
@@ -1316,17 +1332,6 @@ impl SessionStore {
             return;
         }
         self.save_session_title(session_id, &title);
-    }
-
-    pub fn load_session_title(&self, session_id: &str) -> Option<String> {
-        let path = self.session_dir(session_id).join("title.txt");
-        path.exists()
-            .then(|| {
-                read_store_text(&path)
-                    .ok()
-                    .map(|value| unwrap_title_paste_markers(value.trim()).into_owned())
-            })
-            .flatten()
     }
 
     pub fn load_session_history_direct(&self, session_id: &str) -> Vec<ChatMessage> {
@@ -1623,20 +1628,6 @@ impl SessionStore {
         })
     }
 
-    /// Record that the user named the session themselves, so an agent leaves
-    /// the title alone (issue 3599).
-    pub fn mark_session_user_titled(&self, session_id: &str) -> std::io::Result<()> {
-        self.update_session_metadata(session_id, |metadata| {
-            !std::mem::replace(&mut metadata.user_titled, true)
-        })
-    }
-
-    /// Whether the user named the session themselves.
-    pub fn session_user_titled(&self, session_id: &str) -> bool {
-        self.load_session_metadata(session_id)
-            .is_some_and(|metadata| metadata.user_titled)
-    }
-
     /// Record the session's model profile and reasoning effort, so reopening
     /// or resuming it continues with the same settings.
     pub fn save_session_model(&self, session_id: &str, model: SessionModel) -> std::io::Result<()> {
@@ -1767,26 +1758,7 @@ impl SessionStore {
         session_id: &str,
         update: impl FnOnce(&mut SessionMetadata) -> bool,
     ) -> std::io::Result<()> {
-        if !valid_session_id(session_id) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "invalid session id",
-            ));
-        }
-        let directory = self.ensure_session(session_id);
-        let _lock = metadata_lock::MetadataLock::acquire(&directory)?;
-        let mut metadata = self.load_session_metadata(session_id).unwrap_or_else(|| {
-            SessionMetadata::new(
-                session_id,
-                session_timestamp_ms(session_id).unwrap_or_else(current_time_ms),
-                None,
-            )
-        });
-        if !update(&mut metadata) {
-            return Ok(());
-        }
-        let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
-        write_session_file(&directory, SESSION_METADATA_FILE, &contents)
+        self.update_session_metadata_with_cleanup(session_id, true, update, &[])
     }
 
     /// The session's recorded YOLO setting, if it was ever set.
@@ -1795,15 +1767,7 @@ impl SessionStore {
     }
 
     pub fn load_session_metadata(&self, session_id: &str) -> Option<SessionMetadata> {
-        if !valid_session_id(session_id) {
-            return None;
-        }
-        let metadata: SessionMetadata = serde_json::from_slice(
-            &read_store_file(&self.session_dir(session_id).join(SESSION_METADATA_FILE)).ok()?,
-        )
-        .ok()?;
-        (metadata.id == session_id && metadata.schema_version == SESSION_METADATA_SCHEMA_VERSION)
-            .then_some(metadata)
+        self.load_session_metadata_counted(session_id)
     }
 
     /// Return a stable page ordered by session timestamp and ID. The cursor

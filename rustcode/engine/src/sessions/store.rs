@@ -475,13 +475,62 @@ pub fn save_session_title(session_id: &str, title: &str) {
 /// Save a title the user typed (`/change_title`), and record that they chose
 /// it so an agent leaves it alone (issue 3599).
 pub fn save_user_session_title(session_id: &str, title: &str) {
-    save_session_title(session_id, title);
-    if rustcode_session::valid_session_id(session_id)
-        && let Some(session_store) = store()
-        && let Err(error) = session_store.mark_session_user_titled(session_id)
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_user_session_title(session_id, title)
     {
         crate::dbg_log!("failed to record the user's title for {session_id}: {error}");
     }
+}
+
+pub(crate) fn save_session_status(session_id: &str, status: Option<&str>) -> Result<(), String> {
+    store()
+        .ok_or_else(|| "session storage is unavailable".to_owned())?
+        .save_session_status(session_id, status)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_session_status(session_id: &str) -> Option<String> {
+    store()?.load_session_status(session_id)
+}
+
+pub(crate) fn save_session_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
+    store()
+        .ok_or_else(|| "session storage is unavailable".to_owned())?
+        .save_session_pinned(session_id, pinned)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_session_pinned(session_id: &str) -> bool {
+    store().is_some_and(|session_store| session_store.load_session_pinned(session_id))
+}
+
+pub(crate) fn save_session_snoozed_until(
+    session_id: &str,
+    until: Option<u64>,
+) -> Result<(), String> {
+    store()
+        .ok_or_else(|| "thread storage is unavailable".to_owned())?
+        .save_session_snoozed_until(session_id, until)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_session_snoozed_until(session_id: &str) -> Option<u64> {
+    store()?.load_session_snoozed_until(session_id)
+}
+
+pub(crate) fn restore_session_state(
+    session_id: &str,
+    status: Option<&str>,
+    pinned: bool,
+    snoozed_until: Option<u64>,
+) -> Result<(), String> {
+    store()
+        .ok_or_else(|| "session storage is unavailable".to_owned())?
+        .restore_session_state(session_id, status, pinned, snoozed_until)
+        .map_err(|error| error.to_string())
 }
 
 /// Whether the user named the session themselves (`/change_title`), so an

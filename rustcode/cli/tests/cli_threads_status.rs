@@ -97,10 +97,14 @@ impl Sandbox {
 
     /// The status the engine stored for a thread, or `None` for active.
     fn stored_status(&self, id: &str) -> Option<String> {
-        let path = self.thread_dir(id).join("status.json");
-        let text = std::fs::read_to_string(path).ok()?;
+        let dir = self.thread_dir(id);
+        let text = std::fs::read_to_string(dir.join("metadata.json")).ok()?;
         let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-        value.get("status")?.as_str().map(str::to_owned)
+        value
+            .get("status")?
+            .get("status")?
+            .as_str()
+            .map(str::to_owned)
     }
 }
 

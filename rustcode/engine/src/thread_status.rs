@@ -5,22 +5,20 @@
 //! and never stored: a [`TurnGuard`] marks a turn, a [`WaitGuard`] an
 //! approval or question the turn waits on. `review` and `done` are set with
 //! `_rustcode/session/status` (or `done` by a merged pull request) and stored
-//! in the thread's directory as `status.json`. Each change is told to every
-//! connected client as `session/update` `session_info_update` carrying
-//! `_meta.rustcode.status`, whether or not it has the thread open: thread
-//! lists show it.
+//! in the thread's `metadata.json` (with fallback reads for legacy
+//! `status.json`). Each change is told to every connected client as
+//! `session/update` `session_info_update` carrying `_meta.rustcode.status`,
+//! whether or not it has the thread open: thread lists show it.
 //!
-//! Pins are stored the same way (`pin.json`), set with
-//! `_rustcode/session/pin` and carried as `_meta.rustcode.pinned`, so the
-//! terminal UI and the apps agree on them. Archiving a thread is `done`.
+//! Pins are stored the same way in `metadata.json` (with fallback reads for
+//! legacy `pin.json`), set with `_rustcode/session/pin` and carried as
+//! `_meta.rustcode.pinned`, so the terminal UI and the apps agree on them.
+//! Archiving a thread is `done`.
 
 use agent_client_protocol::schema::v1::{SessionInfoUpdate, SessionUpdate};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-
-const STATUS_FILE: &str = "status.json";
-const PIN_FILE: &str = "pin.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -79,10 +77,8 @@ pub(crate) fn set_notifier(notify: impl Fn(String, SessionUpdate) + Send + Sync 
 }
 
 fn stored(session_id: &str) -> Option<Status> {
-    let dir = crate::sessions::get_active_session_dir(session_id)?;
-    let text = std::fs::read_to_string(dir.join(STATUS_FILE)).ok()?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    match value.get("status")?.as_str()? {
+    let status = crate::sessions::load_session_status(session_id)?;
+    match status.as_str() {
         "stalled" => Some(Status::Stalled),
         status => Status::storable(status),
     }
@@ -94,16 +90,8 @@ pub(crate) fn is_settled(session_id: &str) -> bool {
 }
 
 fn store(session_id: &str, status: Status) -> Result<(), String> {
-    let dir = crate::sessions::get_active_session_dir(session_id)
-        .ok_or_else(|| "session storage is unavailable".to_owned())?;
-    let path = dir.join(STATUS_FILE);
-    if status == Status::Idle {
-        let _ = std::fs::remove_file(path);
-        return Ok(());
-    }
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let text = json!({ "status": status.as_str(), "at": chrono::Utc::now().to_rfc3339() });
-    crate::atomic_file::write_atomic(&path, text.to_string().as_bytes()).map_err(|e| e.to_string())
+    let value = (status != Status::Idle).then_some(status.as_str());
+    crate::sessions::save_session_status(session_id, value)
 }
 
 fn watched() -> &'static Mutex<std::collections::HashSet<String>> {
@@ -334,18 +322,11 @@ pub(crate) fn restore_state(
     if !rustcode_session::valid_session_id(session_id) {
         return;
     }
-    if let Some(raw) = status
-        && let Some(parsed) = Status::storable(raw)
-        && parsed != Status::Idle
-    {
-        let _ = store(session_id, parsed);
-    }
-    if pinned_flag {
-        let _ = set_pinned(session_id, true);
-    }
-    if let Some(until) = snoozed {
-        let _ = set_snoozed(session_id, Some(until));
-    }
+    let parsed_status = status
+        .and_then(Status::storable)
+        .filter(|parsed| *parsed != Status::Idle)
+        .map(Status::as_str);
+    let _ = crate::sessions::restore_session_state(session_id, parsed_status, pinned_flag, snoozed);
 }
 
 pub(crate) fn set_own_status(session_id: &str, status: &str) -> Result<(), String> {
@@ -391,24 +372,17 @@ pub(crate) struct SetStatusRequest {
 
 /// The owner's persisted snooze deadline, in Unix milliseconds.
 pub(crate) fn snoozed_until(id: &str) -> Option<u64> {
-    let dir = crate::sessions::get_active_session_dir(id)?;
-    serde_json::from_slice::<Option<u64>>(&std::fs::read(dir.join("snooze.json")).ok()?)
-        .ok()
-        .flatten()
+    crate::sessions::load_session_snoozed_until(id)
 }
 
 pub(crate) fn set_snoozed(id: &str, until: Option<u64>) -> Result<(), String> {
     if !rustcode_session::valid_session_id(id) {
         return Err("invalid session id".into());
     }
-    let dir = crate::sessions::get_active_session_dir(id)
+    crate::sessions::get_active_session_dir(id)
         .filter(|dir| dir.is_dir())
         .ok_or_else(|| "thread storage is unavailable".to_owned())?;
-    crate::atomic_file::write_atomic(
-        &dir.join("snooze.json"),
-        json!(until).to_string().as_bytes(),
-    )
-    .map_err(|e| e.to_string())?;
+    crate::sessions::save_session_snoozed_until(id, until)?;
     notify_snooze(id, until);
     Ok(())
 }
@@ -500,8 +474,7 @@ pub(crate) fn set_title(request: &SetTitleRequest) -> Result<Value, String> {
 
 /// Whether the thread is pinned.
 pub(crate) fn pinned(session_id: &str) -> bool {
-    crate::sessions::get_active_session_dir(session_id)
-        .is_some_and(|dir| dir.join(PIN_FILE).is_file())
+    crate::sessions::load_session_pinned(session_id)
 }
 
 /// Pin or unpin a thread and tell the client.
@@ -509,17 +482,7 @@ pub(crate) fn set_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
     if !rustcode_session::valid_session_id(session_id) {
         return Err("invalid session id".to_owned());
     }
-    let dir = crate::sessions::get_active_session_dir(session_id)
-        .ok_or_else(|| "session storage is unavailable".to_owned())?;
-    let path = dir.join(PIN_FILE);
-    if pinned {
-        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-        let text = json!({ "pinned": true, "at": chrono::Utc::now().to_rfc3339() });
-        crate::atomic_file::write_atomic(&path, text.to_string().as_bytes())
-            .map_err(|error| error.to_string())?;
-    } else {
-        let _ = std::fs::remove_file(path);
-    }
+    crate::sessions::save_session_pinned(session_id, pinned)?;
     if let Some(notify) = notifier()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
