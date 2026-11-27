@@ -129,3 +129,30 @@ function compareLink(url: string): { label: string; url: string } {
   if (from && to && VERSION.test(from) && VERSION.test(to)) return { label: `Compare ${from}…${to}`, url };
   return { label: "Full changelog", url };
 }
+
+/** A pull request a note names, drawn as a small link after the note's text. */
+export interface PullRef {
+  number: string;
+  url: string;
+}
+
+const TRAILING_REFS = /\s*\(((?:\s*,?\s*(?:\[#\d+\]\([^)\s]+\)|#\d+))+)\s*\)\s*$/;
+const REF = /\[#(\d+)\]\(([^)\s]+)\)|#(\d+)/g;
+
+/**
+ * A note's text without its trailing `(#N)` or `([#N](url), #M)` group, and the
+ * pull requests that group named, so the dialog can draw them as quiet links
+ * instead of parenthesised chips.
+ */
+export function splitPullRefs(item: string, repo?: string): { text: string; refs: PullRef[] } {
+  const tail = TRAILING_REFS.exec(item);
+  if (!tail?.[1]) return { text: item, refs: [] };
+  const refs: PullRef[] = [];
+  for (const match of tail[1].matchAll(REF)) {
+    const number = match[1] ?? match[3];
+    const url = match[2] ?? (repo ? `https://github.com/${repo}/pull/${number}` : undefined);
+    if (number && url) refs.push({ number, url });
+  }
+  if (!refs.length) return { text: item, refs: [] };
+  return { text: item.slice(0, tail.index).trimEnd(), refs };
+}
