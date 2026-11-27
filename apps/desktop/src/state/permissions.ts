@@ -145,8 +145,17 @@ export function modeLabel(mode: PermissionMode): string {
  * that one is the user's review of the plan, not a safety prompt. So does a
  * secret: only the user can type its value, and an allow without one fails.
  */
+/** The engine's desktop-control cards (`computer_use/desktop.rs`): they act on the user's real desktop. */
+const DESKTOP_CONTROL_CALL = "desktop-";
+
+/** Desktop control always asks the user: Full access covers the thread's work, not the user's own apps. */
+export function isDesktopControl(request: PermissionRequest): boolean {
+  return request.toolCallId.startsWith(DESKTOP_CONTROL_CALL);
+}
+
 export function autoAnswer(request: PermissionRequest, mode: PermissionMode): PermissionOption | null {
   if (mode === "ask" || request.question || request.secret || request.toolKind === "switch_mode") return null;
+  if (isDesktopControl(request)) return null;
   if (mode === "edits" && !EDIT_KINDS.has(kindOf(request))) return null;
   return allowOption(request);
 }

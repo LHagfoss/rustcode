@@ -293,6 +293,7 @@ fn click(
 ) -> Result<Value, String> {
     let (point, window) = target_point(pid, element.as_deref(), window_id, x, y)?;
     ui::glide(point);
+    ui::press();
     let foreground = target == input::Target::Foreground;
     if let Some(element) = &element
         && !foreground

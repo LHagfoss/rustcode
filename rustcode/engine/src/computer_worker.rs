@@ -9,6 +9,7 @@
 //! kill; a closed stdin ends it.
 
 pub mod cursor_image;
+pub mod cursor_motion;
 #[cfg(unix)]
 pub mod hosted;
 pub mod keys;
