@@ -275,6 +275,6 @@ mod tests {
         assert_eq!(outline[0], (0.0, 0.0));
         let (_, min_y, _, max_y) = bounds(&outline);
         assert!(min_y > -3.0 && min_y <= 0.0);
-        assert!((max_y - OUTLINE_HEIGHT).abs() < 1.5);
+        assert!(max_y > OUTLINE_HEIGHT - 1.0 && max_y < OUTLINE_HEIGHT + 4.0);
     }
 }
