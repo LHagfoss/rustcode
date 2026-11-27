@@ -109,6 +109,7 @@ export class MockMachine {
       "default-permission-mode": studio ? "ask" : "edits",
       "resume-after-restart": studio,
       "continue-after-limit": true,
+      "merge-when-green": false,
       "auto-compact-mode": studio ? "size" : "cache",
       "auto-compact-threshold": studio ? 150_000 : 200_000,
       orchestration: true,

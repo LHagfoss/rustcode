@@ -297,10 +297,12 @@ function GeneralPage() {
   const defaultAccess = useScopedSetting("default-permission-mode", permissionLabel);
   const resume = useScopedSetting("resume-after-restart", boolLabel);
   const afterLimit = useScopedSetting("continue-after-limit", boolLabel);
+  const mergeWhenGreen = useScopedSetting("merge-when-green", boolLabel);
   const autoCompactMode = useScopedSetting("auto-compact-mode", compactLabel);
   const autoCompactThreshold = useScopedSetting("auto-compact-threshold", thresholdLabel);
   const resumeValue = Boolean(resume.value ?? SETTINGS_DEFAULTS.resumeAfterRestart);
   const afterLimitValue = Boolean(afterLimit.value ?? SETTINGS_DEFAULTS.continueAfterLimit);
+  const mergeWhenGreenValue = mergeWhenGreen.value === true;
   const autoCompactValue = String(autoCompactMode.value ?? SETTINGS_DEFAULTS.autoCompact.mode);
   const autoCompactThresholdValue = Number(autoCompactThreshold.value ?? AUTO_COMPACT_DEFAULT_THRESHOLD);
   const notifications = useApp((s) => s.systemNotifications);
@@ -378,6 +380,26 @@ function GeneralPage() {
               label="Continue threads on their own"
               checked={afterLimitValue}
               onChange={(value) => void afterLimit.set(value)}
+            />
+          </ScopedValue>
+        </Row>
+        <Row
+          title="Merge pull requests when checks pass"
+          reset={
+            mergeWhenGreen.mixed || mergeWhenGreenValue ? () => void mergeWhenGreen.set(false) : undefined
+          }
+          subtitle="A worktree thread's pull request squash-merges once every check passes."
+          hint="Then RustCode removes the worktree and settles the thread. After a failing check it waits for the thread's fix, three times at most."
+        >
+          <ScopedValue
+            mixed={mergeWhenGreen.mixed}
+            breakdown={mergeWhenGreen.breakdown}
+            project={mergeWhenGreen.project}
+          >
+            <Switch
+              label="Merge pull requests when checks pass"
+              checked={mergeWhenGreenValue}
+              onChange={(value) => void mergeWhenGreen.set(value)}
             />
           </ScopedValue>
         </Row>
