@@ -191,6 +191,7 @@ export function CardPopover({
       <Popover.Anchor virtualRef={anchor} />
       <Popover.Portal>
         <Popover.Content
+          updatePositionStrategy="always"
           side={placed}
           align={align ?? aligned}
           sideOffset={CARD_GAP}
