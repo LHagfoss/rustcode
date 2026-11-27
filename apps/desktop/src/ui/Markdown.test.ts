@@ -71,7 +71,7 @@ describe("the inline pills in a reply", () => {
 
   test("the slash command that heads a sent message keeps its own shape", () => {
     const out = drawn(`\`${COMMAND_MARK}/review\` the diff`);
-    expect(out).toContain("rounded-md bg-accent/12");
+    expect(out).toContain("rounded-full bg-accent/12");
     expect(out).not.toContain("Click to copy");
   });
 });

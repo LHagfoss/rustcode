@@ -5,7 +5,7 @@
 import { Dialog } from "radix-ui";
 import { useMemo, useState } from "react";
 import { openExternal } from "../lib/native";
-import { parseReleaseNotes } from "../lib/releaseNotes";
+import { parseReleaseNotes, splitPullRefs } from "../lib/releaseNotes";
 import { toast, useApp } from "../state/store";
 import {
   busyThreads,
@@ -165,18 +165,19 @@ export function WhatsNewDialog() {
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         {/* The dialog rises and scales in through `rc-whatsnew` (index.css), 200ms, and leaves the
             way it came; the class carries both, so the close holds until it has played. */}
-        <Dialog.Content className="elevated rc-whatsnew fixed top-1/2 left-1/2 z-50 flex max-h-[min(640px,calc(100vh-80px))] w-[min(560px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col">
-          <div className="flex items-center gap-3 px-5 pt-5 pb-3">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-accent/15 text-accent">
+        <Dialog.Content className="elevated rc-whatsnew fixed overflow-hidden top-1/2 left-1/2 z-50 flex max-h-[min(640px,calc(100vh-80px))] w-[min(560px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col">
+          <header className="relative shrink-0 overflow-hidden px-5 pt-5 pb-4">
+            <ReleaseBanner />
+            <span className="relative flex size-9 items-center justify-center rounded-lg bg-accent/20 text-accent shadow-1">
               <Sparkles size={16} />
             </span>
-            <div className="min-w-0 flex-1">
-              <Dialog.Title className="font-semibold text-title3">What's new in {shown.version}</Dialog.Title>
-              <Dialog.Description className="text-callout text-fg-muted">
-                RustCode updated. Here is what changed.
-              </Dialog.Description>
-            </div>
-          </div>
+            <Dialog.Title className="relative mt-3 font-semibold text-title2">
+              What's new in {shown.version}
+            </Dialog.Title>
+            <Dialog.Description className="relative text-sub text-fg-muted">
+              RustCode updated. Here is what changed.
+            </Dialog.Description>
+          </header>
           <div
             aria-busy={shown.state === "loading"}
             className="selectable min-h-0 flex-1 overflow-y-auto px-5 pb-3"
@@ -225,9 +226,7 @@ function Notes({ whatsNew, page }: { whatsNew: WhatsNew; page: string }) {
           {group.heading && <CategoryHeading name={group.heading} />}
           <ul className="ml-[1.1em] list-disc space-y-2 marker:text-fg-faint">
             {group.items.map((item, j) => (
-              <li key={j} className="pl-0.5">
-                <Markdown text={item} />
-              </li>
+              <Note key={j} item={item} />
             ))}
           </ul>
         </section>
@@ -242,6 +241,49 @@ function Notes({ whatsNew, page }: { whatsNew: WhatsNew; page: string }) {
           {notes.compare.label}
         </button>
       )}
+    </div>
+  );
+}
+
+/** One note in the sub size, its pull requests trailing it as quiet `#N` links. */
+function Note({ item }: { item: string }) {
+  const { text, refs } = useMemo(() => splitPullRefs(item, REPO), [item]);
+  return (
+    <li className="pl-0.5">
+      <Markdown text={text} className="inline! text-sub! leading-snug! [&_p]:inline [&_p]:leading-snug" />
+      {refs.map((ref) => (
+        <button
+          key={ref.number}
+          type="button"
+          onClick={() => openExternal(ref.url)}
+          className="ml-1.5 cursor-pointer align-baseline font-mono text-caption text-fg-faint hover:text-accent"
+        >
+          #{ref.number}
+        </button>
+      ))}
+    </li>
+  );
+}
+
+/**
+ * The header's picture: a dot grid in the accent that fades out toward the
+ * notes, over a soft accent wash, drawn in SVG so it follows the theme.
+ */
+function ReleaseBanner() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 text-accent">
+      <div className="absolute inset-0 bg-linear-to-b from-accent/18 to-transparent" />
+      <svg
+        className="absolute inset-0 size-full [mask-image:radial-gradient(120%_100%_at_100%_0%,black,transparent_70%)]"
+        role="presentation"
+      >
+        <defs>
+          <pattern id="rc-whatsnew-dots" width="12" height="12" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="1" fill="currentColor" opacity="0.6" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#rc-whatsnew-dots)" />
+      </svg>
     </div>
   );
 }

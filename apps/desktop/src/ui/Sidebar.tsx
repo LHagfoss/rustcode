@@ -117,6 +117,7 @@ import { HiddenDot, ProjectHeader } from "./ProjectHeader";
 import { Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { SettingsNav } from "./Settings";
+import { SidebarSelection } from "./SidebarSelection";
 import { PendingRow, ROW_HEIGHT, ThreadRow } from "./SidebarThreadRow";
 import { SidebarToolbar, ThreadSectionLabel } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
@@ -1284,7 +1285,8 @@ export function Sidebar() {
               style={{ maskImage: fade, WebkitMaskImage: fade }}
             >
               {listing && <ThreadRowsSkeleton />}
-              <div className="flex min-h-full flex-col">
+              <div className="relative flex min-h-full flex-col">
+                <SidebarSelection />
                 {sections.map((section) => {
                   const open = isOpen(section.id);
                   const shelf = isShelf(section.id, layoutMode);

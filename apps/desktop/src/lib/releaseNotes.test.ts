@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseReleaseNotes } from "./releaseNotes";
+import { parseReleaseNotes, splitPullRefs } from "./releaseNotes";
 
 /** v1.20.1's release body, exactly as GitHub generated it. */
 const GENERATED = `<!-- Release notes generated using configuration in .github/release.yml at v1.20.1 -->
@@ -92,5 +92,35 @@ describe("release notes", () => {
 
   test("nothing at all is no notes", () => {
     expect(parseReleaseNotes("<!-- only a comment -->\n\n")).toEqual({ groups: [], compare: null });
+  });
+});
+
+describe("pull request refs", () => {
+  const repo = "LHagfoss/rustcode";
+
+  test("a linked ref moves out of the note's text", () => {
+    expect(
+      splitPullRefs("Jobs are clearer. ([#4542](https://github.com/LHagfoss/rustcode/pull/4542))"),
+    ).toEqual({
+      text: "Jobs are clearer.",
+      refs: [{ number: "4542", url: "https://github.com/LHagfoss/rustcode/pull/4542" }],
+    });
+  });
+
+  test("bare refs in one group become links to the repository", () => {
+    expect(splitPullRefs("Previews fit. (#4538, #4539)", repo)).toEqual({
+      text: "Previews fit.",
+      refs: [
+        { number: "4538", url: "https://github.com/LHagfoss/rustcode/pull/4538" },
+        { number: "4539", url: "https://github.com/LHagfoss/rustcode/pull/4539" },
+      ],
+    });
+  });
+
+  test("a note without a trailing group is left alone", () => {
+    expect(splitPullRefs("Fixes (the sidebar) scroll.", repo)).toEqual({
+      text: "Fixes (the sidebar) scroll.",
+      refs: [],
+    });
   });
 });
