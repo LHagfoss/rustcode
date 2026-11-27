@@ -13,6 +13,7 @@
 // card's context tiles) never takes the card itself out from under the pointer.
 
 import {
+  type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -188,6 +189,15 @@ function keyboardFocus(): boolean {
   return document.documentElement.hasAttribute(KEYBOARD_NAV);
 }
 
+/** Whether a scroll moved the tip's target: one in a scroller that holds the target, or the page
+ * itself. A transcript that follows a streaming reply, or a list inside the card, scrolls on its
+ * own and must not put out a tip hanging off something it does not hold. */
+export function scrollMovesTarget(scrolled: EventTarget | null, target: object | null): boolean {
+  const scroller = scrolled as Partial<Pick<Node, "contains">> | null;
+  if (!target || typeof scroller?.contains !== "function") return true;
+  return scroller.contains(target as Node);
+}
+
 export interface HoverTip {
   /** Whether this tip is the one on screen. */
   open: boolean;
@@ -200,7 +210,7 @@ export interface HoverTip {
     onPointerDown: () => void;
     onPointerUp: () => void;
     onClick: () => void;
-    onFocus: () => void;
+    onFocus: (event: ReactFocusEvent<HTMLElement>) => void;
     onBlur: () => void;
   };
   /** On a card that takes the pointer (one with controls in it): the tip holds while the pointer
@@ -225,6 +235,7 @@ export function useHoverTip(track: TipTrack = "tooltip"): HoverTip {
   );
   // The press that focuses a target, so its own focus does not open the tip it just put away.
   const pressed = useRef(false);
+  const trigger = useRef<Element | null>(null);
   const dismiss = useCallback(() => tips.dismiss(id), [tips, id]);
 
   // Nothing may outlive its reason: a scroll moves the target out from under the tip, a resize does
@@ -233,15 +244,18 @@ export function useHoverTip(track: TipTrack = "tooltip"): HoverTip {
   useEffect(() => {
     if (!armed) return;
     const close = () => tips.dismiss(id);
+    const onScroll = (event: Event) => {
+      if (scrollMovesTarget(event.target, trigger.current)) close();
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
-    document.addEventListener("scroll", close, true);
+    document.addEventListener("scroll", onScroll, true);
     document.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("scroll", onScroll, true);
       document.removeEventListener("keydown", onKey, true);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
@@ -256,6 +270,7 @@ export function useHoverTip(track: TipTrack = "tooltip"): HoverTip {
       onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
         // A touch has no hover: its press is the whole interaction.
         if (event.pointerType === "touch") return;
+        trigger.current = event.currentTarget;
         pressed.current = false;
         tips.enter(id);
       },
@@ -275,8 +290,9 @@ export function useHoverTip(track: TipTrack = "tooltip"): HoverTip {
       onClick: () => {
         tips.dismiss(id);
       },
-      onFocus: () => {
+      onFocus: (event: ReactFocusEvent<HTMLElement>) => {
         if (pressed.current || !keyboardFocus()) return;
+        trigger.current = event.currentTarget;
         tips.enter(id);
       },
       onBlur: () => {
