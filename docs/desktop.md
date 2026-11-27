@@ -339,7 +339,13 @@ browser pane in the user's terminal; WebKit
 app. End-to-end: `bun run e2e` in `apps/desktop` runs the Playwright flows in
 `e2e/` against a mock production build in the installed Chrome (`E2E_CHROME`
 names another binary); Desktop CI runs them in a job of their own. Add a flow
-for a user path a unit test cannot reach, not for each component. Releases:
+for a user path a unit test cannot reach, not for each component. A pull
+request that changes the UI gets a "UI screenshots" comment
+(`.github/workflows/ui-screenshots.yml`): the mock at the base and at the head,
+photographed in the same views in light and dark by `scripts/ui-shots.ts`, with
+the views that changed side by side; the pictures are kept on the unmerged
+`ui-screenshots` branch. Add a view to `VIEWS` there when a screen matters for
+review and the mock reaches it. Releases:
 `scripts/release-notes.sh > notes.md`, edit, then
 `scripts/release.sh --version X --notes-file notes.md --yes`.
 
