@@ -51,7 +51,7 @@ import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { boundTips } from "./newThreadTips";
-import { PANEL_TOGGLE_LABEL, PanelToggle, useCardOverHeader } from "./PanelToggle";
+import { PANEL_TOGGLE_LABEL, PanelToggle } from "./PanelToggle";
 import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import { Callout, cx, Kbd, Pill, Skeleton, Spinner, surfaceCollisionPadding, Tooltip } from "./primitives";
@@ -136,19 +136,9 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
   return thread ? <PlanButton thread={thread} /> : null;
 }
 
-/**
- * The side panel's toggle, "Thread info". While the panel is open its card carries the toggle at
- * its own top (ui/PanelToggle.tsx), so the header leaves it out.
- */
-function DetailsHeaderButton() {
-  const open = useApp((s) => !!s.panel);
-  const overHeader = useCardOverHeader();
-  return open && overHeader ? null : <PanelToggle />;
-}
-
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
-  details: { label: PANEL_TOGGLE_LABEL, icon: PanelRight, Button: DetailsHeaderButton },
+  details: { label: PANEL_TOGGLE_LABEL, icon: PanelRight, Button: PanelToggle },
 };
 
 function Header({
