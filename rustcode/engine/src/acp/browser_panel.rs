@@ -172,24 +172,32 @@ impl StreamRegistry {
         self.watchers(&key.0)
     }
 
-    fn finished(&mut self, key: &StreamKey, generation: u64) {
+    fn finished(&mut self, key: &StreamKey, generation: u64) -> bool {
         if self
             .entries
             .get(key)
             .is_some_and(|(current, _)| *current == generation)
         {
             self.entries.remove(key);
+            self.watchers(&key.0) == 0
+        } else {
+            false
         }
     }
 
-    fn drop_client(&mut self, client_id: ClientId) {
-        self.entries.retain(|(_, owner), (_, token)| {
+    fn drop_client(&mut self, client_id: ClientId) -> Vec<String> {
+        let mut sessions = Vec::new();
+        self.entries.retain(|(session, owner), (_, token)| {
             let keep = *owner != client_id;
             if !keep {
                 token.cancel();
+                sessions.push(session.clone());
             }
             keep
         });
+        sessions.retain(|session| self.watchers(session) == 0);
+        sessions.sort();
+        sessions
     }
 
     fn watchers(&self, session_id: &str) -> usize {
@@ -212,9 +220,33 @@ fn stop_stream_task(session_id: &str, client_id: ClientId) -> usize {
     active_streams().remove(&(session_id.to_owned(), client_id))
 }
 
-/// Cancel every frame stream the closed connection `client_id` subscribed to.
+async fn stop_screencast_if_unwatched(session_id: &str) {
+    let watchers = active_streams().watchers(session_id);
+    if watchers == 0 {
+        let _ = crate::computer_use::run_panel_action(
+            session_id,
+            "panel_stream",
+            json!({ "active": false }),
+        )
+        .await;
+    }
+}
+
+/// Cancel every frame stream the closed connection `client_id` subscribed to
+/// and stop the panel screencast for any session left without watchers.
 pub(super) fn client_closed(client_id: ClientId) {
-    active_streams().drop_client(client_id);
+    let orphaned = active_streams().drop_client(client_id);
+    if orphaned.is_empty() {
+        return;
+    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    for session_id in orphaned {
+        handle.spawn(async move {
+            stop_screencast_if_unwatched(&session_id).await;
+        });
+    }
 }
 
 async fn start_stream_task(
@@ -230,8 +262,11 @@ async fn start_stream_task(
     let key = (session_id.clone(), client_id);
     let generation = active_streams().insert(key.clone(), token.clone());
     tokio::spawn(async move {
-        forward_frames(&session_id, &token, &mut rx, latest, &connection).await;
-        active_streams().finished(&key, generation);
+        let send_failed = forward_frames(&session_id, &token, &mut rx, latest, &connection).await;
+        let orphaned = active_streams().finished(&key, generation);
+        if orphaned && send_failed {
+            stop_screencast_if_unwatched(&session_id).await;
+        }
     });
 }
 
@@ -241,7 +276,7 @@ async fn forward_frames(
     rx: &mut tokio::sync::broadcast::Receiver<ScreencastFrame>,
     latest: Option<ScreencastFrame>,
     connection: &agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
-) {
+) -> bool {
     if let Some(frame) = latest
         && let Ok(msg) = UntypedMessage::new(
             FRAME_NOTIFICATION,
@@ -249,11 +284,11 @@ async fn forward_frames(
         )
         && connection.send_notification(msg).is_err()
     {
-        return;
+        return true;
     }
     loop {
         tokio::select! {
-            _ = token.cancelled() => break,
+            _ = token.cancelled() => return false,
             received = rx.recv() => {
                 match received {
                     Ok(frame) => {
@@ -264,11 +299,11 @@ async fn forward_frames(
                             continue;
                         };
                         if connection.send_notification(msg).is_err() {
-                            break;
+                            return true;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
                 }
             }
         }
@@ -465,9 +500,9 @@ mod tests {
         assert!(old.is_cancelled());
         assert!(!other.is_cancelled());
 
-        streams.finished(&("t1".into(), 1), stale);
+        assert!(!streams.finished(&("t1".into(), 1), stale));
         assert_eq!(streams.watchers("t1"), 2);
-        streams.finished(&("t1".into(), 1), current);
+        assert!(!streams.finished(&("t1".into(), 1), current));
         assert_eq!(streams.watchers("t1"), 1);
         assert!(!fresh.is_cancelled());
     }
@@ -481,10 +516,36 @@ mod tests {
         streams.insert(("t1".into(), 7), gone_a.clone());
         streams.insert(("t2".into(), 7), gone_b.clone());
         streams.insert(("t1".into(), 8), kept.clone());
-        streams.drop_client(7);
+        let orphaned = streams.drop_client(7);
+        assert_eq!(orphaned, ["t2"]);
         assert!(gone_a.is_cancelled() && gone_b.is_cancelled());
         assert!(!kept.is_cancelled());
         assert_eq!(streams.watchers("t1"), 1);
         assert_eq!(streams.watchers("t2"), 0);
+    }
+
+    #[test]
+    fn drop_client_reports_sessions_left_without_watchers() {
+        let mut streams = StreamRegistry::default();
+        streams.insert(("t1".into(), 7), CancellationToken::new());
+        streams.insert(("t2".into(), 7), CancellationToken::new());
+        streams.insert(("t3".into(), 7), CancellationToken::new());
+        streams.insert(("t2".into(), 8), CancellationToken::new());
+        streams.insert(("t4".into(), 8), CancellationToken::new());
+
+        assert_eq!(streams.drop_client(7), ["t1", "t3"]);
+        assert!(streams.drop_client(7).is_empty());
+        assert_eq!(streams.drop_client(8), ["t2", "t4"]);
+    }
+
+    #[test]
+    fn finished_reports_when_the_last_watcher_exits() {
+        let mut streams = StreamRegistry::default();
+        let first = streams.insert(("t1".into(), 1), CancellationToken::new());
+        let second = streams.insert(("t1".into(), 2), CancellationToken::new());
+
+        assert!(!streams.finished(&("t1".into(), 1), first));
+        assert!(streams.finished(&("t1".into(), 2), second));
+        assert!(!streams.finished(&("t1".into(), 2), second));
     }
 }
