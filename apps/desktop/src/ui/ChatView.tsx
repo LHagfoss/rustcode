@@ -538,7 +538,7 @@ function NewThreadHeading({
   return (
     <div
       className={cx(
-        "relative isolate flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center",
+        "relative isolate flex min-w-0 max-w-full flex-col items-start gap-1 px-4 pb-2 text-left",
         banner && "rc-heading-over-image",
       )}
     >
@@ -571,7 +571,7 @@ function NewThreadHeading({
         // Over a picture the tip reads in `fg`, not muted: a muted line lands near what a dark
         // photo leaves under the scrim, and the halo alone cannot make that difference up.
         <p className={cx("text-caption", banner ? "rc-text-over-image-small text-fg" : "text-fg-muted")}>
-          Tip: {tip.text} with <Kbd>{shortcut}</Kbd>
+          {tip.text} with <Kbd>{shortcut}</Kbd>
         </p>
       )}
     </div>
@@ -853,7 +853,7 @@ export function ChatView() {
                 <Composer
                   thread={thread}
                   compact={width < 600}
-                  className={isNew ? "rc-composer-over" : undefined}
+                  className={cx(isNew && "rc-composer-over", isNew && !showsBanner && "rc-composer-plain-footer")}
                 />
               </LaneItem>
             </div>
