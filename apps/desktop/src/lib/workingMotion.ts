@@ -87,9 +87,91 @@ const sparkle: Pattern = (step) => {
   return out;
 };
 
-export const PATTERNS = { ring, ripple, orbit, snake, sparkle } as const;
+const spiralPath: number[] = (() => {
+  const path: number[] = [];
+  let [top, left, bottom, right] = [0, 0, GRID - 1, GRID - 1];
+  while (top <= bottom && left <= right) {
+    for (let x = left; x <= right; x++) path.push(cellOf(x, top));
+    for (let y = top + 1; y <= bottom; y++) path.push(cellOf(right, y));
+    if (top < bottom) for (let x = right - 1; x >= left; x--) path.push(cellOf(x, bottom));
+    if (left < right) for (let y = bottom - 1; y > top; y--) path.push(cellOf(left, y));
+    top++;
+    left++;
+    bottom--;
+    right--;
+  }
+  return [...path, ...path.slice(0, -1).reverse()];
+})();
+
+/** A trail that winds into the centre along a spiral and back out again. */
+const spiral: Pattern = (step) => {
+  const out: Lit[] = [];
+  const seen = new Set<number>();
+  for (let k = 0; k < 5; k++) {
+    const cell = spiralPath[(((step - k) % spiralPath.length) + spiralPath.length) % spiralPath.length]!;
+    if (seen.has(cell)) continue;
+    seen.add(cell);
+    out.push({ cell, level: 1 - k / 5, head: k === 0 });
+  }
+  return out;
+};
+
+/** Drops that fall down each column at their own pace. */
+const rain: Pattern = (step) => {
+  const out: Lit[] = [];
+  const fall = GRID + 3;
+  for (let x = 0; x < GRID; x++) {
+    const drop = (step + Math.floor(hash(x + 7) * fall)) % fall;
+    for (let k = 0; k < 3; k++) {
+      const y = drop - k;
+      if (y >= 0 && y < GRID) out.push({ cell: cellOf(x, y), level: 1 - k / 3, head: k === 0 });
+    }
+  }
+  return out;
+};
+
+/** A bright column that sweeps left and right like a scanner. */
+const scan: Pattern = (step) => {
+  const span = (GRID - 1) * 2;
+  const phase = step % span;
+  const at = phase < GRID ? phase : span - phase;
+  const out: Lit[] = [];
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++) {
+      const level = 1 - Math.abs(x - at) * 0.55;
+      if (level > 0) out.push({ cell: cellOf(x, y), level, head: x === at && y === center });
+    }
+  return out;
+};
+
+export const PATTERNS = { ring, ripple, orbit, snake, sparkle, spiral, rain, scan } as const;
 export type PatternName = keyof typeof PATTERNS;
 const PATTERN_NAMES = Object.keys(PATTERNS) as PatternName[];
+
+/** How many steps each pattern holds before the cycle moves on, and how many of them blend into the next. */
+export const CYCLE_STEPS = 44;
+export const CYCLE_BLEND = 8;
+
+/**
+ * Every pattern in turn, starting from `first`: each holds for `CYCLE_STEPS` and fades into the
+ * next over its last `CYCLE_BLEND` steps, so a long turn shows the whole set.
+ */
+export function cyclePatterns(first: PatternName): Pattern {
+  const start = PATTERN_NAMES.indexOf(first);
+  const at = (i: number) => PATTERNS[PATTERN_NAMES[(start + i) % PATTERN_NAMES.length]!];
+  return (step) => {
+    const segment = Math.floor(step / CYCLE_STEPS);
+    const into = step % CYCLE_STEPS;
+    const current = at(segment)(step);
+    const blendFrom = CYCLE_STEPS - CYCLE_BLEND;
+    if (into < blendFrom) return current;
+    const mix = (into - blendFrom + 1) / (CYCLE_BLEND + 1);
+    const out: Lit[] = [];
+    for (const lit of current) out.push({ ...lit, level: lit.level * (1 - mix) });
+    for (const lit of at(segment + 1)(step)) out.push({ ...lit, level: lit.level * mix });
+    return out.filter((lit) => lit.level > 0);
+  };
+}
 
 /** The words a working turn picks from: one word each, said while the model works. */
 export const WORKING_WORDS = [

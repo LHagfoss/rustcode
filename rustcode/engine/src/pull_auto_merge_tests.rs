@@ -3,14 +3,14 @@ use crate::pull_watch::Snapshot;
 
 fn watch(link: bool, state: Option<&str>) -> Watch {
     let mut watch: Watch = serde_json::from_value(json!({
-        "session_id": "s1",
+        "sessionId": "s1",
         "cwd": "/work/app",
         "number": 12,
         "repo": "acme/app",
         "link": link,
         "status": "watching",
-        "created_at": 0,
-        "next_check_at": 0,
+        "createdAt": 0,
+        "nextCheckAt": 0,
     }))
     .unwrap();
     watch.snapshot = state.map(|state| Snapshot {

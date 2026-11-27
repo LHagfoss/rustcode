@@ -58,6 +58,7 @@ pub mod preview;
 pub mod prompt_commands;
 pub mod provider_auth;
 pub mod pull_auto_merge;
+pub mod pull_outcomes;
 pub mod pull_requests;
 pub mod pull_review;
 mod pull_spawn;

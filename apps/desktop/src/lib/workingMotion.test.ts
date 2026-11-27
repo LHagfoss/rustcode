@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { GRID, PATTERNS, splitWorkingLabel, turnFlavor, WORKING_WORDS } from "./workingMotion";
+import {
+  CYCLE_STEPS,
+  cyclePatterns,
+  GRID,
+  PATTERNS,
+  splitWorkingLabel,
+  turnFlavor,
+  WORKING_WORDS,
+} from "./workingMotion";
 
 describe("working indicator", () => {
   test("every pattern lights cells inside the grid and keeps moving", () => {
@@ -17,6 +25,20 @@ describe("working indicator", () => {
       }
       expect(dark).toBeLessThan(20);
     }
+  });
+
+  test("the cycle moves through every pattern and stays inside the grid", () => {
+    const names = Object.keys(PATTERNS) as (keyof typeof PATTERNS)[];
+    const cycle = cyclePatterns("snake");
+    expect(cycle(0)).toEqual(PATTERNS.snake(0));
+    const next = names[(names.indexOf("snake") + 1) % names.length]!;
+    expect(cycle(CYCLE_STEPS + 1)).toEqual(PATTERNS[next](CYCLE_STEPS + 1));
+    for (let step = 0; step < CYCLE_STEPS * names.length; step++)
+      for (const { cell, level } of cycle(step)) {
+        expect(cell).toBeLessThan(GRID * GRID);
+        expect(level).toBeGreaterThan(0);
+        expect(level).toBeLessThanOrEqual(1);
+      }
   });
 
   test("a turn keeps one word and pattern, and turns differ", () => {
