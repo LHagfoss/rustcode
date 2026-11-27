@@ -39,6 +39,7 @@ that step alone, which is also how the background server is installed.
 | `git` | Windows | yes (check only) | looks for Git for Windows; shows `winget install --id Git.Git -e` when missing |
 | `long-paths` | Windows | yes (check only) | reads `LongPathsEnabled`; turning it on needs an administrator, so the PowerShell command is shown |
 | `desktop-entry` | Linux | yes | for an AppImage, writes `~/.local/share/applications/rustcode.desktop` (marked `X-RustCode-Managed=true`, rewritten when the AppImage moves); an entry another tool made is left alone; a `.deb` has its own |
+| `desktop-control` | macOS | no | asks macOS for Accessibility and Screen Recording through a worker the app starts, so the prompts and System Settings name RustCode ([computer use](computer-use.md)) |
 | `server-service` | all | no | `rc server install`: the LaunchAgent, systemd user unit or logon task of [the server](server.md) |
 
 The WebView2 and webkit2gtk checks are not steps: the app cannot start without

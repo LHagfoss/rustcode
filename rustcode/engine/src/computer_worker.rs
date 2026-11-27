@@ -9,6 +9,8 @@
 //! kill; a closed stdin ends it.
 
 pub mod cursor_image;
+#[cfg(unix)]
+pub mod hosted;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -140,6 +142,9 @@ pub fn requested() -> bool {
 #[cfg(target_os = "macos")]
 pub fn run() -> ! {
     std::thread::spawn(|| {
+        if hosted::listening() {
+            hosted::listen(macos::handle)
+        }
         serve(macos::handle);
     });
     macos::run_main_thread()
@@ -148,13 +153,21 @@ pub fn run() -> ! {
 /// Run the worker until stdin closes. Never returns.
 #[cfg(not(target_os = "macos"))]
 pub fn run() -> ! {
+    #[cfg(unix)]
+    if hosted::listening() {
+        hosted::listen(unsupported)
+    }
     serve(unsupported)
 }
 
 fn serve(handle: fn(Op) -> Result<Value, String>) -> ! {
-    let stdin = std::io::stdin();
-    let mut out = std::io::stdout();
-    for line in stdin.lock().lines() {
+    serve_lines(std::io::stdin().lock(), std::io::stdout(), handle);
+    std::process::exit(0)
+}
+
+/// Answer request lines from `input` on `out` until either side closes.
+fn serve_lines(input: impl BufRead, mut out: impl Write, handle: fn(Op) -> Result<Value, String>) {
+    for line in input.lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
@@ -176,7 +189,6 @@ fn serve(handle: fn(Op) -> Result<Value, String>) -> ! {
             break;
         }
     }
-    std::process::exit(0)
 }
 
 /// The platform this worker runs on, as `status` reports it.
@@ -202,10 +214,22 @@ pub fn unsupported_reason() -> Option<&'static str> {
 }
 
 /// Desktop control's permissions here, as Settings shows them; `prompt`
-/// asks the operating system to show its permission prompts.
+/// asks the operating system to show its permission prompts. The worker the
+/// RustCode app hosts answers when it runs, as its grants are the ones the
+/// tools use; `hosted` says which answered.
 #[cfg(target_os = "macos")]
 pub fn permissions(prompt: bool) -> Value {
-    macos::status(prompt)
+    let op = if prompt {
+        Op::RequestPermissions
+    } else {
+        Op::Status
+    };
+    let (mut value, hosted) = match hosted::ask(op) {
+        Some(value) => (value, true),
+        None => (macos::status(prompt), false),
+    };
+    value["hosted"] = json!(hosted);
+    value
 }
 
 /// Desktop control's permissions here: none apply where it is not supported.

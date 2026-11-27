@@ -1,30 +1,67 @@
 //! The engine's side of `rc computer-worker`: start it on the first desktop
 //! call, send one request at a time, and stop it after two idle minutes. When
 //! it exits on its own (the user chose Stop in the menu bar), every thread's
-//! desktop grants end.
+//! desktop grants end. When the RustCode app hosts a worker
+//! (`computer_worker::hosted`), it uses that one, so macOS checks RustCode's
+//! own grants.
 
 use crate::computer_worker::{Op, Reply, Request, WORKER_ARG};
 use serde_json::Value;
 use std::process::Stdio;
 use std::sync::Once;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
 const IDLE_LIMIT: Duration = Duration::from_secs(2 * 60);
 const WATCH_EVERY: Duration = Duration::from_secs(5);
 const STOPPED: &str = "Desktop control stopped: the user chose Stop in the menu bar, or its worker exited. Nothing more was run; ask the user before trying again.";
 
+type Reader = Box<dyn AsyncRead + Send + Unpin>;
+type Writer = Box<dyn AsyncWrite + Send + Unpin>;
+
 struct Worker {
-    child: Child,
-    stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
+    /// `None` for the app's hosted worker, which this engine does not own.
+    child: Option<Child>,
+    stdin: Writer,
+    lines: Lines<BufReader<Reader>>,
     next: u64,
     last_used: Instant,
 }
 
 static WORKER: tokio::sync::Mutex<Option<Worker>> = tokio::sync::Mutex::const_new(None);
+
+impl Worker {
+    fn new(child: Option<Child>, reader: Reader, writer: Writer) -> Self {
+        Self {
+            child,
+            stdin: writer,
+            lines: BufReader::new(reader).lines(),
+            next: 1,
+            last_used: Instant::now(),
+        }
+    }
+
+    fn exited(&mut self) -> bool {
+        self.child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+    }
+}
+
+#[cfg(unix)]
+async fn connect_hosted() -> Option<Worker> {
+    let path = crate::computer_worker::hosted::socket_path()?;
+    let stream = tokio::net::UnixStream::connect(path).await.ok()?;
+    let (reader, writer) = stream.into_split();
+    Some(Worker::new(None, Box::new(reader), Box::new(writer)))
+}
+
+#[cfg(not(unix))]
+async fn connect_hosted() -> Option<Worker> {
+    None
+}
 
 fn spawn() -> Result<Worker, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -48,13 +85,7 @@ fn spawn() -> Result<Worker, String> {
         .stdout
         .take()
         .ok_or("The desktop worker has no stdout")?;
-    Ok(Worker {
-        child,
-        stdin,
-        lines: BufReader::new(stdout).lines(),
-        next: 1,
-        last_used: Instant::now(),
-    })
+    Ok(Worker::new(Some(child), Box::new(stdout), Box::new(stdin)))
 }
 
 fn watch() {
@@ -69,7 +100,7 @@ fn watch() {
                 let Some(worker) = slot.as_mut() else {
                     continue;
                 };
-                if worker.child.try_wait().ok().flatten().is_some() {
+                if worker.exited() {
                     *slot = None;
                     super::desktop::stopped();
                 } else if worker.last_used.elapsed() > IDLE_LIMIT {
@@ -87,16 +118,16 @@ pub(super) async fn call(
     cancel: &CancellationToken,
 ) -> Result<Value, String> {
     let mut slot = WORKER.lock().await;
-    if slot
-        .as_mut()
-        .is_some_and(|worker| worker.child.try_wait().ok().flatten().is_some())
-    {
+    if slot.as_mut().is_some_and(Worker::exited) {
         *slot = None;
         super::desktop::stopped();
         return Err(STOPPED.into());
     }
     if slot.is_none() {
-        *slot = Some(spawn()?);
+        *slot = Some(match connect_hosted().await {
+            Some(worker) => worker,
+            None => spawn()?,
+        });
         watch();
     }
     let worker = slot.as_mut().ok_or("The desktop worker did not start")?;

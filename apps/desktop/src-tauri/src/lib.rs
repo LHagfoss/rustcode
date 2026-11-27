@@ -4,6 +4,7 @@
 //! Diagnostics page). Every argument from the webview is validated here.
 
 mod banner;
+mod computer_worker_host;
 mod crash_report;
 mod diagnostics;
 mod engine;
@@ -251,6 +252,7 @@ pub fn run() {
             }
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
+            computer_worker_host::start();
             webview_watch::spawn(app.handle().clone());
             // An AppImage's bundled binary lives in a mount that goes away with the app, so the
             // copy a service runs is refreshed here; the copies outside the app catch up with the

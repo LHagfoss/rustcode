@@ -118,8 +118,11 @@ On by default, per machine; turn it off under **Settings → Voice & computer
 use** › **Desktop control** on the Mac itself. Nothing runs until macOS grants
 **Accessibility** (to read apps and act on them) and **Screen Recording** (for
 window screenshots); the section shows both and **Ask macOS** shows the
-prompts. macOS lists the permission under the binary Settings names,
-usually RustCode's bundled `rc`. Or set it in `config.toml`:
+prompts, as does the **Allow desktop control** step under **Settings › System
+setup**. While the app is open it hosts the worker, so macOS checks RustCode's
+own grants and lists them as **RustCode**. With the app closed the engine
+starts its own worker, which macOS treats as the bare `rc` binary (that
+Settings names) with grants of its own. Or set it in `config.toml`:
 
 ```toml
 [desktop_control]
@@ -168,7 +171,11 @@ controlling. **Stop desktop control** there ends the worker at once and every
 thread's desktop grants with it; the agent is told to ask before trying again.
 Turning the switch off, closing the thread, or revoking `desktop:<thread>`
 through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
-(`rc computer-worker`) starts on the first desktop call and exits after two
+(`rc computer-worker`) runs as a child of the RustCode app, listening on
+`<config>/run/computer-worker.sock` for the engine (the same `rc` binary only),
+and starts again after a Stop; its log is
+`<config>/computer-use/hosted-worker.log`. With the app closed, the engine
+starts a worker of its own on the first desktop call, which exits after two
 idle minutes; its log is `<config>/computer-use/desktop-worker.log`.
 
 ### Across paired machines

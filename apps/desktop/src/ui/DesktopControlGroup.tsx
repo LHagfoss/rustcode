@@ -46,6 +46,7 @@ export function DesktopControlGroup() {
   const supported = settings.supported === true;
   const missing = settings.accessibility !== true || settings.screen_recording !== true;
   const executable = typeof settings.executable === "string" ? settings.executable : null;
+  const listedAs = settings.hosted === true ? "RustCode" : executable;
   return (
     <Group
       title="Desktop control"
@@ -80,7 +81,7 @@ export function DesktopControlGroup() {
             <Row
               title="Grant the permissions"
               subtitle="macOS shows its prompts; turn RustCode on in Privacy & Security, then come back."
-              hint={executable ? `macOS lists it as ${executable}` : undefined}
+              hint={listedAs ? `macOS lists it as ${listedAs}` : undefined}
             >
               <Action disabled={pending || !enabled} onClick={() => void save(true, true)}>
                 Ask macOS
