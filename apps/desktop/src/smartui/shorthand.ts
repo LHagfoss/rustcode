@@ -1088,8 +1088,15 @@ export function expandShorthand(source: string): string {
         if (openDetails > 0) {
           out.push("</details>");
           openDetails--;
-        } else {
-          closeTabs();
+        } else if (tabs) {
+          let nextIndex = i + 1;
+          while (nextIndex < lines.length && !lines[nextIndex]!.trim()) nextIndex++;
+          const nextDirective = DIRECTIVE.exec(lines[nextIndex] ?? "");
+          if (nextDirective && nextDirective[1] === "tab") {
+            i = nextIndex - 1;
+          } else {
+            closeTabs();
+          }
         }
         continue;
       }
