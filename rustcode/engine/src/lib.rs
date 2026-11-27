@@ -309,5 +309,6 @@ mod background_history_tests {
     }
 }
 
+mod review_guide;
 mod text_generation;
 mod transcription;

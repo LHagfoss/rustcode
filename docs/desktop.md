@@ -756,7 +756,18 @@ composer's keys stay outside the table.
   and each comment's side. *Add to chat* on a conversation, or *Add all
   unresolved*, puts the comments with their file, lines and author into the
   composer draft; nothing is sent. Replying and resolving from the app
-  (#3768) and `#`/`@` completion (#3769) are not there yet. The header's one
+  (#3768) and `#`/`@` completion (#3769) are not there yet.
+  Its *Guide* tab (`ui/PullGuide.tsx`, `state/reviewGuide.ts`) is a tour of
+  the change in reading order. *Write guide* sends the title, description and
+  the diff with every line numbered to the text generator (kind
+  `review_guide`, `engine/src/review_guide.rs`: up to 120,000 characters,
+  four minutes). The answer is checked against the same diff: an excerpt the
+  diff does not show is dropped, and files no stop names gather in a last
+  *Everything else* stop. Each stop has a summary, up to three excerpts, a
+  *Look closely* line for a call only the maintainer can make, and questions
+  that start a thread about that stop. The last 30 guides are kept on this
+  computer; after a push the guide says it was written for an earlier push
+  and hides its excerpts until *Rewrite*. The header's one
   button merges (`state/pullMerge.ts`): *Merge* once every check passed,
   *Merge when checks pass* while they run (the first press arms it, "Confirm
   merge?", the second merges), a disabled "N checks failed" when one failed.
