@@ -4,8 +4,8 @@
 //! The engine starts it on the first desktop call and talks to it over
 //! stdin/stdout, one JSON request per line and one JSON answer per line. The
 //! worker holds the operating system's permissions (Accessibility and Screen
-//! Recording on macOS), shows the agent's own cursor and a menu bar item with
-//! Stop, and runs only actions the engine already approved. Stopping it is a
+//! Recording on macOS), shows the agent's own cursor, and runs only actions
+//! the engine already approved. Stopping it is a
 //! kill; a closed stdin ends it.
 
 pub mod cursor_image;

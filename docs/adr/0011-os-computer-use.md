@@ -156,8 +156,9 @@ What the first slice built, and where it departs from the plan above:
   `<config>/run/computer-worker.sock` (same-binary peers only) and starts its own worker only
   when no app is open.
 - **Visible activity and stop.** The agent's own cursor (drawn by RustCode, excluded from
-  captures) glides to each target; a menu bar item names the app and its **Stop** ends the
-  worker, which ends every grant. A global shortcut is not built.
+  captures) glides to each target on an eased arc (`computer_worker/cursor_motion.rs`) and
+  names the app in its label. There is no menu bar item: the Settings switch, or quitting the
+  app, ends the worker and every grant. A global shortcut is not built.
 - **Pixels.** `x` and `y` are pixels of the latest screenshot of that window, converted by the
   worker, rather than display points.
 - **Cross-machine control (phase 6).** Every `computer_*` tool accepts an optional `machine`

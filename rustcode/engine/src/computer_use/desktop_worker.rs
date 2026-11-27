@@ -1,6 +1,6 @@
 //! The engine's side of `rc computer-worker`: start it on the first desktop
 //! call, send one request at a time, and stop it after two idle minutes. When
-//! it exits on its own (the user chose Stop in the menu bar), every thread's
+//! it exits on its own (the app quit or desktop control was turned off), every thread's
 //! desktop grants end. When the RustCode app hosts a worker
 //! (`computer_worker::hosted`), it uses that one, so macOS checks RustCode's
 //! own grants.
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 const IDLE_LIMIT: Duration = Duration::from_secs(2 * 60);
 const WATCH_EVERY: Duration = Duration::from_secs(5);
-const STOPPED: &str = "Desktop control stopped: the user chose Stop in the menu bar, or its worker exited. Nothing more was run; ask the user before trying again.";
+const STOPPED: &str = "Desktop control stopped: its worker exited (the RustCode app quit, or desktop control was turned off). Nothing more was run; ask the user before trying again.";
 
 type Reader = Box<dyn AsyncRead + Send + Unpin>;
 type Writer = Box<dyn AsyncWrite + Send + Unpin>;

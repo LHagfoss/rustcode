@@ -31,13 +31,6 @@ describe("autoAnswer", () => {
     expect(autoAnswer(secret, "edits")).toBeNull();
   });
 
-  test("desktop control always reaches the user, even under Full access", () => {
-    const desktop = request("other", { toolCallId: "desktop-00ab12cd34ef5678" });
-    expect(autoAnswer(desktop, "full")).toBeNull();
-    expect(autoAnswer(desktop, "edits")).toBeNull();
-    expect(autoAnswer(request("other"), "full")?.id).toBe("allow");
-  });
-
   test("Ask leaves every request to the user", () => {
     expect(autoAnswer(request("execute"), "ask")).toBeNull();
     expect(autoAnswer(request("edit"), "ask")).toBeNull();

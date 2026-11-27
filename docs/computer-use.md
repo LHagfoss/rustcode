@@ -172,14 +172,15 @@ captures leave out.
 
 ### Stop
 
-While the worker runs, the menu bar shows **◉ RustCode** with what it is
-controlling. **Stop desktop control** there ends the worker at once and every
-thread's desktop grants with it; the agent is told to ask before trying again.
+The agent's cursor glides to each target on a short eased arc (longer moves
+take longer, up to about 0.7 s), starting from the user's pointer the first
+time, shrinks briefly on each click, and fades out after four idle seconds.
+Its label names the app being controlled; nothing is added to the menu bar.
 Turning the switch off, closing the thread, or revoking `desktop:<thread>`
 through `_rustcode/permissions/revoke` also ends a thread's grants. The worker
 (`rc computer-worker`) runs as a child of the RustCode app, listening on
 `<config>/run/computer-worker.sock` for the engine (the same `rc` binary only),
-and starts again after a Stop; its log is
+and starts again if it exits; its log is
 `<config>/computer-use/hosted-worker.log`. With the app closed, the engine
 starts a worker of its own on the first desktop call, which exits after two
 idle minutes; its log is `<config>/computer-use/desktop-worker.log`.
@@ -204,7 +205,7 @@ there:
   open on that computer.
 - The approval dialog opens on the controlled computer, names the remote
   machine and thread, redacts typed text, and is never auto-approved by Full
-  access. The menu bar indicator names both the app and the remote machine
+  access. The cursor's label names both the app and the remote machine
   (for example `Safari · Ubuntu VPS`).
 - Remote `computer_screenshot` results that exceed 600 KiB as PNG are
   re-encoded as JPEG at the same pixel dimensions so they stay inside the

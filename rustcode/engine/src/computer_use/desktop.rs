@@ -6,7 +6,7 @@
 //! a thread asks the user, who can allow that app for the rest of the thread;
 //! password managers and system security settings ask every time. One thread
 //! at a time drives an app. Grants live in memory and end with the thread,
-//! when the user chooses Stop in the menu bar, or when the engine restarts.
+//! when the worker exits, or when the engine restarts.
 
 use crate::computer_worker::{self, Op};
 use crate::orchestration::{

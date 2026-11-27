@@ -1,14 +1,14 @@
 //! What the user sees while an agent drives this Mac: the agent's own cursor,
-//! which glides to each element before it acts, and a menu bar item that
-//! names the thread and stops desktop control.
+//! which glides to each element before it acts and names the app it is
+//! controlling. Desktop control stops from Settings, or when the app quits.
 
 use super::ffi::{self, CGPoint, CGRect, CGSize};
 use crate::computer_worker::cursor_image;
 use crate::computer_worker::cursor_motion::{FRAMES_PER_SECOND, Glide, Point};
 use dispatch2::DispatchQueue;
+use objc2::msg_send;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{AnyClass, AnyObject, Sel};
-use objc2::{msg_send, sel};
+use objc2::runtime::{AnyClass, AnyObject};
 use std::cell::RefCell;
 use std::ffi::{CString, c_void};
 use std::sync::Mutex;
@@ -30,7 +30,6 @@ const BUFFERED: usize = 2;
 const SCREEN_SAVER_LEVEL: isize = 1000;
 const ALL_SPACES_STATIONARY_IGNORES_CYCLE: usize = 1 | 16 | 64 | 256;
 const SHARING_NONE: usize = 0;
-const VARIABLE_LENGTH: f64 = -1.0;
 const DEFAULT_LABEL: &str = "RustCode";
 const SCALE_PROPORTIONALLY_UP_OR_DOWN: usize = 3;
 
@@ -39,8 +38,6 @@ struct Ui {
     label: Retained<AnyObject>,
     image: Retained<AnyObject>,
     image_frame: CGRect,
-    item: Retained<AnyObject>,
-    activity: Retained<AnyObject>,
     size: CGSize,
     tip: CGPoint,
     shown: bool,
@@ -72,7 +69,7 @@ pub fn run_main_thread() -> ! {
         unsafe {
             let app: Retained<AnyObject> = msg_send![class("NSApplication"), sharedApplication];
             let _: bool = msg_send![&app, setActivationPolicy: ACCESSORY_POLICY];
-            let ui = build(&app);
+            let ui = build();
             UI.with(|slot| *slot.borrow_mut() = Some(ui));
             std::thread::spawn(hide_when_idle);
             let _: () = msg_send![&app, run];
@@ -81,7 +78,7 @@ pub fn run_main_thread() -> ! {
     std::process::exit(0)
 }
 
-unsafe fn build(app: &AnyObject) -> Ui {
+unsafe fn build() -> Ui {
     let scale = 2.0;
     let cursor = cursor_image::draw(CURSOR_POINTS, scale);
     let cursor_size = CGSize {
@@ -159,56 +156,15 @@ unsafe fn build(app: &AnyObject) -> Ui {
         ];
         let _: () = msg_send![&content, addSubview: &*label];
 
-        let (item, activity) = status_item(app);
-        let _: () = msg_send![&item, setVisible: !crate::computer_worker::hosted::listening()];
         Ui {
             window,
             label,
             image: view,
             image_frame,
-            item,
-            activity,
             size,
             tip: CGPoint { x: tip.x, y: tip.y },
             shown: false,
         }
-    }
-}
-
-unsafe fn status_item(app: &AnyObject) -> (Retained<AnyObject>, Retained<AnyObject>) {
-    // SAFETY: the caller is on the main thread; every selector is AppKit's.
-    unsafe {
-        let bar: Retained<AnyObject> = msg_send![class("NSStatusBar"), systemStatusBar];
-        let item: Retained<AnyObject> = msg_send![&bar, statusItemWithLength: VARIABLE_LENGTH];
-        let button: Option<Retained<AnyObject>> = msg_send![&item, button];
-        if let Some(button) = button {
-            let _: () = msg_send![&button, setTitle: &*ns_string("◉ RustCode")];
-        }
-        let menu: Retained<AnyObject> = msg_send![class("NSMenu"), new];
-        let _: () = msg_send![&menu, setAutoenablesItems: false];
-        let activity = menu_item("RustCode can control this Mac", None);
-        let _: () = msg_send![&activity, setEnabled: false];
-        let _: () = msg_send![&menu, addItem: &*activity];
-        let separator: Retained<AnyObject> = msg_send![class("NSMenuItem"), separatorItem];
-        let _: () = msg_send![&menu, addItem: &*separator];
-        let stop = menu_item("Stop desktop control", Some(sel!(terminate:)));
-        let _: () = msg_send![&stop, setTarget: app];
-        let _: () = msg_send![&menu, addItem: &*stop];
-        let _: () = msg_send![&item, setMenu: &*menu];
-        (item, activity)
-    }
-}
-
-unsafe fn menu_item(title: &str, action: Option<Sel>) -> Retained<AnyObject> {
-    // SAFETY: the caller is on the main thread.
-    unsafe {
-        let allocated: Allocated<AnyObject> = msg_send![class("NSMenuItem"), alloc];
-        msg_send![
-            allocated,
-            initWithTitle: &*ns_string(title),
-            action: action,
-            keyEquivalent: &*ns_string("")
-        ]
     }
 }
 
@@ -367,7 +323,7 @@ fn appear(point: CGPoint) {
     }
 }
 
-/// Name what the agent is doing, in the cursor's label and the menu bar item.
+/// Name the app the agent is controlling in the cursor's label.
 pub fn set_activity(label: Option<String>) {
     DispatchQueue::main().exec_async(move || {
         UI.with(|slot| {
@@ -375,17 +331,10 @@ pub fn set_activity(label: Option<String>) {
             let Some(ui) = slot.as_ref() else { return };
             let short = label.as_deref().unwrap_or(DEFAULT_LABEL);
             let short: String = short.chars().take(28).collect();
-            let menu = match &label {
-                Some(label) => format!("Controlling: {label}"),
-                None => "RustCode can control this Mac".to_owned(),
-            };
-            // SAFETY: this runs on the main thread, which owns both views.
+            // SAFETY: this runs on the main thread, which owns the label.
             unsafe {
                 let _: () =
                     msg_send![&ui.label, setStringValue: &*ns_string(&format!(" {short} "))];
-                let _: () = msg_send![&ui.activity, setTitle: &*ns_string(&menu)];
-                let visible = label.is_some() || !crate::computer_worker::hosted::listening();
-                let _: () = msg_send![&ui.item, setVisible: visible];
             }
         });
     });

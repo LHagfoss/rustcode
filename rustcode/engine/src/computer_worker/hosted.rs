@@ -23,7 +23,7 @@ pub const LISTEN_ARG: &str = "--listen";
 const PROBE_LIMIT: Duration = Duration::from_secs(5);
 
 /// Engine connections being served; when the last one closes, nothing is
-/// controlled any more and the menu bar item goes away.
+/// controlled any more and the cursor's label is reset.
 static OPEN: AtomicUsize = AtomicUsize::new(0);
 
 /// The socket the hosted worker listens on.

@@ -57,7 +57,7 @@ export function DesktopControlGroup() {
       onEnabledChange={(value) => {
         if (!pending) void save(value, value);
       }}
-      footer="The first action on an app in a thread asks you; allow the app for the thread to stop asking. Password managers and system settings ask every time. Choose Stop in the menu bar item to end it at once."
+      footer="The first action on an app in a thread asks you; allow the app for the thread to stop asking. Password managers and system settings ask every time. Full access allows it without asking. Turn this off to end it at once."
     >
       {!supported && (
         <Row
