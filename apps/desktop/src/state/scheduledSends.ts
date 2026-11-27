@@ -31,6 +31,7 @@ import {
 } from "./store";
 import { isRunning, localId } from "./thread";
 import { unsettleThreads } from "./threadStatus";
+import { isPrimaryWindow } from "./windowSync";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -166,8 +167,8 @@ export function resetScheduledSends(): void {
  * One slow timer while something is scheduled: a card's countdown ticks in the UI, and this only has
  * to notice that a time has come, even after the Mac slept past it.
  */
-function syncScheduleTimer() {
-  const waiting = scheduledCount(get().scheduled) > 0;
+export function syncScheduleTimer(): void {
+  const waiting = isPrimaryWindow() && scheduledCount(get().scheduled) > 0;
   if (waiting && !scheduleTimer) {
     const timer = setInterval(() => void continueDueScheduled(), 1000) as unknown as ReturnType<
       typeof setInterval
@@ -183,7 +184,7 @@ function syncScheduleTimer() {
 
 /** Every message whose time has come goes out, the soonest first. */
 export async function continueDueScheduled(now = Date.now()): Promise<void> {
-  if (sendingScheduled || get().engine.phase !== "ready") return;
+  if (!isPrimaryWindow() || sendingScheduled || get().engine.phase !== "ready") return;
   const due = dueScheduled(get().scheduled, now);
   if (!due.length) return;
   sendingScheduled = true;

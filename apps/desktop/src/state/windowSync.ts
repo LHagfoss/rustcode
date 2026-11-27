@@ -15,11 +15,16 @@ import { parseOverrides } from "../lib/keys";
 import { parseNotifySoundTone, parseNotifySoundVolume } from "../lib/notifySound";
 import { type AppState, SETTINGS_DEFAULTS, STORAGE } from "./appState";
 import { parseAutoCompactSettings } from "./autoCompact";
+import { syncWaitTimers } from "./continueThreads";
 import { DRAFTS_KEY, parseDrafts } from "./drafts";
 import { sanitizeHeaderButtons } from "./headerButtons";
 import { linkWaitEnded } from "./host";
+import type { InternetWait } from "./internetWait";
+import type { LimitWait } from "./limitResume";
 import { type PermissionMode, parsePermissionMode } from "./permissions";
 import { parseRecapMinutes } from "./recap";
+import { parseScheduleBook, SCHEDULED_KEY } from "./schedule";
+import { syncScheduleTimer } from "./scheduledSends";
 import { parseAppFont, parseTextSize } from "./settingsActions";
 import type { SidebarOrder } from "./sidebarOrder";
 import { notifySidebarPrefs } from "./sidebarPrefs";
@@ -53,14 +58,26 @@ let primaryWindowLabel: string | null = "main";
 let channel: BroadcastChannel | null = null;
 
 let roleKnown = !isTauri();
+let roleChanges = 0;
 let waitingForPrimary: (() => void)[] = [];
 
 /** Overrides the window role state for unit tests. */
-export function setWindowRoleForTests(current: string | null, primary: string | null): void {
+export function setWindowRoleForTests(current: string | null, primary: string | null, known = true): void {
   currentWindowLabel = current;
   primaryWindowLabel = primary;
-  roleKnown = true;
+  roleKnown = known;
+  roleChanges = 0;
   waitingForPrimary = [];
+}
+
+/** Whether this window's primary/secondary role has been resolved. */
+export function isWindowRoleKnown(): boolean {
+  return roleKnown;
+}
+
+/** How many primary-window role updates this window has observed. */
+export function primaryRoleChanges(): number {
+  return roleChanges;
 }
 
 /**
@@ -77,6 +94,7 @@ export function whenPrimaryWindow(start: () => void): void {
 export function primaryWindowChanged(primary: string | null): void {
   if (primary) primaryWindowLabel = primary;
   roleKnown = true;
+  roleChanges += 1;
   if (!isPrimaryWindow()) return;
   const waiting = waitingForPrimary;
   waitingForPrimary = [];
@@ -91,6 +109,7 @@ export function isPrimaryWindow(): boolean {
     }
     return true;
   }
+  if (!roleKnown) return false;
   if (!currentWindowLabel || !primaryWindowLabel) return true;
   return currentWindowLabel === primaryWindowLabel;
 }
@@ -102,6 +121,12 @@ function parseJson<T>(raw: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseRecord<T>(raw: string | null): Record<string, T> {
+  const parsed = parseJson<unknown>(raw, null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as Record<string, T>;
 }
 
 function parseFlag(raw: string | null, fallback: boolean): boolean {
@@ -228,6 +253,18 @@ export function applyStorageChange(key: string | null, newValue: string | null):
     case DRAFTS_KEY:
       patch = { drafts: parseDrafts(newValue) };
       break;
+    case SCHEDULED_KEY:
+      useApp.setState({ scheduled: parseScheduleBook(newValue) });
+      syncScheduleTimer();
+      return true;
+    case STORAGE.limitWaits:
+      useApp.setState({ limitWaits: parseRecord<LimitWait>(newValue) });
+      syncWaitTimers();
+      return true;
+    case STORAGE.internetWaits:
+      useApp.setState({ internetWaits: parseRecord<InternetWait>(newValue) });
+      syncWaitTimers();
+      return true;
     default:
       return applySyncedStorage(key, newValue);
   }

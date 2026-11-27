@@ -50,6 +50,7 @@ import {
 import { isRunning, RESUME_MARK } from "./thread";
 import { threadName } from "./threadNotices";
 import { openThread } from "./threadOpen";
+import { isPrimaryWindow } from "./windowSync";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -204,7 +205,9 @@ export function resetContinueWaits(): void {
  * wakes past a reset or past the connection's return and still goes on.
  */
 export function syncWaitTimers() {
-  const waiting = Object.keys(get().limitWaits).length > 0 || Object.keys(get().internetWaits).length > 0;
+  const waiting =
+    isPrimaryWindow() &&
+    (Object.keys(get().limitWaits).length > 0 || Object.keys(get().internetWaits).length > 0);
   if (waiting && !waitTimer) waitTimer = setInterval(tickWaits, INTERNET_POLL_MS);
   else if (!waiting && waitTimer) {
     clearInterval(waitTimer);
@@ -223,7 +226,12 @@ function tickWaits() {
 if (typeof window !== "undefined") {
   const nowOnline = () => {
     // A Mac that slept past a reset wakes with focus and visibility events: the wait goes on at once.
-    if (Object.keys(get().internetWaits).length > 0 || Object.keys(get().limitWaits).length > 0) tickWaits();
+    if (
+      isPrimaryWindow() &&
+      (Object.keys(get().internetWaits).length > 0 || Object.keys(get().limitWaits).length > 0)
+    ) {
+      tickWaits();
+    }
   };
   window.addEventListener("online", nowOnline);
   window.addEventListener("focus", nowOnline);
@@ -248,7 +256,7 @@ const resuming = new Set<string>();
 
 /** Each thread whose limit or overload has passed carries on, unless it now runs on something else. */
 export async function continueDueThreads(now = Date.now()): Promise<void> {
-  if (continuing || get().engine.phase !== "ready") return;
+  if (!isPrimaryWindow() || continuing || get().engine.phase !== "ready") return;
   continuing = true;
   try {
     for (const [id, wait] of Object.entries(get().limitWaits)) {
@@ -300,7 +308,7 @@ let continuingNet = false;
  * outlives its patience says so and stops. Nothing runs while no thread waits.
  */
 export async function continueInternetThreads(now = Date.now()): Promise<void> {
-  if (continuingNet) return;
+  if (!isPrimaryWindow() || continuingNet) return;
   const ids = Object.keys(get().internetWaits);
   if (!ids.length) return;
   if (!networkUp()) {
