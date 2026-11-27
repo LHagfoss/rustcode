@@ -607,6 +607,22 @@ aside[aria-hidden="true"] + .rc-main-panel {
   animation: rc-in 0.2s var(--ease-snappy);
 }
 
+@keyframes rc-wave {
+  0%,
+  100% {
+    color: var(--rc-text-muted);
+    text-shadow: none;
+  }
+  50% {
+    color: var(--rc-text);
+    text-shadow: 0 0 6px color-mix(in srgb, var(--rc-text) 45%, transparent);
+  }
+}
+.rc-wave > span[aria-hidden] {
+  animation: rc-wave 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--rc-wave-i) * 90ms);
+}
+
 /*
  * An answered approval settles where its card was (ui/AttentionCards.tsx
  * ResolvedApprovalBar): the same 34px row, so the card becomes one line
@@ -781,6 +797,10 @@ aside[aria-hidden="true"] + .rc-main-panel {
     animation: none;
     color: var(--rc-text-muted);
     background: none;
+  }
+  .rc-wave > span[aria-hidden] {
+    animation: none;
+    color: var(--rc-text-muted);
   }
   /* Off, not instant: `both` would hold the word invisible until its delay was up. */
   .rc-reveal,
