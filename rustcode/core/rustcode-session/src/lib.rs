@@ -71,10 +71,12 @@ pub fn is_scratch_session_id(session_id: &str) -> bool {
 pub mod atomic_file;
 #[cfg(test)]
 mod history_write_tests;
+mod metadata_lock;
 mod search;
 mod workspace;
 
 pub use atomic_file::{replace_file, write_atomic};
+pub use metadata_lock::SESSION_METADATA_LOCK_FILE;
 pub use search::SessionSearchHit;
 pub use workspace::*;
 
@@ -1074,6 +1076,12 @@ impl SessionStore {
         if path.exists() {
             return;
         }
+        let Ok(_lock) = metadata_lock::MetadataLock::acquire(directory) else {
+            return;
+        };
+        if path.exists() {
+            return;
+        }
         let metadata = SessionMetadata::new(
             session_id,
             session_timestamp_ms(session_id).unwrap_or_else(current_time_ms),
@@ -1766,6 +1774,7 @@ impl SessionStore {
             ));
         }
         let directory = self.ensure_session(session_id);
+        let _lock = metadata_lock::MetadataLock::acquire(&directory)?;
         let mut metadata = self.load_session_metadata(session_id).unwrap_or_else(|| {
             SessionMetadata::new(
                 session_id,
