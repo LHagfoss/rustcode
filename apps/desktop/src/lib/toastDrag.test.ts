@@ -8,37 +8,26 @@ import {
   startsDrag,
   TOAST_DISMISS_PX,
   TOAST_FLICK_PX,
+  toastExit,
 } from "./toastDrag";
 
 describe("toast drag", () => {
-  test("only a drag right past 48px dismisses", () => {
-    expect(dragState(TOAST_DISMISS_PX, 0).dismiss).toBe(false);
-    expect(dragState(TOAST_DISMISS_PX + 1, 0).dismiss).toBe(true);
-    expect(dragState(-200, 0).dismiss).toBe(false);
-    expect(dragState(0, 200).dismiss).toBe(false);
-    expect(dragState(0, -200).dismiss).toBe(false);
+  test.each([-1, 1])("swipes dismiss past 48px in direction %i", (sign) => {
+    expect(dragState(sign * TOAST_DISMISS_PX).dismiss).toBe(false);
+    expect(dragState(sign * (TOAST_DISMISS_PX + 1)).dismiss).toBe(true);
+    expect(dragState(sign * 40)).toMatchObject({ dx: sign * 40, away: 40 });
+    expect(toastExit(sign * 40)).toBe(`translateX(${sign * 120}%)`);
   });
 
-  test("a quick flick right dismisses short of 48px, a slow or tiny one does not", () => {
-    expect(dragState(30, 0, 40).dismiss).toBe(true);
-    expect(dragState(30, 0, 400).dismiss).toBe(false);
-    expect(dragState(TOAST_FLICK_PX - 1, 0, 5).dismiss).toBe(false);
-    expect(dragState(-30, 0, 40).dismiss).toBe(false);
+  test.each([-1, 1])("a fast horizontal flick dismisses in direction %i", (sign) => {
+    expect(dragState(sign * 30, 40).dismiss).toBe(true);
+    expect(dragState(sign * 30, 400).dismiss).toBe(false);
+    expect(dragState(sign * (TOAST_FLICK_PX - 1), 5).dismiss).toBe(false);
   });
 
-  test("right follows fully, every other way resists at a sixth", () => {
-    expect(dragState(40, 0)).toMatchObject({ dx: 40, dy: 0, away: 40 });
-    expect(dragState(-60, 0)).toMatchObject({ dx: -10, away: 0 });
-    expect(dragState(0, 60).dy).toBe(10);
-    expect(dragState(0, -60).dy).toBe(-10);
-  });
-
-  test("in the left corner the card swipes left instead", () => {
-    expect(dragState(-(TOAST_DISMISS_PX + 1), 0, Number.POSITIVE_INFINITY, -1).dismiss).toBe(true);
-    expect(dragState(TOAST_DISMISS_PX + 1, 0, Number.POSITIVE_INFINITY, -1).dismiss).toBe(false);
-    expect(dragState(-30, 0, 40, -1).dismiss).toBe(true);
-    expect(dragState(-40, 0, Number.POSITIVE_INFINITY, -1)).toMatchObject({ dx: -40, away: 40 });
-    expect(dragState(60, 0, Number.POSITIVE_INFINITY, -1)).toMatchObject({ dx: 10, away: 0 });
+  test("no horizontal travel leaves the toast in place", () => {
+    expect(dragState(0, 5)).toEqual({ dx: 0, away: 0, dismiss: false });
+    expect(isClick(0, 60)).toBe(false);
   });
 
   test("the card fades as it travels but never below a fifth", () => {

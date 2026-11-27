@@ -23,11 +23,6 @@ export function toastFromTop(position: ToastPosition): boolean {
   return position.startsWith("top");
 }
 
-/** The side a card is swiped toward to dismiss it: left in the left corner, right elsewhere. */
-export function toastSwipeSign(position: ToastPosition): 1 | -1 {
-  return position === "bottom-left" ? -1 : 1;
-}
-
 export function useToastPosition() {
   const [raw, set] = usePref<string>(TOAST_POSITION_PREF, DEFAULT_TOAST_POSITION);
   return [toastPosition(raw), set as (next: ToastPosition) => void] as const;
