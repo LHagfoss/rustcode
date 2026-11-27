@@ -284,11 +284,64 @@ export async function ownHostId(
   return view?.host.hostId || undefined;
 }
 
+function syncParams(view: FleetView): JsonObject {
+  return { from: wireEntry(view.host), entries: view.entries.map(wireEntry) };
+}
+
+function entryWireKey(entry: FleetEntry): string {
+  return JSON.stringify(wireEntry(entry));
+}
+
+function entriesByHost(view: FleetView, includeHost = false): Map<string, string> {
+  const map = new Map<string, string>();
+  if (includeHost && view.host.hostId) map.set(view.host.hostId, entryWireKey(view.host));
+  for (const entry of view.entries) {
+    map.set(entry.hostId, entryWireKey(entry));
+  }
+  return map;
+}
+
+function hostNameChanged(before: FleetView, after: FleetView): boolean {
+  return (
+    Boolean(after.host.hostId) &&
+    (after.host.name !== before.host.name || after.host.nameUpdatedAt !== before.host.nameUpdatedAt)
+  );
+}
+
+function viewChanged(before: FleetView, after: FleetView): boolean {
+  if (hostNameChanged(before, after)) return true;
+  const previous = entriesByHost(before);
+  for (const entry of after.entries) {
+    if (previous.get(entry.hostId) !== entryWireKey(entry)) return true;
+  }
+  return false;
+}
+
+function peerMissedUpdates(
+  remote: FleetView,
+  latest: FleetView,
+  changedEntries: readonly [string, string][],
+  relayHostName: boolean,
+): boolean {
+  const known = entriesByHost(remote, true);
+  if (changedEntries.some(([hostId, key]) => known.get(hostId) !== key)) return true;
+  if (!relayHostName) return false;
+  const seenHost =
+    remote.host.hostId === latest.host.hostId
+      ? remote.host
+      : remote.entries.find((entry) => entry.hostId === latest.host.hostId);
+  return (
+    !seenHost || seenHost.name !== latest.host.name || seenHost.nameUpdatedAt !== latest.host.nameUpdatedAt
+  );
+}
+
 /**
  * Send `view` to every connected peer at once and merge each answer into this computer's engine as
  * it arrives, one merge at a time. A peer that is slow or away holds up only its own answer: the
  * others are merged without waiting for it. An answer from a computer that is not the one saved
- * under that id is not merged. Answers the view after the last merge.
+ * under that id is not merged. After the round, any reachable peer that missed entries merged from
+ * the others receives the updated view in a second concurrent round. Answers the view after the
+ * last merge.
  */
 export async function exchangeWithPeers<C>(
   peers: readonly { id: string; connection: C }[],
@@ -296,19 +349,43 @@ export async function exchangeWithPeers<C>(
   askPeer: (connection: C, params: JsonObject) => Promise<FleetView | null>,
   merge: (remote: FleetView) => Promise<FleetView | null>,
 ): Promise<FleetView> {
-  const params = { from: wireEntry(view.host), entries: view.entries.map(wireEntry) };
+  const params = syncParams(view);
   let latest = view;
   let merging: Promise<void> = Promise.resolve();
+  const answered: { id: string; connection: C; remote: FleetView }[] = [];
+  const contributed = new Set<string>();
   await Promise.allSettled(
     peers.map(async ({ id, connection }) => {
       const remote = await askPeer(connection, params);
       if (!remote || (remote.host.hostId && remote.host.hostId !== id)) return;
+      answered.push({ id, connection, remote });
       merging = merging.then(async () => {
-        latest = (await merge(remote).catch(() => null)) ?? latest;
+        const before = latest;
+        const next = await merge(remote).catch(() => null);
+        if (!next) return;
+        if (viewChanged(before, next)) contributed.add(id);
+        latest = next;
       });
       await merging;
     }),
   );
+  if (latest === view || contributed.size === 0 || answered.length < 2) return latest;
+  const initialEntries = entriesByHost(view);
+  const changedEntries: [string, string][] = [];
+  for (const entry of latest.entries) {
+    const key = entryWireKey(entry);
+    if (initialEntries.get(entry.hostId) !== key) changedEntries.push([entry.hostId, key]);
+  }
+  const relayHostName = hostNameChanged(view, latest);
+  if (changedEntries.length === 0 && !relayHostName) return latest;
+  const targets = answered.filter(
+    ({ id, remote }) =>
+      (contributed.size > 1 || !contributed.has(id)) &&
+      peerMissedUpdates(remote, latest, changedEntries, relayHostName),
+  );
+  if (targets.length === 0) return latest;
+  const nextParams = syncParams(latest);
+  await Promise.allSettled(targets.map(({ connection }) => askPeer(connection, nextParams)));
   return latest;
 }
 
