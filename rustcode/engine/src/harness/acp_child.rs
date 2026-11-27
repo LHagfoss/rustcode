@@ -746,7 +746,7 @@ impl AcpAdapter {
         super::learn(&harness.id, |learned| {
             learned.resume = Some(load_session);
             learned.images = Some(images);
-            learned.steer = Some(steering);
+            learned.steer = Some(steering || antigravity);
             learned.effort = Some(has_effort);
             learned.error = None;
             // Only the model this thread runs has its own efforts here, so a
@@ -871,12 +871,23 @@ impl AcpAdapter {
             .notify("session/cancel", json!({"sessionId": self.native_id}));
     }
 
-    /// Add `text` to the running turn through the agent's `_session/steering`
-    /// extension. False when the agent has none or no turn is running (it
-    /// answers `promptRequired`), so the client sends it as the next prompt.
+    /// Add input to the running turn. Antigravity accepts an additional
+    /// `session/prompt` while a prompt is in flight. A rejected steer is queued
+    /// by the client.
     pub(crate) async fn steer(&self, prompt: &[ContentBlock]) -> bool {
         if !self.steering {
-            return false;
+            if !self.antigravity || !lock(&self.state).background.in_prompt() {
+                return false;
+            }
+            return self
+                .peer
+                .request_within(
+                    "session/prompt",
+                    json!({"sessionId": self.native_id, "prompt": prompt}),
+                    STEER_TIMEOUT,
+                )
+                .await
+                .is_ok();
         }
         let answer = self
             .peer

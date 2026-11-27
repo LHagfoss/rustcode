@@ -86,6 +86,7 @@ pub(crate) struct Fake {
     /// Echo the prompt it was given back as `user_message_chunk`, as pi-acp
     /// and OpenCode do.
     echo: bool,
+    prompt_steering: bool,
 }
 
 impl Fake {
@@ -94,6 +95,7 @@ impl Fake {
         Self {
             system_prompt: true,
             echo,
+            prompt_steering: false,
         }
     }
 }
@@ -103,6 +105,7 @@ impl Default for Fake {
         Self {
             system_prompt: true,
             echo: false,
+            prompt_steering: false,
         }
     }
 }
@@ -147,11 +150,12 @@ async fn fake_agent(
                 if fake.system_prompt {
                     capabilities["sessionCapabilities"] = json!({"systemPrompt": {}});
                 }
-                peer.respond(
-                    id,
-                    Ok(json!({"protocolVersion": 1, "agentCapabilities": capabilities,
-                              "_meta": {"steering": {"supported": true}}})),
-                );
+                let mut initialized =
+                    json!({"protocolVersion": 1, "agentCapabilities": capabilities});
+                if !fake.prompt_steering {
+                    initialized["_meta"] = json!({"steering": {"supported": true}});
+                }
+                peer.respond(id, Ok(initialized));
             }
             // As claude-agent-acp: injected into a running turn, else the
             // client should send a prompt.
@@ -199,6 +203,10 @@ async fn fake_agent(
                 peer.respond(id, Ok(json!({"configOptions": answer})))
             }
             "session/prompt" => {
+                if fake.prompt_steering && !cancelled.is_empty() {
+                    peer.respond(id, Ok(json!({"stopReason": "end_turn"})));
+                    continue;
+                }
                 if fake.echo && let Some(echoed) = params["prompt"][0]["text"].as_str() {
                     peer.notify(
                         "session/update",
@@ -1144,6 +1152,39 @@ async fn steering_adds_a_message_to_the_running_turn() {
     let _ = turn.await;
 }
 
+#[tokio::test]
+async fn antigravity_steers_with_a_second_prompt() {
+    let fake = Fake {
+        prompt_steering: true,
+        ..Fake::default()
+    };
+    let (thread, mut seen) = start_named("antigravity", fake, None, StartOptions::default()).await;
+    let follow_up = text("also check tests");
+    assert!(!thread.session.steer(&follow_up).await);
+
+    let session = Arc::clone(&thread.session);
+    let turn = tokio::spawn(async move { session.prompt(text("wait")).await });
+    let first_prompt = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (method, params) = seen.recv().await.expect("fake agent alive");
+            if method == "session/prompt" {
+                break params;
+            }
+        }
+    })
+    .await
+    .expect("first prompt");
+
+    assert!(thread.session.steer(&follow_up).await);
+    let (method, params) = seen.recv().await.expect("steering request");
+    assert_eq!(method, "session/prompt");
+    assert_eq!(params["sessionId"], first_prompt["sessionId"]);
+    assert_eq!(params["prompt"], json!(follow_up));
+    thread.session.cancel();
+    assert_eq!(turn.await.unwrap(), Ok(StopReason::Cancelled));
+    assert!(!thread.session.steer(&follow_up).await);
+}
+
 #[test]
 fn remote_servers_need_the_childs_http_support_and_the_orchestrator_keeps_its_name() {
     let server = |name: &str, url: Option<&str>| crate::config::McpServerConfig {
@@ -1209,6 +1250,7 @@ async fn an_agent_without_a_system_prompt_gets_the_setup_block_on_its_first_prom
     let fake = Fake {
         system_prompt: false,
         echo: false,
+        prompt_steering: false,
     };
     let (thread, mut seen) = start_with(fake, Some("allow"), StartOptions::default()).await;
     assert_eq!(
@@ -1253,6 +1295,7 @@ async fn a_loaded_session_gets_no_setup_block() {
     let fake = Fake {
         system_prompt: false,
         echo: false,
+        prompt_steering: false,
     };
     let (thread, mut seen) = start_with(
         fake,
@@ -1349,6 +1392,7 @@ async fn the_agents_echo_of_the_setup_block_is_not_a_user_message() {
     let fake = Fake {
         system_prompt: false,
         echo: true,
+        prompt_steering: false,
     };
     let (mut thread, mut seen) = start_with(fake, Some("allow"), StartOptions::default()).await;
     assert_eq!(
@@ -1391,6 +1435,7 @@ async fn a_resumed_session_without_a_system_prompt_gets_the_current_skills_note(
     let fake = Fake {
         system_prompt: false,
         echo: false,
+        prompt_steering: false,
     };
     let (thread, mut seen) = start_with(
         fake,
@@ -1426,6 +1471,7 @@ async fn a_resumed_session_without_a_system_prompt_gets_the_current_skills_note(
         Fake {
             system_prompt: false,
             echo: false,
+            prompt_steering: false,
         },
         Some("allow"),
         StartOptions {
