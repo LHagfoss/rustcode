@@ -117,6 +117,7 @@ import { HiddenDot, ProjectHeader } from "./ProjectHeader";
 import { Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { SettingsNav } from "./Settings";
+import { SidebarRowMotion } from "./SidebarRowMotion";
 import { SidebarSelection } from "./SidebarSelection";
 import { PendingRow, ROW_HEIGHT, ThreadRow } from "./SidebarThreadRow";
 import { SidebarToolbar, ThreadSectionLabel } from "./SidebarToolbar";
@@ -352,6 +353,13 @@ export function Sidebar() {
     return { askedAt, sentAt };
   }, [clocked]);
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
+  const motionThreads = useMemo(() => {
+    const threads = new Map<string, boolean>();
+    for (const session of sessions) {
+      threads.set(session.id, (marks[session.id] ?? session.status) === "done");
+    }
+    return threads;
+  }, [marks, sessions]);
   const finished = useApp((s) => s.finished);
   const failed = useApp((s) => s.failed);
   const projectCwd = useApp((s) => s.projectCwd);
@@ -1375,6 +1383,11 @@ export function Sidebar() {
                 })}
               </div>
             </nav>
+            <SidebarRowMotion
+              list={list}
+              threads={motionThreads}
+              ready={!listing && !hidden && !settingsOpen}
+            />
             {pickedSessions.length > 1 && (
               <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
                 <span
