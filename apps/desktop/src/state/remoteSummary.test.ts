@@ -42,10 +42,10 @@ describe("remoteSummary", () => {
     expect(remoteSummary(status(), server(false)).detail).toContain("Reachable while the app is open");
   });
 
-  test("off with the server running says network access is what is off", () => {
+  test("off with the server running says remote access is what is off", () => {
     const s = remoteSummary(status({ enabled: false }), server(true));
     expect(s.label).toBe("Off");
-    expect(s.detail).toContain("server is running, but network access is off");
+    expect(s.detail).toContain("server is running, but remote access is off");
   });
 
   test("on but not connected yet is starting", () => {

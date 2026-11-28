@@ -44,8 +44,8 @@ export function remoteSummary(
       label: "Off",
       title: "No device can reach this computer",
       detail: server?.running
-        ? "The RustCode server is running, but network access is off. Paired devices stay paired."
-        : "Turn on network access to open this computer's threads from a phone.",
+        ? "The RustCode server is running, but remote access is off. Paired devices stay paired."
+        : "Pair a device to open this computer's threads from it.",
     };
   const gateway = remote.gateway;
   if (!gateway?.connected)

@@ -43,7 +43,7 @@ import { remoteSummary } from "../state/remoteSummary";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { Smartphone, WifiOff } from "./icons";
-import { copyText, cx, Spinner, Switch } from "./primitives";
+import { copyText, cx, Spinner } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { RemoteStatusBanner } from "./RemoteStatusBanner";
 import { ServerProblems } from "./ServerProblems";
@@ -149,6 +149,7 @@ export function RemoteAccessPage() {
     askInstallThenTurnOn(turnOn);
   };
 
+  /** The engine switches remote access on first when it is off. */
   const pair = () => {
     void pairRemoteDevice().then(() => refresh());
   };
@@ -179,22 +180,9 @@ export function RemoteAccessPage() {
 
       <Group>
         <Row
-          title="Network access"
-          subtitle="Let paired devices reach every thread on this computer."
-          hint="Starts the gateway, across all projects, not only the ones open here. Off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
-          status={enabled && sharedCount > 0 ? status : undefined}
-        >
-          <Switch
-            label="Network access"
-            checked={enabled}
-            disabled={unavailable || busy !== null || pending}
-            onChange={toggle}
-          />
-        </Row>
-        <Row
           title="RustCode server"
           subtitle="Keeps this computer reachable with the app closed. Starts when you log in."
-          hint="A background service that runs the remote gateway. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it. Turning network access on installs it when it is not installed."
+          hint="A background service that runs the remote gateway. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it. Pairing a device offers to install it when it is not installed."
           status={
             <>
               {server && !server.installed ? <span className="tabular">{serverLine(server)}</span> : null}
@@ -355,11 +343,36 @@ export function RemoteAccessPage() {
             subtitle={
               enabled
                 ? "The gateway has not announced an address a phone can dial. Give it a LAN or NetBird address (docs/remote.md › Automatic address selection)."
-                : "Turn network access on to start the gateway and announce this computer's addresses."
+                : "Pair a device to start the gateway and announce this computer's addresses."
             }
           />
         )}
       </Group>
+
+      {remote !== null && !unavailable && (
+        <Group title="Remote access" minor>
+          <Row
+            title={enabled ? "On for this computer" : "Off for this computer"}
+            subtitle={
+              enabled
+                ? "Paired devices reach every thread here. Turning it off keeps their pairings."
+                : "Pairing a device turns it on. Devices paired before reconnect once it is on."
+            }
+            status={enabled && sharedCount > 0 ? status : undefined}
+            badge={<Chip tone={enabled ? "ok" : "idle"}>{enabled ? "On" : "Off"}</Chip>}
+          >
+            {enabled ? (
+              <Action danger disabled={busy !== null || pending} onClick={() => toggle(false)}>
+                Turn off
+              </Action>
+            ) : (
+              <Action disabled={busy !== null || pending} onClick={() => toggle(true)}>
+                Turn on
+              </Action>
+            )}
+          </Row>
+        </Group>
+      )}
     </>
   );
 }
