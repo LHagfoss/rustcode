@@ -803,7 +803,7 @@ mod tests {
         };
         assert_eq!(
             described.to_text(),
-            r#"{"type":"described","protocol_version":1,"gateway_id":"gw","instance_id":"inst","host_name":"studio","platform":"macos","capabilities":["describe","machine_codes","key_auth"]}"#
+            r#"{"type":"described","protocol_version":1,"gateway_id":"gw","instance_id":"inst","host_name":"studio","platform":"macos","capabilities":["describe","machine_codes","key_auth","sealed"]}"#
         );
         // A connect code is `pair` with the machine method.
         let pair = HandshakeRequest::parse(
