@@ -52,6 +52,25 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
     .collect()
 }
 
+/// The skill directories a harness that lists skills in its own prompt (Pi) is handed in place
+/// of its own discovery: every root RustCode reads, the harnesses' included, without the skills
+/// turned off in Settings › Skills, so its list matches that page.
+pub fn enabled_skill_dirs() -> Vec<PathBuf> {
+    enabled_skill_dirs_in(current_root_inputs(), &disabled_skill_names())
+}
+
+/// [`enabled_skill_dirs`] over explicit roots, so a test never reads the real home directory.
+pub(crate) fn enabled_skill_dirs_in(
+    inputs: SkillRootInputs,
+    disabled: &std::collections::HashSet<String>,
+) -> Vec<PathBuf> {
+    discover_skills_in(inputs)
+        .into_iter()
+        .filter(|skill| !disabled.contains(&skill.name))
+        .map(|skill| skill.path)
+        .collect()
+}
+
 /// Every discovered skill, enabled or not, for the settings surfaces that
 /// list and toggle them.
 pub fn discover_all_skills() -> Vec<SkillMetadata> {
