@@ -52,7 +52,7 @@ import {
 } from "../state/machines";
 import { revokeRemoteDevice, setDeviceAccess } from "../state/remoteAccess";
 import { pendingFor, revokeEverywhereAsk, usePendingRevocations } from "../state/revokeEverywhere";
-import { setFollowsThisComputer, useSettingsFollow } from "../state/settingsFollow";
+import { follows, setFollowsThisComputer, useSettingsFollow } from "../state/settingsFollow";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
 import {
   checkMachineHarnesses,
@@ -597,7 +597,8 @@ function harnessStatus(harness: Harness): string {
  */
 /** One switch: this machine takes this computer's shared settings and keeps them (state/settingsFollow.ts). */
 function FollowSettings({ machine, online }: { machine: Machine; online: boolean }) {
-  const follows = useSettingsFollow((state) => state.ids.includes(machine.id));
+  const all = useSettingsFollow((state) => state.all);
+  const followed = useSettingsFollow((state) => follows(state, machine.id));
   const name = machineName(machine);
   const here = selfName();
   const toggle = (next: boolean) => {
@@ -619,14 +620,21 @@ function FollowSettings({ machine, online }: { machine: Machine; online: boolean
       <Row
         title={`Use ${here}'s settings`}
         subtitle={
-          follows
-            ? `${name} uses ${here}'s shared settings. A change on ${name} itself is put back when it next connects.`
-            : `${name} keeps its own shared settings. Turn this on to copy ${here}'s to it now and keep them the same.`
+          all
+            ? `On for every machine (Settings › Machines › Same settings everywhere). A change on ${name} itself is put back when it next connects.`
+            : followed
+              ? `${name} uses ${here}'s shared settings. A change on ${name} itself is put back when it next connects.`
+              : `${name} keeps its own shared settings. Turn this on to copy ${here}'s to it now and keep them the same.`
         }
       >
-        <Switch label={`Use ${here}'s settings on ${name}`} checked={follows} onChange={toggle} />
+        <Switch
+          label={`Use ${here}'s settings on ${name}`}
+          checked={followed}
+          disabled={all}
+          onChange={toggle}
+        />
       </Row>
-      <FollowFiles machine={machine} online={online} follows={follows} />
+      <FollowFiles machine={machine} online={online} follows={followed} />
     </Group>
   );
 }

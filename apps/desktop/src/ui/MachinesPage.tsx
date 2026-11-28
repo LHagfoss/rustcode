@@ -83,6 +83,7 @@ import {
   recoveryLabel,
 } from "./machineLabels";
 import { ChromeButton, Segments, Spinner } from "./primitives";
+import { SameSettingsGroup } from "./SameSettingsGroup";
 import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row, SettingsHeaderActions, withCode } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
@@ -233,6 +234,8 @@ export function MachinesPage() {
           </Row>
         )}
       </Group>
+
+      {machines.length > 0 && <SameSettingsGroup />}
 
       {machines.length > 0 && <ThreadMirrorGroup />}
 

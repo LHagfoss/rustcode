@@ -2,7 +2,7 @@
 // (docs/desktop.md › Settings on one machine or all).
 
 import { describe, expect, test } from "bun:test";
-import { compareListing, followValues } from "./settingsFollow";
+import { compareListing, follows, followValues } from "./settingsFollow";
 
 describe("followValues", () => {
   test("sends only the shared values that differ or are missing", () => {
@@ -45,5 +45,21 @@ describe("compareListing", () => {
     expect(compareListing("a", null)).toEqual({ baseline: "a", changed: false });
     expect(compareListing(null, null)).toEqual({ baseline: null, changed: false });
     expect(compareListing(compareListing("a", null).baseline, "a").changed).toBe(false);
+  });
+});
+
+describe("follows", () => {
+  test("a listed machine follows, an unlisted one does not", () => {
+    expect(follows({ ids: ["studio"], all: false }, "studio")).toBe(true);
+    expect(follows({ ids: ["studio"], all: false }, "vps")).toBe(false);
+  });
+
+  test("every machine follows while the fleet switch is on", () => {
+    expect(follows({ ids: [], all: true }, "vps")).toBe(true);
+  });
+
+  test("this computer never follows itself", () => {
+    expect(follows({ ids: [""], all: true }, "")).toBe(false);
+    expect(follows({ ids: ["local"], all: true }, "local")).toBe(false);
   });
 });
