@@ -473,11 +473,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
           className="-mx-0.5 flex min-h-6 min-w-0 max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
-            {live ? (
-              <DotMatrix pattern="ripple" size={14} tone="spectrum" />
-            ) : (
-              <Brain size={14} className="text-fg-faint" />
-            )}
+            <Brain size={14} className="text-fg-faint" />
           </span>
           {live ? <WaveWord word="Thinking" /> : <span className="shrink-0">{label}</span>}
           {!open && preview && (
