@@ -105,6 +105,12 @@ impl DeviceKey {
         let message = signed_message(gateway_id, challenge, device_id);
         URL_SAFE_NO_PAD.encode(self.0.sign(&message).as_ref())
     }
+
+    /// The signature of `message`, already domain-separated by its caller
+    /// ([`crate::relay::signed_message`]).
+    pub(crate) fn sign_message(&self, message: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(self.0.sign(message).as_ref())
+    }
 }
 
 impl fmt::Debug for DeviceKey {

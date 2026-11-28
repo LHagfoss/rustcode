@@ -942,6 +942,32 @@ the agent (`ssh-add`), and an unknown host key must be accepted once in a termin
         #[command(subcommand)]
         command: HubCommands,
     },
+    /// Make this machine reachable through a relay (`rc remote relay` on a
+    /// VPS): its paired devices then reach it from any network, with no
+    /// open port here and nothing the relay can read
+    Relay {
+        #[command(subcommand)]
+        command: RelayCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum RelayCommands {
+    /// Register with the relay whose link `rc remote relay` printed
+    #[command(after_help = "Example:
+  rc machines relay join 'rustcode-relay://relay.example.com:17880?fp=…&secret=…'")]
+    Join {
+        /// The `rustcode-relay://` link, secret included
+        link: String,
+    },
+    /// Stop registering with the relay
+    Leave,
+    /// Show the relay this machine registers with
+    Status {
+        /// Print the status as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]

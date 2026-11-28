@@ -79,7 +79,7 @@ async fn register(
     };
     write_frame(&mut write, &register).await.unwrap();
     let reply: Reply = read_frame(&mut read).await.unwrap().unwrap();
-    let Reply::Challenge { challenge } = reply else {
+    let Reply::Challenge { challenge, .. } = reply else {
         return Err(reply);
     };
     let prove = Request::Prove {
@@ -121,7 +121,7 @@ async fn dial(
     };
     write_frame(stream.get_mut(), &dial).await.unwrap();
     let reply: Reply = read_frame(&mut stream).await.unwrap().unwrap();
-    let Reply::Challenge { challenge } = reply else {
+    let Reply::Challenge { challenge, .. } = reply else {
         return Err(reply);
     };
     let prove = Request::Prove {

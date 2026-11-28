@@ -86,6 +86,7 @@ fn route_rank(kind: RouteKind) -> u8 {
         RouteKind::Public => 3,
         // Never discovered: an SSH route is one the user adds.
         RouteKind::Ssh => 4,
+        RouteKind::Relay => 5,
     }
 }
 

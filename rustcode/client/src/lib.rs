@@ -41,6 +41,7 @@ pub mod machine;
 pub mod protocol;
 pub mod reconnect;
 pub mod registry;
+pub mod relay;
 pub mod routes;
 pub mod ssh;
 pub mod tokens;

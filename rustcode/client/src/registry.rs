@@ -45,6 +45,10 @@ pub enum RouteKind {
     /// connection (`crate::tunnel`): works with any host this computer signs
     /// in to, the gateway there listening on its own loopback only.
     Ssh,
+    /// `rustcode-relay://host:port`, a relay the machine is registered with
+    /// (ADR 0013): dialled with the machine's TLS pin and this install's
+    /// device key, so the relay carries bytes it cannot read.
+    Relay,
 }
 
 impl RouteKind {
@@ -55,6 +59,7 @@ impl RouteKind {
             Self::Tailscale => "tailscale",
             Self::Public => "public",
             Self::Ssh => "ssh",
+            Self::Relay => "relay",
         }
     }
 
@@ -64,7 +69,7 @@ impl RouteKind {
     /// a public address never does, and an address nothing is known about is
     /// a public one. SSH is a tunnel of its own.
     pub fn is_encrypted(self) -> bool {
-        matches!(self, Self::Vpn | Self::Tailscale | Self::Ssh)
+        matches!(self, Self::Vpn | Self::Tailscale | Self::Ssh | Self::Relay)
     }
 
     /// The race order: LAN first, then an overlay, then SSH (a process and a
@@ -74,7 +79,8 @@ impl RouteKind {
             Self::Lan => 0,
             Self::Vpn | Self::Tailscale => 1,
             Self::Ssh => 2,
-            Self::Public => 3,
+            Self::Relay => 3,
+            Self::Public => 4,
         }
     }
 }
@@ -215,6 +221,7 @@ impl Route {
     pub fn may_send_secrets(&self) -> bool {
         match self.kind {
             RouteKind::Ssh => self.ssh.is_some(),
+            RouteKind::Relay => crate::relay::route_target(&self.address).is_some(),
             _ => may_send_secrets(&self.address),
         }
     }
@@ -249,6 +256,7 @@ impl Route {
         let provider = provider.and_then(OverlayProvider::from_wire);
         match kind {
             "lan" => Self::with_kind(RouteKind::Lan, address),
+            "relay" => Self::with_kind(RouteKind::Relay, address),
             // `vpn` is what a gateway before the overlay kind reported.
             "overlay" | "vpn" => {
                 let provider = provider.or_else(|| match classify_address(&address) {
@@ -292,6 +300,7 @@ impl Route {
             None if self.kind == RouteKind::Tailscale => "Tailscale".to_owned(),
             None if self.kind == RouteKind::Vpn => "the VPN".to_owned(),
             None if self.kind == RouteKind::Ssh => "SSH".to_owned(),
+            None if self.kind == RouteKind::Relay => "the relay".to_owned(),
             None if self.is_tls() => "the public address".to_owned(),
             None => "the LAN".to_owned(),
         }

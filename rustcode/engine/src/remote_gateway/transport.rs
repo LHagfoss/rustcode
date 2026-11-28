@@ -143,6 +143,13 @@ pub(super) async fn serve_connection(
     };
     drop(slot);
     match (arrival, local) {
+        (Arrival::Relay, _) => {
+            let mut route = super::address::relay_route(shared.relay.address());
+            if tls {
+                route.set_tls();
+            }
+            connection.set_route(route)
+        }
         (Arrival::Tunnel, Some(local)) => connection.set_route(tunnel_route(local)),
         (Arrival::Direct, Some(local)) => {
             let mut route = connection_route(local, &candidate_addresses());

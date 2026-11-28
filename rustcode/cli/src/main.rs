@@ -6,6 +6,7 @@ mod machines;
 mod machines_revoke;
 mod manage_command;
 mod price_estimate;
+mod relay_command;
 mod run;
 mod server_command;
 mod sync_from;

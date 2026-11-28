@@ -271,6 +271,7 @@ impl Relay {
         let challenge = random_token(32);
         let challenge_frame = Reply::Challenge {
             challenge: challenge.clone(),
+            relay_id: self.relay_id(),
         };
         if !send(writer, &challenge_frame).await {
             return false;

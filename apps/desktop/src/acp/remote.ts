@@ -169,9 +169,16 @@ export interface RemoteDevice {
 }
 
 /** The kind of network a connected device reached this computer over. */
-export type ConnectionPath = "loopback" | "lan" | "overlay" | "tunnel" | "other";
+export type ConnectionPath = "loopback" | "lan" | "overlay" | "tunnel" | "relay" | "other";
 
-const CONNECTION_PATHS: readonly ConnectionPath[] = ["loopback", "lan", "overlay", "tunnel", "other"];
+const CONNECTION_PATHS: readonly ConnectionPath[] = [
+  "loopback",
+  "lan",
+  "overlay",
+  "tunnel",
+  "relay",
+  "other",
+];
 
 /** Paths whose network encrypts: a VPN, or TLS to the public address's tunnel edge. */
 const ENCRYPTED_PATHS: readonly ConnectionPath[] = ["overlay", "tunnel"];
@@ -212,7 +219,9 @@ export function connectionRouteLabel(route: RemoteConnectionRoute): string {
         ? ((route.provider && PROVIDER_LABELS[route.provider]) ?? "VPN")
         : route.path === "tunnel"
           ? "Public address"
-          : "Other network";
+          : route.path === "relay"
+            ? "Relay"
+            : "Other network";
   return `${network} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
 
@@ -252,10 +261,10 @@ export interface RemotePairing {
 }
 
 /** How a device reaches this Mac over one route. */
-export type RemoteRouteKind = "lan" | "overlay" | "vpn" | "hostname" | "public" | "unknown";
+export type RemoteRouteKind = "lan" | "overlay" | "vpn" | "hostname" | "public" | "relay" | "unknown";
 
 /** `vpn` is what an engine before overlay networks called an overlay route. */
-const ROUTE_KINDS: readonly RemoteRouteKind[] = ["lan", "overlay", "vpn", "hostname", "public"];
+const ROUTE_KINDS: readonly RemoteRouteKind[] = ["lan", "overlay", "vpn", "hostname", "public", "relay"];
 
 /** The mesh product an overlay address belongs to, when the interface names one. */
 export type OverlayProvider = "netbird" | "tailscale" | "zerotier";

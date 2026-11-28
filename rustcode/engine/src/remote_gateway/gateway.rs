@@ -33,6 +33,7 @@ use super::pairing::{PairingError, PairingState};
 use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, FrameSink};
 use super::session_registry::{HubIdentity, SessionHub};
 use super::transport;
+mod relay_link;
 use crate::daemon::private_files::remove_if_exists;
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
 use crate::remote::host_capability;
@@ -339,6 +340,8 @@ pub(super) struct Shared {
     pub(super) members: super::hub_link::Members,
     /// The certificate the gateway port answers TLS with ([`super::tls`]).
     pub(super) tls: super::tls::TlsIdentity,
+    /// The relay this machine is registered with now, if any.
+    pub(super) relay: relay_link::RelayRoute,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -1610,7 +1613,7 @@ fn routes_now(shared: &Shared) -> Vec<HostRoute> {
     let wildcard = wildcard_v4 || wildcard_v6;
     if !wildcard && bound.iter().all(IpAddr::is_loopback) {
         // Only this computer can dial it: no route for another machine.
-        return host_routes(&advertised, &[], None);
+        return shared.relay.append(host_routes(&advertised, &[], None));
     }
     let candidates: Vec<Candidate> = candidate_addresses()
         .into_iter()
@@ -1624,7 +1627,8 @@ fn routes_now(shared: &Shared) -> Vec<HostRoute> {
         })
         .collect();
     let label = super::discovery::host_label(&shared.gateway_id);
-    host_routes(&advertised, &candidates, Some(label.trim_end_matches('.')))
+    let local = host_routes(&advertised, &candidates, Some(label.trim_end_matches('.')));
+    shared.relay.append(local)
 }
 
 fn busy(message: impl Into<String>) -> HandshakeResponse {
@@ -1782,6 +1786,7 @@ impl Gateway {
             reached_since_challenge: AtomicBool::new(false),
             members: super::hub_link::Members::new(&lifecycle.config_directory()),
             tls,
+            relay: relay_link::RelayRoute::default(),
         });
         Ok(Self {
             listener,
@@ -1863,6 +1868,7 @@ impl Gateway {
         for extra_listener in extra {
             spawn_extra_accept(extra_listener, &accepted, &shared, &mut extra_tasks);
         }
+        tasks.spawn(relay_link::run(Arc::clone(&shared)));
         let mut replan_due = tokio::time::interval(shared.limits.replan_interval);
         replan_due.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -2007,6 +2013,8 @@ pub(super) enum Arrival {
     Direct,
     /// Relayed by the engine's HTTP listener from the public address (`/ws`).
     Tunnel,
+    /// A pipe a relay this machine is registered with spliced to a device.
+    Relay,
 }
 
 /// The next relayed socket, or never when there is no ingress listener.

@@ -636,6 +636,10 @@ pub enum HostRouteKind {
     /// A public address or name. Plain LAN traffic is unencrypted, so a
     /// client should prefer the other kinds.
     Public,
+    /// `rustcode-relay://host:port`, a relay this machine is registered with
+    /// ([`crate::remote_relay`]). A device dials it with the machine's TLS pin
+    /// and its own device key, so the relay carries bytes it cannot read.
+    Relay,
 }
 
 impl HostRouteKind {
@@ -645,7 +649,8 @@ impl HostRouteKind {
             Self::Lan => 0,
             Self::Overlay => 1,
             Self::Hostname => 2,
-            Self::Public => 3,
+            Self::Relay => 3,
+            Self::Public => 4,
         }
     }
 
@@ -656,6 +661,7 @@ impl HostRouteKind {
             Self::Overlay => "overlay",
             Self::Hostname => "hostname",
             Self::Public => "public",
+            Self::Relay => "relay",
         }
     }
 }
@@ -793,6 +799,9 @@ pub enum ConnectionPath {
     /// engine's HTTP listener and on to the gateway (`/ws`): TLS from the
     /// device to the tunnel's edge, which can read the traffic.
     Tunnel,
+    /// Through a relay this machine is registered with: encrypted only when
+    /// the device spoke the gateway's own TLS through it.
+    Relay,
 }
 
 /// How one connected device reached this host and whether that path is
@@ -831,6 +840,7 @@ impl ConnectionRoute {
             (ConnectionPath::Overlay, None) => "VPN",
             (ConnectionPath::Other, _) => "an unrecognised network",
             (ConnectionPath::Tunnel, _) => "the public address",
+            (ConnectionPath::Relay, _) => "a relay",
         };
         let state = match (self.encrypted, self.path) {
             (true, _) if self.tls => "encrypted by RustCode",
@@ -859,7 +869,7 @@ pub fn connection_route(local: SocketAddr, candidates: &[Candidate]) -> Connecti
                 |(kind, provider)| match kind {
                     HostRouteKind::Lan => (ConnectionPath::Lan, None),
                     HostRouteKind::Overlay => (ConnectionPath::Overlay, provider),
-                    HostRouteKind::Hostname | HostRouteKind::Public => {
+                    HostRouteKind::Hostname | HostRouteKind::Public | HostRouteKind::Relay => {
                         (ConnectionPath::Other, None)
                     }
                 },
@@ -883,6 +893,19 @@ pub fn tunnel_route(local: SocketAddr) -> ConnectionRoute {
         provider: None,
         local_address: local.to_string(),
         encrypted: true,
+        tls: false,
+    }
+}
+
+/// A connection a relay carried from `address`, the route the device
+/// dialled. Not encrypted until [`ConnectionRoute::set_tls`] says the
+/// gateway's own TLS runs inside it.
+pub fn relay_route(address: String) -> ConnectionRoute {
+    ConnectionRoute {
+        path: ConnectionPath::Relay,
+        provider: None,
+        local_address: address,
+        encrypted: false,
         tls: false,
     }
 }

@@ -290,7 +290,7 @@ where
     let mut waves: VecDeque<VecDeque<Route>> = [
         wave(&[RouteKind::Lan]),
         wave(&[RouteKind::Vpn, RouteKind::Tailscale]),
-        wave(&[RouteKind::Ssh]),
+        wave(&[RouteKind::Ssh, RouteKind::Relay]),
     ]
     .into_iter()
     .filter(|wave| !wave.is_empty())

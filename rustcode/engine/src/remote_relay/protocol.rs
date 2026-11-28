@@ -50,8 +50,11 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
+    /// Sign [`signed_message`] for `challenge` with `relay_id`, the relay's
+    /// own identifier, so the signature is good at this relay only.
     Challenge {
         challenge: String,
+        relay_id: String,
     },
     Registered {
         relay_id: String,
@@ -176,6 +179,15 @@ pub struct JoinLink {
 /// The scheme of a [`JoinLink`].
 pub const JOIN_SCHEME: &str = "rustcode-relay";
 
+/// The `host:port` in a relay route a machine reports, `rustcode-relay://host:port`.
+pub fn route_target(address: &str) -> Option<&str> {
+    let target = address
+        .trim()
+        .strip_prefix(JOIN_SCHEME)?
+        .strip_prefix("://")?;
+    (!target.is_empty() && !target.contains(['?', '/'])).then_some(target)
+}
+
 impl JoinLink {
     /// `host:port`, with an IPv6 host in brackets.
     pub fn address(&self) -> String {
@@ -184,6 +196,12 @@ impl JoinLink {
         } else {
             format!("{}:{}", self.host, self.port)
         }
+    }
+
+    /// The route a machine registered here reports to its devices: where the
+    /// relay is, without the secret that admits members.
+    pub fn route_address(&self) -> String {
+        format!("{JOIN_SCHEME}://{}", self.address())
     }
 
     pub fn parse(text: &str) -> Result<Self> {
@@ -260,6 +278,11 @@ mod tests {
                 secret: "s3cret".to_owned(),
             };
             assert_eq!(JoinLink::parse(&link.to_string()).unwrap(), link);
+            assert_eq!(
+                route_target(&link.route_address()),
+                Some(link.address().as_str())
+            );
+            assert!(!link.route_address().contains("s3cret"));
         }
     }
 

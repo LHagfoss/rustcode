@@ -10,6 +10,7 @@
 //! the traffic. It sees which device reaches which machine, when, and how
 //! many bytes.
 
+pub mod member;
 pub mod pin;
 pub mod protocol;
 pub mod server;
