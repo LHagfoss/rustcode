@@ -9,6 +9,7 @@ import { hasShell } from "../lib/shell";
 import { type HubMember, hubChanging, hubError, hubStatus, refreshHub, setHub, useHub } from "../state/hub";
 import { chooseHub, reachableMachines, suggestedHub } from "../state/hubFleet";
 import { LOCAL_MACHINE_ID, machineName, useMachines } from "../state/machines";
+import { Switch } from "./primitives";
 import { Action, Chip, Group, Row, Select } from "./settingsKit";
 
 /** The gateway reports members as it sees links come and go. */
@@ -70,6 +71,20 @@ export function HubGroup() {
           onChange={(value) => void chooseHub(value === NO_HUB ? null : value)}
         />
       </Row>
+      {status?.hub && (
+        <Row
+          title="Relay for machines on other networks"
+          subtitle="This hub relays for its members, so your devices reach them from anywhere. Let TCP port 17880 through to it."
+          hint="Each member registers with the relay on its own. The relay sees which device reaches which machine and how many bytes; what they say stays encrypted end to end."
+        >
+          <Switch
+            label="Relay for machines on other networks"
+            checked={status.relay}
+            disabled={busy}
+            onChange={(on) => void setHub({ action: on ? "relay_on" : "relay_off" })}
+          />
+        </Row>
+      )}
       {status?.hub && <Members members={status.members} />}
       {status?.member && <Membership />}
     </Group>

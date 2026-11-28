@@ -995,6 +995,20 @@ pub enum HubCommands {
     },
     /// Leave the hub; the hub cannot reach this machine any more
     Leave,
+    /// Run a relay on this hub for machines with no shared network; each
+    /// member registers with it on its own
+    #[command(after_help = "Examples:
+  rc machines hub relay on
+  rc machines hub relay on --host hub.example.com
+  rc machines hub relay off")]
+    Relay {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+        /// The name or address devices reach this hub at, when its own
+        /// routes do not name it (a port forward to a public address)
+        #[arg(long)]
+        host: Option<String>,
+    },
     /// Show this machine's role and, on the hub, its members
     Status {
         /// Print the status as JSON

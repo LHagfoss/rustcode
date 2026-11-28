@@ -2,7 +2,7 @@
 //! (`docs/remote.md` › The hub).
 //!
 //! The work is the CLI's own: `rc machines hub status --json`, `on`,
-//! `off`, `join <machine> --access <level> --ask <bool>` and `leave`, in the
+//! `off`, `relay on|off`, `join <machine> --access <level> --ask <bool>` and `leave`, in the
 //! same binary the app starts its engine from (as `service.rs` does for the
 //! server). The CLI writes `<config>/hub.json` and checks that the hub is a
 //! paired machine; the remote gateway picks the change up within a minute.
@@ -48,6 +48,8 @@ fn arguments<'a>(
     let mut args = vec!["machines", "hub"];
     match action {
         "on" | "off" | "leave" => args.push(action),
+        "relay_on" => args.extend(["relay", "on"]),
+        "relay_off" => args.extend(["relay", "off"]),
         "join" => {
             let machine = machine
                 .filter(|machine| !machine.trim().is_empty())
@@ -95,6 +97,14 @@ mod tests {
         assert_eq!(
             arguments("join", Some("host-1"), Some("delegate"), "false").unwrap(),
             ["machines", "hub", "join", "host-1", "--access", "delegate", "--ask", "false"]
+        );
+        assert_eq!(
+            arguments("relay_on", None, None, "true").unwrap(),
+            ["machines", "hub", "relay", "on"]
+        );
+        assert_eq!(
+            arguments("relay_off", None, None, "true").unwrap(),
+            ["machines", "hub", "relay", "off"]
         );
         assert_eq!(
             arguments("join", None, None, "true").unwrap_err(),

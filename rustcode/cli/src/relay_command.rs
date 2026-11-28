@@ -31,23 +31,29 @@ pub fn run(config_dir: &Path, command: &RelayCommands) -> Result<()> {
             }
         }
         RelayCommands::Status { json } => {
-            let link = RelayLink::load(config_dir)?
-                .map(|saved| saved.join_link())
-                .transpose()?;
+            let saved = RelayLink::load(config_dir)?;
+            let from_hub = saved.as_ref().and_then(|saved| saved.hub.clone());
+            let link = saved.map(|saved| saved.join_link()).transpose()?;
             if *json {
                 let status = serde_json::json!({
                     "relay": link.as_ref().map(|link| serde_json::json!({
                         "address": link.address(),
                         "fingerprint": link.fingerprint,
+                        "from_hub": from_hub,
                     })),
                 });
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
                 match link {
                     Some(link) => println!(
-                        "Registers with the relay at {} (certificate {}).",
+                        "Registers with the relay at {} (certificate {}){}.",
                         link.address(),
-                        link.fingerprint
+                        link.fingerprint,
+                        if from_hub.is_some() {
+                            ", which the hub runs"
+                        } else {
+                            ""
+                        }
                     ),
                     None => println!(
                         "Not registered with a relay. Run `rc remote relay` on a VPS and \

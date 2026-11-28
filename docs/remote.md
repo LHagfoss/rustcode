@@ -1520,7 +1520,28 @@ after the LAN and overlay routes, labelled **Relay**; a device without either
 skips it, so the first connection still needs another route. In the
 machine's device list the connection shows as **Relay · Encrypted**.
 
-Registering from Settings is a follow-up listed in the ADR.
+### The hub's relay
+
+The [hub](#the-hub) can be the relay, so no machine needs a command of its
+own: in Settings › Machines › Hub, on the hub, turn on **Relay for machines
+on other networks**, or run
+
+```sh
+rc machines hub relay on                         # on the hub
+rc machines hub relay on --host hub.example.com  # name it when its routes do not
+rc machines hub relay off
+```
+
+The hub's gateway then listens as a relay on TCP port 17880, with the same
+identity and secret `rc remote relay` keeps in `relay/`, and sends every
+member the join link over the hub link (a `hub_relay` frame, again whenever
+it changes). The link names `--host` if given, else the hub's most widely
+reachable route: a public address, then a name that is not `.local`, then
+an overlay address, then the LAN. Each member saves it in
+`relay-link.json`, marked as the hub's, and registers as above. A link the
+owner joined with `rc machines relay join` is never replaced. When the hub
+stops relaying, or the machine leaves the hub, the member drops the link
+the hub gave. Let TCP port 17880 through to the hub.
 
 ## Not covered yet
 

@@ -78,6 +78,14 @@ pub struct HubConfig {
     pub hub: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<Membership>,
+    /// The hub also runs a relay ([`crate::remote_relay`]) and hands its
+    /// members the link, so each one registers with it on its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relay: bool,
+    /// The name or address members and devices dial the hub's relay at, when
+    /// the hub's own routes do not name it (a port forward to a public IP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_host: Option<String>,
 }
 
 /// The hub this machine keeps a link to, and what the hub may do here.
@@ -152,6 +160,12 @@ pub enum MemberFrame {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HubFrame {
     HubJoined,
+    /// The relay the hub runs, as a join link, or none when it stopped. Sent
+    /// after `hub_joined` and whenever it changes.
+    HubRelay {
+        #[serde(default)]
+        link: Option<String>,
+    },
     HubCall {
         call_id: u64,
         tool: String,
@@ -298,6 +312,7 @@ impl HubCallAnswer {
 /// knows about all of them and the calls waiting for the offline ones.
 pub struct Members {
     dir: PathBuf,
+    relay_link: Mutex<Option<String>>,
     inner: Mutex<Inner>,
 }
 
@@ -305,8 +320,24 @@ impl Members {
     pub fn new(config_dir: &Path) -> Self {
         Self {
             dir: config_dir.to_owned(),
+            relay_link: Mutex::new(None),
             inner: Mutex::new(Inner::default()),
         }
+    }
+
+    /// The join link of the relay this hub runs now, if it runs one.
+    pub fn relay_link(&self) -> Option<String> {
+        self.relay_link
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(super) fn set_relay_link(&self, link: Option<String>) {
+        *self
+            .relay_link
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = link;
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -700,6 +731,14 @@ pub(super) async fn serve<W, R>(
         {
             break 'link;
         }
+        let mut relay_sent = members.relay_link();
+        let relay_frame = |link: &Option<String>| HubFrame::HubRelay { link: link.clone() };
+        if write(writer, send(&relay_frame(&relay_sent)), times.write_timeout)
+            .await
+            .is_none()
+        {
+            break 'link;
+        }
         for item in members.take_mail(&joined.host_id, epoch) {
             next_call += 1;
             waiting.insert(next_call, Waiting::Mail(item.id));
@@ -744,6 +783,13 @@ pub(super) async fn serve<W, R>(
                     }
                     if write(writer, Message::Ping(Default::default()), times.write_timeout).await.is_none() {
                         break 'link;
+                    }
+                    let relay_now = members.relay_link();
+                    if relay_now != relay_sent {
+                        relay_sent = relay_now;
+                        if write(writer, send(&relay_frame(&relay_sent)), times.write_timeout).await.is_none() {
+                            break 'link;
+                        }
                     }
                 }
                 inbound = reader.next() => match inbound {
@@ -800,6 +846,7 @@ mod tests {
         HubConfig {
             hub: true,
             member: None,
+            ..Default::default()
         }
         .save(dir.path())
         .unwrap();
@@ -891,6 +938,7 @@ mod tests {
                 access: Scope::Delegate,
                 ask: true,
             }),
+            ..Default::default()
         };
         config.save(dir.path()).unwrap();
         assert_eq!(HubConfig::load(dir.path()), config);
@@ -935,6 +983,7 @@ mod tests {
         let members = std::sync::Arc::new(Members::new(dir.path()));
         let (mut wire, _task) = link(members.clone(), joined("laptop", Scope::Delegate));
         assert_eq!(wire.frame().await, HubFrame::HubJoined);
+        assert_eq!(wire.frame().await, HubFrame::HubRelay { link: None });
         let call = {
             let members = members.clone();
             tokio::spawn(async move {
@@ -996,6 +1045,7 @@ mod tests {
         let members = std::sync::Arc::new(Members::new(dir.path()));
         let (mut wire, task) = link(members.clone(), joined("laptop", Scope::Delegate));
         assert_eq!(wire.frame().await, HubFrame::HubJoined);
+        assert_eq!(wire.frame().await, HubFrame::HubRelay { link: None });
         drop(wire);
         task.await.unwrap();
         assert!(!members.list()[0].online);
@@ -1029,6 +1079,7 @@ mod tests {
         // empties the mailbox.
         let (mut wire, _task) = link(members.clone(), joined("laptop", Scope::Delegate));
         assert_eq!(wire.frame().await, HubFrame::HubJoined);
+        assert_eq!(wire.frame().await, HubFrame::HubRelay { link: None });
         let HubFrame::HubCall {
             call_id,
             tool,
@@ -1162,6 +1213,7 @@ mod tests {
         let members = std::sync::Arc::new(Members::new(dir.path()));
         let (mut first, first_task) = link(members.clone(), joined("laptop", Scope::ReadOnly));
         assert_eq!(first.frame().await, HubFrame::HubJoined);
+        assert_eq!(first.frame().await, HubFrame::HubRelay { link: None });
         let call = {
             let members = members.clone();
             tokio::spawn(
@@ -1181,8 +1233,10 @@ mod tests {
 
         let (mut older, older_task) = link(members.clone(), joined("laptop", Scope::ReadOnly));
         assert_eq!(older.frame().await, HubFrame::HubJoined);
+        assert_eq!(older.frame().await, HubFrame::HubRelay { link: None });
         let (mut newer, _newer_task) = link(members.clone(), joined("laptop", Scope::Delegate));
         assert_eq!(newer.frame().await, HubFrame::HubJoined);
+        assert_eq!(newer.frame().await, HubFrame::HubRelay { link: None });
         tokio::time::timeout(Duration::from_secs(5), older_task)
             .await
             .expect("the older link ends")
@@ -1190,5 +1244,29 @@ mod tests {
         let listed = members.list();
         assert!(listed[0].online, "the newer link is still registered");
         assert_eq!(listed[0].access, Scope::Delegate);
+    }
+
+    #[tokio::test]
+    async fn a_member_learns_the_relay_the_hub_runs_when_it_joins() {
+        let dir = hub_dir();
+        let members = std::sync::Arc::new(Members::new(dir.path()));
+        let link_text = "rustcode-relay://hub.example:17880?fp=ab&secret=s".to_owned();
+        members.set_relay_link(Some(link_text.clone()));
+        let (mut wire, _task) = link(members.clone(), joined("laptop", Scope::ReadOnly));
+        assert_eq!(wire.frame().await, HubFrame::HubJoined);
+        assert_eq!(
+            wire.frame().await,
+            HubFrame::HubRelay {
+                link: Some(link_text)
+            }
+        );
+    }
+
+    #[test]
+    fn an_older_member_reads_a_hub_file_without_the_relay() {
+        let config: HubConfig = serde_json::from_str(r#"{"hub":true}"#).unwrap();
+        assert!(config.hub && !config.relay && config.relay_host.is_none());
+        let saved = serde_json::to_string(&config).unwrap();
+        assert!(!saved.contains("relay"), "{saved}");
     }
 }

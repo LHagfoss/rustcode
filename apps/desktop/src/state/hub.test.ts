@@ -14,6 +14,7 @@ describe("parseHubStatus", () => {
   test("reads the role, the membership and each member", () => {
     const status = parseHubStatus({
       hub: true,
+      relay: false,
       member: { machine: "vps-id", name: "vps", access: "delegate", ask: false },
       members: [
         {
@@ -30,6 +31,7 @@ describe("parseHubStatus", () => {
     });
     expect(status).toEqual({
       hub: true,
+      relay: false,
       member: { machine: "vps-id", name: "vps", access: "delegate", ask: false },
       members: [
         {
@@ -46,12 +48,13 @@ describe("parseHubStatus", () => {
   });
 
   test("no role, no member, and a gateway that does not answer", () => {
-    expect(parseHubStatus({ hub: false, member: null, members: null })).toEqual({
+    expect(parseHubStatus({ hub: false, relay: false, member: null, members: null })).toEqual({
       hub: false,
+      relay: false,
       member: null,
       members: null,
     });
-    expect(parseHubStatus("junk")).toEqual({ hub: false, member: null, members: null });
+    expect(parseHubStatus("junk")).toEqual({ hub: false, relay: false, member: null, members: null });
   });
 
   test("an unknown access level reads as read-only", () => {
@@ -62,8 +65,8 @@ describe("parseHubStatus", () => {
 });
 
 describe("the hub role state machine", () => {
-  const off: HubStatus = { hub: false, member: null, members: null };
-  const on: HubStatus = { hub: true, member: null, members: [] };
+  const off: HubStatus = { hub: false, relay: false, member: null, members: null };
+  const on: HubStatus = { hub: true, relay: false, member: null, members: [] };
   const read: HubState = transitionHub(HUB_UNREAD, { type: "read", epoch: 0, status: off });
 
   test("a first read shows the role, a failed one says why", () => {
