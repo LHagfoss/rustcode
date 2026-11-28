@@ -14,7 +14,7 @@ import { setView, toast, useApp } from "../state/store";
 import { startNewThreadFromContext } from "../state/threadOpen";
 import { ArrowDownUp, Check, LayoutGrid, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
-import { SIDEBAR_ROW_HOVER, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
+import { SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
 
 const TOOL_BUTTON =
   "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill data-[state=open]:text-fg";
@@ -41,7 +41,8 @@ function NavRow({
       type="button"
       aria-current={current ? "page" : undefined}
       data-sidebar-current={current ? "" : undefined}
-      className={cx(NAV_ROW, current ? "text-fg" : SIDEBAR_ROW_HOVER)}
+      data-sidebar-hover=""
+      className={cx(NAV_ROW, current ? "text-fg" : "active:bg-fill-strong")}
       onClick={onClick}
     >
       {children}
@@ -58,7 +59,7 @@ export function SidebarToolbar() {
   const filtering = onlyProject && !!projectCwd;
   return (
     <div className="relative flex shrink-0 flex-col gap-1.5 px-3 pb-2">
-      <nav aria-label="Sidebar" className="flex flex-col gap-0.5 pb-1">
+      <nav aria-label="Sidebar" data-sidebar-hover-group className="flex flex-col gap-0.5 pb-1">
         <NavRow label="New thread" current={composing} onClick={() => startNewThreadFromContext()}>
           <SquarePen size={14} />
         </NavRow>
