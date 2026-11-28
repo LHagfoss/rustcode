@@ -1474,10 +1474,11 @@ impl Shared {
             offer,
         );
         details.instance_id = Some(self.instance_id.clone());
-        details.qr_payload = Secret::new(super::sealed::qr_with_sealed_key(
-            details.qr_payload.expose(),
-            self.sealed.public_key(),
-        ));
+        details.qr_payload =
+            Secret::new(self.relay.qr_with_route(super::sealed::qr_with_sealed_key(
+                details.qr_payload.expose(),
+                self.sealed.public_key(),
+            )));
         details.challenge = state.pairing.last_serial();
         details.locked_for_secs = state.pairing.lockout(now).map(|left| left.as_secs().max(1));
         details

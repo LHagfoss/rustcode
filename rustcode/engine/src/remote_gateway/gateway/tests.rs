@@ -66,6 +66,7 @@ struct Harness {
     lifecycle: RemoteLifecycle,
     addr: SocketAddr,
     router: Arc<RecordingRouter>,
+    shared: Arc<Shared>,
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<Result<()>>,
 }
@@ -109,12 +110,14 @@ impl Harness {
         .unwrap();
         let addr = gateway.local_addr();
         let shutdown = gateway.shutdown_token();
+        let shared = Arc::clone(&gateway.shared);
         let task = tokio::spawn(gateway.run());
         Self {
             _dir: dir,
             lifecycle,
             addr,
             router,
+            shared,
             shutdown,
             task,
         }
@@ -2259,6 +2262,34 @@ mod sealed {
         client.send(seal_frame(&first)).await;
         let refused = client.next_json().await;
         assert_eq!(refused["type"], "error", "{refused}");
+        client.expect_closed().await;
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_connection_through_a_relay_in_the_clear_is_refused() {
+        let harness = Harness::start().await;
+        let listener = bounded(TcpListener::bind("127.0.0.1:0")).await.unwrap();
+        let pipe_addr = listener.local_addr().unwrap();
+        let connecting = tokio::spawn(Client::connect(pipe_addr));
+        let (pipe, peer) = bounded(listener.accept()).await.unwrap();
+        let slot = harness.shared.admit_socket(peer.ip()).unwrap();
+        tokio::spawn(transport::serve_connection(
+            Arc::clone(&harness.shared),
+            pipe,
+            slot,
+            Arrival::Relay,
+        ));
+        let mut client = bounded(connecting).await.unwrap();
+        client
+            .send(json!({"type": "describe", "protocol_version": 1}))
+            .await;
+        let refused = client.next_json().await;
+        assert_eq!(refused["type"], "error", "{refused}");
+        assert!(
+            refused["message"].as_str().unwrap().contains("sealed"),
+            "{refused}"
+        );
         client.expect_closed().await;
         harness.stop().await;
     }

@@ -1,9 +1,13 @@
 //! The relay server: member registration, dials and blind pipes.
 //!
 //! One port serves everything. A connection whose first byte starts a TLS
-//! record is a member's control connection; anything else is a dial from a
-//! device or a pipe a member opens in answer to one. Once a dial is matched
-//! with its pipe the relay copies bytes both ways and reads none of them.
+//! record is a member's control connection; one that starts with `{` is a
+//! dial from a device or a pipe a member opens in answer to one; anything
+//! else is the HTTP entry of [`http_entry`], for a client that only has
+//! WebSocket and `fetch`. Once a dial is matched with its pipe the relay
+//! copies bytes both ways and reads none of them.
+
+pub(super) mod http_entry;
 
 use super::protocol::{
     ErrorCode, PROTOCOL_VERSION, Reply, Request, Role, read_frame, signed_message, write_frame,
@@ -72,6 +76,7 @@ pub struct Relay {
     limits: Limits,
     members: Mutex<HashMap<String, Member>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Halves>>>,
+    challenges: http_entry::Challenges,
     sessions: AtomicU64,
     unauthenticated: Arc<Semaphore>,
     shutdown: CancellationToken,
@@ -104,6 +109,7 @@ impl Relay {
             state: Mutex::new(state),
             state_path,
             tls,
+            challenges: http_entry::Challenges::new(limits.max_unauthenticated),
             unauthenticated: Arc::new(Semaphore::new(limits.max_unauthenticated)),
             limits,
             members: Mutex::new(HashMap::new()),
@@ -199,6 +205,10 @@ impl Relay {
         }
         let (read, mut write) = socket.into_split();
         let mut reader = BufReader::new(read);
+        if first[0] != b'{' {
+            self.http_entry((reader, write), deadline, permit).await;
+            return;
+        }
         let frame = tokio::time::timeout_at(deadline, read_frame::<Request, _>(&mut reader)).await;
         match frame {
             Ok(Ok(Some(Request::Dial {
@@ -544,30 +554,10 @@ impl Relay {
         {
             return;
         }
-        let pipe = random_token(32);
-        let (deliver, delivered) = oneshot::channel();
-        self.lock_pending().insert(pipe.clone(), deliver);
-        let slot = self.request_pipe(machine_id, &public_key, &pipe);
-        let slot = match slot {
-            Ok(slot) => slot,
+        let (member, slot) = match self.open_pipe(machine_id, &public_key).await {
+            Ok(opened) => opened,
             Err(refusal) => {
-                self.lock_pending().remove(&pipe);
                 send(&mut writer, &refusal).await;
-                return;
-            }
-        };
-        let member = match tokio::time::timeout(self.limits.pipe_wait, delivered).await {
-            Ok(Ok(member)) => member,
-            _ => {
-                self.lock_pending().remove(&pipe);
-                send(
-                    &mut writer,
-                    &Reply::error(
-                        ErrorCode::Timeout,
-                        "the machine did not open the pipe in time",
-                    ),
-                )
-                .await;
                 return;
             }
         };
@@ -583,6 +573,35 @@ impl Relay {
         )
         .await;
         drop(slot);
+    }
+
+    /// Ask the member of `machine_id` for a pipe for the device `public_key`
+    /// and wait for it to arrive.
+    async fn open_pipe(
+        &self,
+        machine_id: &str,
+        public_key: &str,
+    ) -> Result<(Halves, PipeSlot), Reply> {
+        let pipe = random_token(32);
+        let (deliver, delivered) = oneshot::channel();
+        self.lock_pending().insert(pipe.clone(), deliver);
+        let slot = match self.request_pipe(machine_id, public_key, &pipe) {
+            Ok(slot) => slot,
+            Err(refusal) => {
+                self.lock_pending().remove(&pipe);
+                return Err(refusal);
+            }
+        };
+        match tokio::time::timeout(self.limits.pipe_wait, delivered).await {
+            Ok(Ok(member)) => Ok((member, slot)),
+            _ => {
+                self.lock_pending().remove(&pipe);
+                Err(Reply::error(
+                    ErrorCode::Timeout,
+                    "the machine did not open the pipe in time",
+                ))
+            }
+        }
     }
 
     /// Ask the member for a pipe named `pipe`, counting it against the
