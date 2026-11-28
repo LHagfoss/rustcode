@@ -53,6 +53,7 @@ describe("jobMachineTargets", () => {
       machines: [VPS],
       localHub: {
         hub: false,
+        relay: false,
         member: { machine: "gw-vps", name: "lagosvps", access: "admin", ask: false },
         members: null,
       },

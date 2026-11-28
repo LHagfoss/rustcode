@@ -85,7 +85,7 @@ is set up.
 
 1. `feat(remote): add rc remote relay with device-key registration and blind pipes` (done)
 2. `feat(client): add the Relay route kind with pinned TLS and race placement` (done)
-3. `feat(remote): let a machine register with a relay from Settings and rc machines` (`rc machines relay` done; Settings next)
+3. `feat(remote): let a machine register with a relay from Settings and rc machines` (`rc machines relay` done; a hub runs the relay and hands its members the link, switched on in Settings › Machines › Hub, done)
 4. `feat(remote): re-race relay connections and switch to a better route when idle`
 5. `docs(remote): set up a self-hosted relay on a VPS`
 6. `feat(remote): encrypt queued hub mailbox calls at rest`

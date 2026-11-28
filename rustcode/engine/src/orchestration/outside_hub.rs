@@ -344,6 +344,7 @@ mod tests {
                 access,
                 ask,
             }),
+            ..Default::default()
         }
         .save(dir)
         .unwrap();

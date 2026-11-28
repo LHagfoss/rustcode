@@ -16,6 +16,7 @@ use anyhow::{Context, Result, bail};
 use rustcode::remote_gateway::handshake::HandshakeResponse;
 use rustcode::remote_gateway::hub_link::{HubConfig, HubFrame, Membership, result_frame};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+use rustcode::remote_relay::member::RelayLink;
 use rustcode_client::{AcpChannel, ClientKind, Connector, MachineRegistry, TokenStore};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -36,7 +37,12 @@ pub async fn run(config_dir: PathBuf, stop: CancellationToken) {
     loop {
         let ours = RemoteLifecycle::new(&config_dir).running_pid() == Some(std::process::id());
         let wait = match HubConfig::load(&config_dir).member {
-            None => CHECK,
+            None => {
+                if ours && let Err(error) = RelayLink::forget_hub(&config_dir) {
+                    rustcode::dbg_log!("hub relay: {error:#}");
+                }
+                CHECK
+            }
             Some(_) if !ours => FIRST_RETRY,
             Some(membership) => match link_once(&config_dir, &membership, &stop, answer).await {
                 Ok(()) => {
@@ -59,6 +65,23 @@ pub async fn run(config_dir: PathBuf, stop: CancellationToken) {
             _ = stop.cancelled() => return,
             _ = tokio::time::sleep(wait) => {}
         }
+    }
+}
+
+/// Register with the relay the hub runs, or let go of the one it gave.
+fn follow_relay(config_dir: &Path, membership: &Membership, link: Option<&str>) {
+    match RelayLink::follow_hub(config_dir, &membership.machine, link) {
+        Ok(true) => rustcode::dbg_log!(
+            "hub relay: {} the relay {} runs",
+            if link.is_some() {
+                "registering with"
+            } else {
+                "leaving"
+            },
+            membership.name
+        ),
+        Ok(false) => {}
+        Err(error) => rustcode::dbg_log!("hub relay from {}: {error:#}", membership.name),
     }
 }
 
@@ -138,6 +161,7 @@ where
                         });
                     }
                     Ok(HubFrame::HubJoined) => {}
+                    Ok(HubFrame::HubRelay { link }) => follow_relay(config_dir, membership, link.as_deref()),
                     Err(_) => {
                         if let Ok(HandshakeResponse::Error { message, .. }) =
                             serde_json::from_value::<HandshakeResponse>(frame)
@@ -188,6 +212,7 @@ mod tests {
         HubConfig {
             hub: true,
             member: None,
+            ..Default::default()
         }
         .save(dir)
         .unwrap();
@@ -282,6 +307,7 @@ mod tests {
         HubConfig {
             hub: false,
             member: Some(membership.clone()),
+            ..Default::default()
         }
         .save(member_dir.path())
         .unwrap();

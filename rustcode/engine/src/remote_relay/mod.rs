@@ -26,10 +26,22 @@ use protocol::JoinLink;
 use server::{Limits, Relay};
 use state::RelayState;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 /// The port `rc remote relay` listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 17880;
+
+/// The relay kept in `relay/` under `config_dir`, its identity and secret
+/// created on first use. `rc remote relay` and a hub's relay share it.
+pub fn open(config_dir: &Path) -> Result<Arc<Relay>> {
+    let directory = config_dir.join("relay");
+    ensure_private_directory(&directory, "relay")?;
+    let state_path = RelayState::path(config_dir);
+    let state = RelayState::load_or_create(&state_path)?;
+    let tls = TlsIdentity::load_or_create(&directory.join("tls.json"))?;
+    Ok(Relay::new(state, Some(state_path), tls, Limits::default()))
+}
 
 /// Run a relay in the foreground on `bind:port` until interrupted, keeping
 /// its state in `relay/` under `config_dir`.
@@ -39,15 +51,10 @@ pub async fn serve(
     port: u16,
     advertise: Option<&str>,
 ) -> Result<()> {
-    let directory = config_dir.join("relay");
-    ensure_private_directory(&directory, "relay")?;
-    let state_path = RelayState::path(config_dir);
-    let state = RelayState::load_or_create(&state_path)?;
-    let tls = TlsIdentity::load_or_create(&directory.join("tls.json"))?;
+    let relay = open(config_dir)?;
     let listener = TcpListener::bind((bind, port))
         .await
         .with_context(|| format!("could not listen on {bind}:{port}"))?;
-    let relay = Relay::new(state, Some(state_path), tls, Limits::default());
     let unspecified = matches!(bind, "0.0.0.0" | "::" | "[::]");
     let host = advertise
         .map(str::to_owned)

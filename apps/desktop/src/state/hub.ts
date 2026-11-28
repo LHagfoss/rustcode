@@ -32,6 +32,8 @@ export interface HubMember {
 
 export interface HubStatus {
   hub: boolean;
+  /** This hub also runs a relay its members register with. */
+  relay: boolean;
   member: HubMembership | null;
   /** Null unless this is the hub and its gateway answers. */
   members: HubMember[] | null;
@@ -134,6 +136,7 @@ export function parseHubStatus(value: unknown): HubStatus {
   const members = Array.isArray(raw.members) ? raw.members : null;
   return {
     hub: raw.hub === true,
+    relay: raw.relay === true,
     member:
       member && typeof member.machine === "string"
         ? {
@@ -174,7 +177,7 @@ export async function refreshHub(): Promise<void> {
 }
 
 export type HubChange =
-  | { action: "on" | "off" | "leave" }
+  | { action: "on" | "off" | "leave" | "relay_on" | "relay_off" }
   | { action: "join"; machine: string; access: OutsideScope; ask: boolean };
 
 /** Change the role; answers whether it changed, and toasts why not. */
