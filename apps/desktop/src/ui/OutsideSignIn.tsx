@@ -50,9 +50,9 @@ export function AgentTile({ name, size = 40 }: { name: string; size?: number }) 
 
 const SHORT_LABEL: Record<OutsideScope, string> = {
   read_only: "Read",
-  delegate: "Delegate",
+  delegate: "Threads",
   manage: "Manage",
-  admin: "Admin",
+  admin: "Full",
 };
 
 /** What `scope` allows and does not, as ticks and crosses. */

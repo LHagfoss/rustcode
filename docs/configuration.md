@@ -498,7 +498,7 @@ there is nothing running to restart. An agent does the same with the
 at once, and each change shows the thread's approval card first, e.g.
 `Change the default harness for new threads: claude-code → codex with gpt-5`.
 A list never carries a server's target, headers or environment, or an
-account's login. An outside agent needs Admin access to change anything.
+account's login. An outside agent needs Full access to change anything.
 
 A thread on another harness (Claude Code, Codex, OpenCode) gets these servers
 when its harness process starts. When the list changes after that (a server
@@ -703,7 +703,7 @@ the `rustcode` MCP server, which external harnesses and outside agents get: `{ "
 before and after (`Change setting auto-compact-threshold: 150000 → 200000`),
 and change nothing unless the user allows it; with no window to show the card
 in, the call is refused and names the `rc settings` command to run
-instead. An outside agent needs Admin access to write
+instead. An outside agent needs Full access to write
 ([mcp-outside-agents.md](mcp-outside-agents.md)).
 
 `settings.json` is deliberately not part of `rc config sync`: it is one

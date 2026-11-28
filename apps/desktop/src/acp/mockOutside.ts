@@ -16,7 +16,7 @@ const MOCK_OUTSIDE_LEVELS = [
   },
   {
     scope: "delegate",
-    label: "Delegate",
+    label: "Threads",
     summary: "Start and message threads",
     can: [
       "Everything Read-only can",
@@ -30,7 +30,7 @@ const MOCK_OUTSIDE_LEVELS = [
     label: "Manage",
     summary: "Run work end to end",
     can: [
-      "Everything Delegate can",
+      "Everything Threads can",
       "Merge, clean up, projects and scheduled work",
       "Threads it starts may run with Full access",
     ],
@@ -38,7 +38,7 @@ const MOCK_OUTSIDE_LEVELS = [
   },
   {
     scope: "admin",
-    label: "Admin",
+    label: "Full",
     summary: "Everything, settings included",
     can: ["Everything Manage can", "Change RustCode's own settings"],
     cannot: [],

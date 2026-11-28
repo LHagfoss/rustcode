@@ -33,9 +33,9 @@ export const OUTSIDE_PLATFORMS: readonly OutsidePlatform[] = ["claude-desktop", 
 
 export const SCOPE_LABEL: Record<OutsideScope, string> = {
   read_only: "Read-only",
-  delegate: "Delegate",
+  delegate: "Threads",
   manage: "Manage",
-  admin: "Admin",
+  admin: "Full",
 };
 
 export const SCOPE_HELP: Record<OutsideScope, string> = {
@@ -43,7 +43,7 @@ export const SCOPE_HELP: Record<OutsideScope, string> = {
   delegate:
     "Read, and start or message threads. Threads it starts run at Auto-edit: files can change, a command that needs approval is declined.",
   manage:
-    "Delegate, and the management tools (merge, clean up, projects, scheduled work) as RustCode makes them available to outside agents. Started threads may run at Full access.",
+    "Threads, and the management tools (merge, clean up, projects, scheduled work) as RustCode makes them available to outside agents. Started threads may run at Full access.",
   admin: "Manage, and change RustCode's own settings. Started threads may run at Full access.",
 };
 

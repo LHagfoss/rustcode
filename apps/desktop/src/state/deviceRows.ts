@@ -240,8 +240,8 @@ export function accessSentence(level: AccessLevel): string {
 
 /** The access picker's choices. */
 export const ACCESS_OPTIONS: { value: AccessLevel; label: string }[] = [
-  { value: "read", label: "Read threads" },
-  { value: "threads", label: "Run threads" },
-  { value: "full", label: "Full control" },
+  { value: "read", label: "Read-only" },
+  { value: "threads", label: "Threads" },
+  { value: "full", label: "Full" },
   { value: "none", label: "No access" },
 ];

@@ -341,7 +341,7 @@ async fn outside_http_interop() {
         denied.2["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("start_thread needs Delegate")
+            .contains("start_thread needs Threads")
     );
     let (a, b) = tokio::join!(
         f.rpc(&token, 6, "tools/call", json!({"name":"whoami"})),

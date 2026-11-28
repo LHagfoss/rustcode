@@ -953,13 +953,13 @@ pub enum HubCommands {
     Off,
     /// Join a saved machine that is the hub, granting it an access ceiling
     #[command(after_help = "Examples:
-  rc machines hub join vps --access delegate
+  rc machines hub join vps --access threads
   rc machines hub join vps --access read-only --ask false")]
     Join {
         /// The hub: name, host id or a prefix of one, from `rc machines list`
         machine: String,
         /// The most the hub may do here, at the outside-agent levels:
-        /// read-only, delegate, manage or admin
+        /// read-only, threads, manage or full
         #[arg(long, default_value = "admin")]
         access: String,
         /// Ask in the app here before each call from the hub that changes
@@ -1322,7 +1322,7 @@ pub enum OutsideCommands {
         /// claude-desktop, cursor, codex or other
         #[arg(long, default_value = "other")]
         platform: String,
-        /// read_only (default), delegate, manage or admin
+        /// read-only (default), threads, manage or full
         #[arg(long)]
         access: Option<String>,
         /// Ask in the app before each change (default: on above read_only)
@@ -1343,7 +1343,7 @@ pub enum OutsideCommands {
     /// sign-in page (`[outside] public_url`, for ChatGPT, Claude and other
     /// hosted agents). It works once, for 10 minutes
     Code {
-        /// The most the app may do: read_only (default), delegate, manage or admin
+        /// The most the app may do: read-only (default), threads, manage or full
         #[arg(long)]
         access: Option<String>,
         /// Ask in the app before each change (default: on above read_only)

@@ -1395,7 +1395,7 @@ On each other machine, after pairing with the hub as usual (`rustcode
 machines add`, a connect code, or over SSH):
 
 ```sh
-rc machines hub join vps --access delegate
+rc machines hub join vps --access threads
 ```
 
 - **The link is outbound.** The member's own remote gateway connects to the
@@ -1411,9 +1411,10 @@ rc machines hub join vps --access delegate
   identifier may join; a phone cannot. The hub names the member by the device
   record it paired as, never by what the join frame says.
 - **Each member sets a ceiling.** `--access` takes the
-  [outside-agent levels](mcp-outside-agents.md#access-levels) (`read-only` by
-  default, `delegate`, `manage`, `admin`), and `--ask` (on by default) asks in
-  the app on the member before each call that changes something. A call
+  [outside-agent levels](mcp-outside-agents.md#access-levels) (`full` by
+  default, since the hub is your own computer; also `read-only`, `threads` and
+  `manage`), and `--ask true` asks in the app on the member before each call
+  that changes something. A call
   forwarded by the hub passes the hub's gate for the agent that made it, then
   the member's own gate at that ceiling, and is in the member's outside-agent
   audit log as "*agent* via the hub *name*". With `--ask` on and no app open on
@@ -1543,7 +1544,8 @@ or `rc remote devices deny <id>`; deny immediately disconnects the device.
 
 Each grant has a level, a ceiling on what the device may call
 (`remote_gateway/access.rs`), set in Settings › Machines › ‹machine› ›
-Access or with `--access`:
+Access or with `--access`. The app names them Read-only, Threads and Full, the
+same words as the [outside-agent levels](mcp-outside-agents.md#access-levels):
 
 - `read`: `initialize`, `session/list`, `session/load`, session status and
   replay, thread search, activity, project facts, worktree state, usage,

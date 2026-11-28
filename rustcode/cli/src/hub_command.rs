@@ -43,7 +43,7 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
             ask,
         } => {
             let access = Scope::parse(access).with_context(|| {
-                format!("{access} is not an access level; use read-only, delegate, manage or admin")
+                format!("{access} is not an access level; use read-only, threads, manage or full")
             })?;
             let registry = MachineRegistry::load(config_dir)?;
             let hub = registry.select(machine)?;
@@ -220,7 +220,7 @@ mod tests {
             },
         ];
         let text = format_status(&config, Some(&members));
-        assert!(text.contains("laptop  linked  Delegate, asks"), "{text}");
+        assert!(text.contains("laptop  linked  Threads, asks"), "{text}");
         assert!(
             text.contains("desk  offline, last seen 2026-11-18 21:04 UTC  Read-only, 2 waiting"),
             "{text}"
@@ -241,7 +241,7 @@ mod tests {
             }),
         };
         let text = format_status(&member, None);
-        assert!(text.contains("Member of the hub vps at Delegate access, without asking"));
+        assert!(text.contains("Member of the hub vps at Threads access, without asking"));
         assert!(text.contains("Not the hub."));
     }
 }

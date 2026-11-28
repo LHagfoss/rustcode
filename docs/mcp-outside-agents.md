@@ -32,12 +32,12 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 | Level | May |
 | --- | --- |
 | Read-only (default) | `whoami`, `list_threads`, `search_threads`, `list_projects`, `read_thread`, `wait_thread`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and the lists and reads of `manage_settings` and `manage_capabilities` |
-| Delegate | Read-only, plus `start_thread`, `fan_out`, `message_thread` and `interrupt_thread` |
-| Manage | Delegate, plus `create_loop`, `update_loop`, `run_loop`, `delete_loop`, `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` |
-| Admin | Manage, plus the changes of `manage_settings` (`set`, `reset`) and `manage_capabilities` (skills, MCP servers, the default harness and the theme) |
+| Threads (`delegate`) | Read-only, plus `start_thread`, `fan_out`, `message_thread` and `interrupt_thread` |
+| Manage | Threads, plus `create_loop`, `update_loop`, `run_loop`, `delete_loop`, `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` |
+| Full (`admin`) | Manage, plus the changes of `manage_settings` (`set`, `reset`) and `manage_capabilities` (skills, MCP servers, the default harness and the theme) |
 
 A tool's level can depend on what the call does: `manage_settings` and
-`manage_capabilities` read at Read-only and write only at Admin (`required_scope_for`), and a refusal names
+`manage_capabilities` read at Read-only and write only at Full (`required_scope_for`), and a refusal names
 the level the call needs. `list_loops` is available at Read-only. Harness accounts, connections and outside-agent
 tokens are never offered to an outside agent at any level.
 
@@ -66,7 +66,7 @@ for its own threads, and each one takes the thread's `thread_id` (there is no
 
 Work an outside agent starts is the ceiling of its level: threads are
 standalone threads of yours (not delegates of a thread), and run at Auto-edit
-under Delegate (files can change; a command that needs approval is declined)
+under Threads (files can change; a command that needs approval is declined)
 and at Full only under Manage. Reads follow Settings › Delegation › "Let agents
 read threads in other projects": with it off, outside agents cannot read across
 projects, `thread_usage` or `query_data`.
@@ -110,7 +110,7 @@ reads them.
 | --- | --- |
 | "RustCode is not running" | Open the RustCode app (or start `rc server run`). The app publishes its socket in `<config>/run/orchestrator.json`. |
 | "did not accept this token" | The app was revoked or the token was mistyped. Connect it again for a new one. |
-| "needs Delegate access" | Raise its access in Settings › Outside agents. |
+| "needs Threads access" | Raise its access in Settings › Outside agents. |
 | "the user did not answer" | Open RustCode, then ask the agent to try again. |
 
 ## Other machines through the hub

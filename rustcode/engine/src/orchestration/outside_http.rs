@@ -192,7 +192,7 @@ pub fn sign_in_code(access: Option<&str>, ask: Option<bool>) -> Result<SignInCod
     let scope = match access {
         None => outside::Scope::ReadOnly,
         Some(text) => outside::Scope::parse(text).ok_or_else(|| {
-            format!("unknown access {text:?}: read_only, delegate, manage or admin")
+            format!("unknown access {text:?}: read-only, threads, manage or full")
         })?,
     };
     let path = outside::sign_in_code_path().ok_or("could not determine the config directory")?;
