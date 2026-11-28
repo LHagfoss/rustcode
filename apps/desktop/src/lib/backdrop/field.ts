@@ -161,7 +161,7 @@ export class Field {
   /** Starts a beat at (nx, ny), each 0..1 across the field. */
   beat(kind: FieldBeat, nx: number, ny: number, strength: number, now: number) {
     if (this.beats.length >= MAX_BEATS) this.beats.shift();
-    this.beats.push({ kind, x: nx, y: ny, t0: now, s: strength < 0 ? 0 : strength > 1.6 ? 1.6 : strength });
+    this.beats.push({ kind, x: nx, y: ny, t0: now, s: strength < 0 ? 0 : Math.min(strength, 1.6) });
     this.still = false;
   }
 
@@ -492,7 +492,7 @@ export class Field {
         this.front(cx, cy, r, 0.4, 0, -0.52 * Math.min(1, s) * env, 0, true, true, 0);
       }
     }
-    this.lift = lift > 1 ? 1 : lift;
+    this.lift = Math.min(lift, 1);
   }
 
   /**
@@ -664,8 +664,8 @@ export class Field {
     }
     let gx = px * rows;
     let gy = py * rows;
-    gx = gx < 0 ? 0 : gx > cols - 2 ? cols - 2 : gx;
-    gy = gy < 0 ? 0 : gy > rows + 1 ? rows + 1 : gy;
+    gx = gx < 0 ? 0 : Math.min(gx, cols - 2);
+    gy = gy < 0 ? 0 : Math.min(gy, rows + 1);
     const i = gx | 0;
     const j = gy | 0;
     const tx = gx - i;
@@ -677,7 +677,7 @@ export class Field {
     const top = a + (b - a) * tx;
     const p = top + (c + (d - c) * tx - top) * ty;
     const k = this.overlay;
-    return v * (1 - 0.35 * k) + k * (p > 0 ? p : 0) * (0.3 + 0.7 * v);
+    return v * (1 - 0.35 * k) + k * Math.max(p, 0) * (0.3 + 0.7 * v);
   }
 
   /** The pattern at grid node (i, j) this frame (see `overlaid`). */
@@ -719,8 +719,8 @@ export class Field {
     // Zoomed in a little, so the pointer can shift it without showing an edge.
     let u = 0.5 + (px / this.aspect - 0.5) * 0.95 - this.par[0]! * 0.6;
     let v = 0.5 + (py - 0.5) * 0.95 - this.par[1]! * 0.6;
-    u = u < 0 ? 0 : u > 1 ? 1 : u;
-    v = v < 0 ? 0 : v > 1 ? 1 : v;
+    u = u < 0 ? 0 : Math.min(u, 1);
+    v = v < 0 ? 0 : Math.min(v, 1);
     const fx = u * (P.w - 1);
     const fy = v * (P.h - 1);
     const x0 = fx | 0;
@@ -757,7 +757,6 @@ export class Field {
     const B = this.B;
     const t = this.t;
     const sd = this.sd;
-    let v: number;
     // Long soft bands of light along a diagonal, like a slow exposure of sunlit leaves: two
     // stretched noise layers of different widths, drifting along the streak, under a broad
     // light that is brightest toward the top right and leaves dark pockets.
@@ -771,7 +770,7 @@ export class Field {
     const lit = sstep(0.22, 0.82, bands);
     const L = sample(B, px * 0.16 + sd * 0.5 + t * 0.0016, py * 0.16 - t * 0.0012);
     const corner = (px / this.aspect) * 0.55 + (1 - py) * 0.45;
-    v = lit * (0.5 + 0.6 * sstep(0.25, 0.75, L)) * (0.38 + 0.95 * corner) * this.breath;
+    const v = lit * (0.5 + 0.6 * sstep(0.25, 0.75, L)) * (0.38 + 0.95 * corner) * this.breath;
     this.hue = a * 0.12 + n1 * 0.6 + t * 0.006;
     return v;
   }
@@ -830,7 +829,7 @@ export class Field {
     const by = py - cy;
     const ll = lx * lx + ly * ly || 1e-6;
     let u = (bx * lx + by * ly) / ll;
-    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    u = u < 0 ? 0 : Math.min(u, 1);
     const ex = bx - lx * u;
     const ey = by - ly * u;
     const dBody2 = ex * ex + ey * ey;
@@ -852,7 +851,7 @@ export class Field {
       depth = 0.8 - 0.8 * u;
     } else {
       // The halo, spent after a few decay lengths.
-      const m2 = dTop2 < dBody2 ? dTop2 : dBody2;
+      const m2 = Math.min(dTop2, dBody2);
       // Past this the halo is under the floor anyway (sooner on a full stage, where it is dimmer): skip the exp.
       const far = R + g * (full ? 0.14 : 0.3);
       v = m2 > far * far ? 0 : 0.2 * Math.exp(-(Math.sqrt(m2) - R) / (g * 0.09)) * this.c2;
@@ -918,9 +917,9 @@ export class Field {
     const lu = u - iu - 0.5;
     const qx = Math.abs(lu) - (TILE_HALF - TILE_R);
     const qy = Math.abs(lv) - (TILE_HALF - TILE_R);
-    const ox = qx > 0 ? qx : 0;
-    const oy = qy > 0 ? qy : 0;
-    const d = Math.sqrt(ox * ox + oy * oy) + Math.min(qx > qy ? qx : qy, 0) - TILE_R;
+    const ox = Math.max(qx, 0);
+    const oy = Math.max(qy, 0);
+    const d = Math.sqrt(ox * ox + oy * oy) + Math.min(Math.max(qx, qy), 0) - TILE_R;
     const I = this.c2;
     if (d > 0) {
       // The gap: dark, with a thin halo where light leaks past the edge.
@@ -1099,7 +1098,7 @@ export class Field {
     v = v < 0.09 ? 0 : (v - 0.09) * 1.099;
     if (this.px && this.imgColour) {
       // The image's own colour at this point, scaled by what happened to its brightness.
-      const k = v <= 0 ? 0 : Math.min(1.6, v / (this.ilum > 0.03 ? this.ilum : 0.03));
+      const k = v <= 0 ? 0 : Math.min(1.6, v / Math.max(this.ilum, 0.03));
       out[0] = lut[0]! + (this.ir - lut[0]!) * k;
       out[1] = lut[1]! + (this.ig - lut[1]!) * k;
       out[2] = lut[2]! + (this.ib - lut[2]!) * k;

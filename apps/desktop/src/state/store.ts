@@ -262,6 +262,7 @@ import type { LimitWait } from "./limitResume";
 import { lostTurnStatus, resetLostTurns } from "./lostTurns";
 import { useOutbox } from "./machineOutbox";
 import { flushingOutbox } from "./machineSync";
+import { refreshMachineThreads } from "./machines";
 import { notifyThread, startNotifications, warmingUp } from "./notify";
 import { CAPABILITY_VERSION, WAKE_BATCH_DEFAULT_S } from "./orchestration";
 import { clearPageCache } from "./pageCache";
@@ -1470,7 +1471,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
         applySnooze(x.id, x.snoozedUntil !== null && x.snoozedUntil > Date.now() ? x.snoozedUntil : null);
     // Another computer's list is its own read: ask each connected machine again, too. The poll
     // (`startRunStatePoll`) reads this computer's engine only: a machine reports its own turns.
-    if (!options.quiet) void import("./machines").then((m) => m.refreshMachineThreads());
+    if (!options.quiet) void refreshMachineThreads();
     // A thread the engine does not list yet stays while the app keeps it; one it names now (or
     // one whose keep expired) needs nothing kept.
     const listed = new Set(all.map((x) => x.id));

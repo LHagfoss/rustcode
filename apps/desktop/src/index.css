@@ -1510,10 +1510,6 @@
     --rc-lane-gutter: 3rem;
   }
 }
-.rc-peek .rc-lane-pad,
-.rc-peek .rc-lane-inset {
-  --rc-lane-gutter: 0.75rem;
-}
 .rc-lane-pad {
   padding-left: var(--rc-lane-gutter);
   padding-right: var(--rc-lane-gutter);
@@ -1521,6 +1517,10 @@
 .rc-lane-inset {
   left: var(--rc-lane-gutter);
   right: var(--rc-lane-gutter);
+}
+.rc-peek .rc-lane-pad,
+.rc-peek .rc-lane-inset {
+  --rc-lane-gutter: 0.75rem;
 }
 /* The room that is the lane's, measured for the composer's width and the toasts' centre. */
 .rc-lane-room {
@@ -1765,26 +1765,6 @@
 }
 
 /*
- * The window's own material behind the sidebar: macOS's `sidebar` vibrancy (tauri.conf.json), the
- * system's real blur of what is behind the window. `data-material` on <html> (lib/material.ts) is
- * set only where the shell has one, so a browser, Windows and Linux keep the opaque sidebar. The
- * page itself stays transparent there, the main pane keeps its opaque `bg`, and the sidebar takes
- * Settings › Appearance › Transparency, which applies to it alone. Reduce transparency makes it solid again (the rule above,
- * which this one's `:not` defers to).
- */
-:root[data-material]:not(.reduce-transparency) {
-  /* Keep 8% of the theme color at maximum transparency. */
-  --rc-sidebar-bg: color-mix(
-    in srgb,
-    var(--rc-sidebar) calc(100% - 0.92 * var(--rc-transparency)),
-    transparent
-  );
-}
-:root[data-material]:not(.reduce-transparency) body {
-  background: transparent;
-}
-
-/*
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
  * attribute, so the macOS look is the rules above alone. The in-app glass is the same on every
@@ -1809,6 +1789,26 @@
 }
 :root:is([data-platform="windows"], [data-platform="linux"]) body {
   -webkit-font-smoothing: auto;
+}
+
+/*
+ * The window's own material behind the sidebar: macOS's `sidebar` vibrancy (tauri.conf.json), the
+ * system's real blur of what is behind the window. `data-material` on <html> (lib/material.ts) is
+ * set only where the shell has one, so a browser, Windows and Linux keep the opaque sidebar. The
+ * page itself stays transparent there, the main pane keeps its opaque `bg`, and the sidebar takes
+ * Settings › Appearance › Transparency, which applies to it alone. Reduce transparency makes it solid again (the rule above,
+ * which this one's `:not` defers to).
+ */
+:root[data-material]:not(.reduce-transparency) {
+  /* Keep 8% of the theme color at maximum transparency. */
+  --rc-sidebar-bg: color-mix(
+    in srgb,
+    var(--rc-sidebar) calc(100% - 0.92 * var(--rc-transparency)),
+    transparent
+  );
+}
+:root[data-material]:not(.reduce-transparency) body {
+  background: transparent;
 }
 
 /*

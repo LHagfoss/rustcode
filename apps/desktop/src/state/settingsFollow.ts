@@ -13,6 +13,7 @@ import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
 import { errorDetail, recordAutoSync } from "./autoSyncStatus";
 import { copyFiles, followedKinds } from "./configFilesFollow";
+import { machineConnection, onMachineLinks } from "./machines";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
 import { syncStorageKey } from "./storageSync";
 import { LOCAL_HOST } from "./threadKeys";
@@ -159,9 +160,7 @@ async function copyFilesTo(
 export function followLocalChange(): void {
   const ids = useSettingsFollow.getState().ids;
   if (!ids.length) return;
-  void import("./machines").then((machines) => {
-    for (const id of ids) if (machines.machineConnection(id)) void copySettingsTo(id).catch(() => 0);
-  });
+  for (const id of ids) if (machineConnection(id)) void copySettingsTo(id).catch(() => 0);
 }
 
 let started = false;
@@ -193,10 +192,8 @@ async function checkLocalFiles(seed = false): Promise<void> {
 export function startSettingsFollow(): void {
   if (started) return;
   started = true;
-  void import("./machines").then((machines) => {
-    machines.onMachineLinks((id, connection) => {
-      if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
-    });
+  onMachineLinks((id, connection) => {
+    if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
   });
   void checkLocalFiles(true).catch(() => undefined);
   setInterval(() => void checkLocalFiles().catch(() => undefined), FILES_CHECK_MS);

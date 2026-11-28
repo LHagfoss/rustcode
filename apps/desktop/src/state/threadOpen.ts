@@ -37,6 +37,8 @@ import { appChoices, effortMemory, ensureHarnessModels } from "./harnessActions"
 import { newThreadAccountOn } from "./logins";
 import { loadTranscript, threadFromTranscript } from "./machineCache";
 import { loadMirroredTranscript } from "./machineMirror";
+import { HOME_FOLDER, rememberMachineOrigin } from "./machineOrigins";
+import { patchMachineSession } from "./machines";
 import { CLAUDE_CODE, markClaudePlansStarted, refreshPlanCache, refreshPlanUsage } from "./planUsage";
 import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
@@ -159,7 +161,7 @@ export function selectThread(id: string | null) {
  * on. `session/new` is sent no folder for it, which every engine resolves to its own home
  * (`session_new_cwd`), so it works on a machine whose home this app cannot know.
  */
-export const HOME_FOLDER = "~";
+export { HOME_FOLDER };
 
 /** Start beside the last thread or project visited, keeping its machine. */
 export function startNewThreadFromContext() {
@@ -393,11 +395,7 @@ async function applySessionFolder(
     const { [id]: _old, ...threads } = s.threads;
     return { threads, sessions };
   });
-  if (host) {
-    const { patchMachineSession } = await import("./machines");
-    patchMachineSession(host, sessionId, patch);
-  }
-  const { rememberMachineOrigin } = await import("./threadMoveMachine");
+  if (host) patchMachineSession(host, sessionId, patch);
   rememberMachineOrigin(sessionId, host, patch.cwd);
 }
 

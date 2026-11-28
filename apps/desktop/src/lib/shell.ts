@@ -1,7 +1,8 @@
 // The way to the native helpers: Tauri commands in the app, the dev bridge's
 // mirror of them in `dev:web`, the mock's canned answers in tests.
 
-import { isTauri, type Transport } from "../acp/transport";
+import { isTauri } from "../acp/isTauri";
+import type { Transport } from "../acp/transport";
 import { withTimeout } from "./withTimeout";
 
 let current: Transport | null = null;

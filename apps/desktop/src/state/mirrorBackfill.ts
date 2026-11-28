@@ -14,7 +14,9 @@
 import { type AcpConnection, type JsonObject, num, obj, RpcError, str } from "../acp/jsonrpc";
 import { parseSessionUpdate, type SessionSummary } from "../acp/types";
 import { errorDetail, recordAutoSync } from "./autoSyncStatus";
-import type { MirroredEntry } from "./machineMirror";
+import { loadMirroredEntries, type MirroredEntry, mirrorTranscript, readMirrorStatus } from "./machineMirror";
+import { machineConnection, machineLinks, onMachineLinks, useMachines } from "./machines";
+import { useApp } from "./store";
 import { applyUpdate, emptyThread, finishLoad, type ThreadState } from "./thread";
 import { LOCAL_HOST, threadKey } from "./threadKeys";
 
@@ -167,21 +169,16 @@ async function backfill(host: string): Promise<void> {
   if (passes.has(host)) return;
   passes.add(host);
   try {
-    const [machines, mirror, store] = await Promise.all([
-      import("./machines"),
-      import("./machineMirror"),
-      import("./store"),
-    ]);
     await wait(START_DELAY_MS);
-    const status = await mirror.readMirrorStatus();
+    const status = await readMirrorStatus();
     if (!status?.enabled) return;
-    if (!machines.machineConnection(host)) {
+    if (!machineConnection(host)) {
       recordAutoSync(host, "backfill", "skipped", "It went away before the copy started.");
       return;
     }
-    const rows = machines.useMachines.getState().sessions[host] ?? [];
-    const held = (id: string) => !!store.useApp.getState().threads[threadKey(host, id)];
-    const candidates = backfillCandidates(rows, await mirror.loadMirroredEntries(host), {
+    const rows = useMachines.getState().sessions[host] ?? [];
+    const held = (id: string) => !!useApp.getState().threads[threadKey(host, id)];
+    const candidates = backfillCandidates(rows, await loadMirroredEntries(host), {
       held,
       excludedProjects: status.excludedProjects,
       skipped: (row) => dropGuard.isSkipped(host, row),
@@ -189,7 +186,7 @@ async function backfill(host: string): Promise<void> {
     let failures = 0;
     let copied = 0;
     for (const row of candidates) {
-      const connection = machines.machineConnection(host);
+      const connection = machineConnection(host);
       if (!connection) {
         recordAutoSync(
           host,
@@ -232,10 +229,10 @@ async function backfill(host: string): Promise<void> {
       const key = threadKey(host, row.id);
       const thread = threadFromReplay(key, answer, row);
       if (thread?.items.length && !held(row.id)) {
-        await mirror.mirrorTranscript(thread, key);
+        await mirrorTranscript(thread, key);
         copied++;
       }
-      const again = await mirror.readMirrorStatus();
+      const again = await readMirrorStatus();
       if (!again?.enabled) return;
       await wait(GAP_MS);
     }
@@ -259,11 +256,9 @@ let started = false;
 export function startMirrorBackfill(): void {
   if (started) return;
   started = true;
-  void import("./machines").then((machines) => {
-    machines.onMachineLinks((id, connection) => {
-      if (connection && id !== LOCAL_HOST) void backfill(id);
-    });
-    // Machines already connected when the app got here.
-    for (const link of machines.machineLinks()) if (link.connection) void backfill(link.machine.id);
+  onMachineLinks((id, connection) => {
+    if (connection && id !== LOCAL_HOST) void backfill(id);
   });
+  // Machines already connected when the app got here.
+  for (const link of machineLinks()) if (link.connection) void backfill(link.machine.id);
 }

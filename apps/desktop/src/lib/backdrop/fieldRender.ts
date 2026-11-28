@@ -137,7 +137,7 @@ export function litColumns(
   if (sp[0]! > sp[1]!) return NONE;
   const a = Math.ceil((sp[0]! / aspect) * cols - 0.5);
   const b = Math.floor((sp[1]! / aspect) * cols - 0.5);
-  return [a < 0 ? 0 : a, b > cols - 1 ? cols - 1 : b];
+  return [Math.max(a, 0), Math.min(b, cols - 1)];
 }
 
 /** `soft`: the same field without quantization (a whisper of ordered noise keeps gradients from banding). */
@@ -252,7 +252,7 @@ export function ditherRenderer(el: Surface, soft = false): Renderer | null {
           const ar = lr < 0 ? -lr : lr;
           const ag = lg < 0 ? -lg : lg;
           const ab = lb < 0 ? -lb : lb;
-          const m = ar > ag ? (ar > ab ? ar : ab) : ag > ab ? ag : ab;
+          const m = ar > ag ? Math.max(ar, ab) : Math.max(ag, ab);
           if (m < 0.002) {
             data[o] = R0;
             data[o + 1] = G0;
@@ -429,7 +429,7 @@ export function asciiRenderer(el: Surface, kind: "ascii" | "halftone" = "ascii")
           if (x >= xa && x <= xb) {
             if (smooth) coarse.at(x, y, c);
             else field.shade(((x + 0.5) / cols) * aspect, py, c);
-            const v = c[3]! > 1 ? 1 : c[3];
+            const v = Math.min(c[3]!, 1);
             if (v! > 0) {
               // Ordered dither between neighbouring glyphs, so the ramp shades smoothly. Tubes are thin
               // lines of light and lean on the dense glyphs to read; the broad fields keep the densest
@@ -451,7 +451,7 @@ export function asciiRenderer(el: Surface, kind: "ascii" | "halftone" = "ascii")
               const lr = paper ? r0 - c[0]! : c[0]! > r0 ? c[0]! - r0 : 0;
               const lg = paper ? g0 - c[1]! : c[1]! > g0 ? c[1]! - g0 : 0;
               const lb = paper ? b0 - c[2]! : c[2]! > b0 ? c[2]! - b0 : 0;
-              const m = lr > lg ? (lr > lb ? lr : lb) : lg > lb ? lg : lb;
+              const m = lr > lg ? Math.max(lr, lb) : Math.max(lg, lb);
               if (gi < 0 || m < 0.004) gi = 0;
               else {
                 // A full-bleed backdrop is lifted less: characters stay a texture of light, not a wall of type.
@@ -582,7 +582,7 @@ export function softImageRenderer(el: Surface): Renderer | null {
           field.shade(((x + 0.5) / mw) * aspect, py, c);
           const a = Math.min(1, c[3]! * 1.25) * 255 + BAYER[brow + (x & 7)]! * 6;
           d[o] = d[o + 1] = d[o + 2] = 255;
-          d[o + 3] = a < 0 ? 0 : a > 255 ? 255 : a;
+          d[o + 3] = a < 0 ? 0 : Math.min(a, 255);
         }
       }
       mctx.putImageData(mimg, 0, 0);

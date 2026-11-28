@@ -581,12 +581,10 @@ function TextBox({
 /** Output lines in their terminal colours, as theme tokens. */
 function StyledLines({ lines }: { lines: AnsiLine[] }) {
   return lines.map((line, i) => (
-    // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity but their place
     <Fragment key={i}>
       {i > 0 && "\n"}
       {line.map((span, j) => {
         const className = ansiClass(span.style);
-        // biome-ignore lint/suspicious/noArrayIndexKey: spans have no identity but their place
         return className ? (
           <span key={j} className={className}>
             {span.text}
@@ -1400,21 +1398,19 @@ export function WorkingRow({
           <span>{time ? `Worked for ${time}` : "Worked"}</span>
         </>
       ) : (
-        <>
-          <span className="flex shrink-0 items-center gap-2" role="status">
-            {!awaitingApproval && (
-              <DotMatrix pattern={flavor.pattern} size={16} cycle tone="spectrum" className="opacity-70" />
-            )}
-            {awaitingApproval ? (
-              "Waiting for approval"
-            ) : (
-              <WaveText
-                text={time ? `Working for ${time}` : "Working"}
-                className="rc-wave-quiet rc-wave-line"
-              />
-            )}
-          </span>
-        </>
+        <span className="flex shrink-0 items-center gap-2" role="status">
+          {!awaitingApproval && (
+            <DotMatrix pattern={flavor.pattern} size={16} cycle tone="spectrum" className="opacity-70" />
+          )}
+          {awaitingApproval ? (
+            "Waiting for approval"
+          ) : (
+            <WaveText
+              text={time ? `Working for ${time}` : "Working"}
+              className="rc-wave-quiet rc-wave-line"
+            />
+          )}
+        </span>
       )}
     </div>
   );

@@ -1,9 +1,9 @@
 /*
- * The app's icons: Hugeicons' free stroke-rounded set under the Lucide names the code already
- * uses (docs/design.md › Icons). Import every icon from here, never from `lucide-react`. They take
- * Lucide's props: `size`, `strokeWidth` (1.5 by default, the set's own weight), `className`,
- * `fill` and the other SVG attributes. The few shapes the set has no match for (the raised hand,
- * a dotted circle, the sun-and-moon, a branch with a plus) stay Lucide, drawn at the same weight.
+ * The app's icons: Hugeicons' free stroke-rounded set under the names the code already uses
+ * (docs/design.md › Icons). Import every icon from here. They take `size`, `strokeWidth` (1.5 by
+ * default, the set's own weight), `className`, `fill` and the other SVG attributes. The four
+ * shapes the set has no match for (the raised hand, a dotted circle, the sun-and-moon, a branch
+ * with a plus) are inlined at the bottom, drawn at the same weight.
  */
 import {
   Activity01Icon,
@@ -163,14 +163,7 @@ import {
   ZapIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type HugeiconsProps, type IconSvgElement } from "@hugeicons/react";
-import {
-  CircleDot as LucideCircleDot,
-  GitBranchPlus as LucideGitBranchPlus,
-  Hand as LucideHand,
-  type LucideProps,
-  SunMoon as LucideSunMoon,
-} from "lucide-react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 export type IconProps = Omit<HugeiconsProps, "icon" | "altIcon" | "showAlt" | "ref">;
 /** Any icon from this file, for props and tables that take one. */
@@ -189,13 +182,34 @@ function Rounded({
   );
 }
 
-function Lucide({
+function Custom({
   name,
-  glyph: Glyph,
+  size = 24,
+  color = "currentColor",
   strokeWidth = STROKE,
+  absoluteStrokeWidth,
+  children,
   ...props
-}: IconProps & { name: string; glyph: ComponentType<LucideProps> }) {
-  return <Glyph strokeWidth={strokeWidth} aria-hidden="true" data-icon={name} {...(props as LucideProps)} />;
+}: IconProps & { name: string; children: ReactNode }) {
+  const width = absoluteStrokeWidth ? (Number(strokeWidth) * 24) / Number(size) : strokeWidth;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={width}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      data-icon={name}
+      {...props}
+    >
+      {children}
+    </svg>
+  );
 }
 
 export const Activity = (props: IconProps) => <Rounded name="Activity" icon={Activity01Icon} {...props} />;
@@ -490,9 +504,36 @@ export const Workflow = (props: IconProps) => (
 export const Wrench = (props: IconProps) => <Rounded name="Wrench" icon={Wrench01Icon} {...props} />;
 export const X = (props: IconProps) => <Rounded name="X" icon={Cancel01Icon} {...props} />;
 export const Zap = (props: IconProps) => <Rounded name="Zap" icon={ZapIcon} {...props} />;
-export const CircleDot = (props: IconProps) => <Lucide name="CircleDot" glyph={LucideCircleDot} {...props} />;
-export const GitBranchPlus = (props: IconProps) => (
-  <Lucide name="GitBranchPlus" glyph={LucideGitBranchPlus} {...props} />
+export const CircleDot = (props: IconProps) => (
+  <Custom name="CircleDot" {...props}>
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="12" cy="12" r="10" />
+  </Custom>
 );
-export const Hand = (props: IconProps) => <Lucide name="Hand" glyph={LucideHand} {...props} />;
-export const SunMoon = (props: IconProps) => <Lucide name="SunMoon" glyph={LucideSunMoon} {...props} />;
+export const GitBranchPlus = (props: IconProps) => (
+  <Custom name="GitBranchPlus" {...props}>
+    <path d="M6 3v12" />
+    <path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
+    <path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
+    <path d="M15 6a9 9 0 0 0-9 9" />
+    <path d="M18 15v6" />
+    <path d="M21 18h-6" />
+  </Custom>
+);
+export const Hand = (props: IconProps) => (
+  <Custom name="Hand" {...props}>
+    <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+    <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+    <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+  </Custom>
+);
+export const SunMoon = (props: IconProps) => (
+  <Custom name="SunMoon" {...props}>
+    <path d="M12 2v2" />
+    <path d="M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715" />
+    <path d="M16 12a4 4 0 0 0-4-4" />
+    <path d="m19 5-1.256 1.256" />
+    <path d="M20 12h2" />
+  </Custom>
+);

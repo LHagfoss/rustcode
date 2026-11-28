@@ -58,7 +58,7 @@
 8 apps/desktop/src/acp/remote.ts
 2 apps/desktop/src/acp/rustcode.test.ts
 16 apps/desktop/src/acp/rustcode.ts
-18 apps/desktop/src/acp/transport.ts
+17 apps/desktop/src/acp/transport.ts
 7 apps/desktop/src/acp/types.test.ts
 33 apps/desktop/src/acp/types.ts
 11 apps/desktop/src/acp/v2.test.ts
@@ -418,7 +418,7 @@
 18 apps/desktop/src/state/threadFormat.ts
 8 apps/desktop/src/state/threadKeys.ts
 5 apps/desktop/src/state/threadListGuards.ts
-30 apps/desktop/src/state/threadMachines.ts
+27 apps/desktop/src/state/threadMachines.ts
 6 apps/desktop/src/state/threadMoveMachine.test.ts
 29 apps/desktop/src/state/threadMoveMachine.ts
 11 apps/desktop/src/state/threadNotices.ts
@@ -433,7 +433,7 @@
 4 apps/desktop/src/state/turn.ts
 8 apps/desktop/src/state/turnError.test.ts
 18 apps/desktop/src/state/turnError.ts
-21 apps/desktop/src/state/updates.ts
+17 apps/desktop/src/state/updates.ts
 32 apps/desktop/src/state/usagePage.test.ts
 6 apps/desktop/src/state/usagePage.ts
 11 apps/desktop/src/state/viewActions.ts

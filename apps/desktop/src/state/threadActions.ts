@@ -14,6 +14,7 @@ import { releaseLimitWaitsFrom, stopLinksFrom, wakeTick } from "./host";
 import type { InboxItem } from "./inbox";
 import { dismissRows, restoreRows } from "./inboxDismissed";
 import { forgetThreadOutbox, queueChange } from "./machineOutbox";
+import { forgetMachineThread } from "./machines";
 import { forget } from "./orchestration";
 import { keepThreads, rememberOrder, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import {
@@ -496,7 +497,7 @@ export async function trashThread(id: string): Promise<boolean> {
   // A machine whose link is down never heard of it: its list cache drops the row here.
   if (threadIsRemote(id)) {
     const { host, id: raw } = splitThreadKey(id);
-    void import("./machines").then((m) => m.forgetMachineThread(host, raw));
+    forgetMachineThread(host, raw);
   }
   // Links into the trashed thread failed: their parents may now have something to hear.
   wakeTick();

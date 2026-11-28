@@ -16,7 +16,7 @@ import {
   useMachines,
 } from "./machines";
 import { errorText, toast } from "./store";
-import { compareVersions } from "./updates";
+import { compareVersions } from "./versions";
 
 // ---------------------------------------------------------------- labels
 

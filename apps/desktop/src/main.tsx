@@ -8,6 +8,7 @@ import { installFocusModality } from "./lib/focusModality";
 import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
+import { shellCall } from "./lib/shell";
 import { applyCachedTheme } from "./lib/themes";
 import {
   installReduceTransparency,
@@ -39,8 +40,7 @@ applyMaterial(platform);
 
 // Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
 if (isTauri() && platform === "mac") {
-  void import("./lib/shell")
-    .then(({ shellCall }) => shellCall<boolean>("reduce_transparency"))
+  void shellCall<boolean>("reduce_transparency")
     .then(setSystemReduceTransparency)
     .catch(() => undefined);
 }

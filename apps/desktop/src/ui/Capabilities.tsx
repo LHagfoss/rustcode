@@ -8,7 +8,7 @@ import { appPlatform, fileManagerName } from "../lib/platform";
 
 import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
+import { arr, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { opError, opRunning, useOp } from "../lib/op";
@@ -17,6 +17,13 @@ import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../s
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { createSkillWithAgent } from "../state/threadOpen";
+import {
+  type Capabilities,
+  type McpServer,
+  parseCapabilities,
+  SIGN_IN_TIMEOUT,
+  type Skill,
+} from "./capabilitiesData";
 import { Fold } from "./Fold";
 import { ChevronRight, Copy, Ellipsis, FolderOpen, Pencil, RefreshCw, Search } from "./icons";
 import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
@@ -34,85 +41,7 @@ import {
   SettingsHeaderActions,
 } from "./settingsKit";
 
-interface Skill {
-  name: string;
-  description: string;
-  path: string;
-  source: string;
-  /** A harness owns the folder: listed here, never written by RustCode. */
-  readOnly: boolean;
-  enabled: boolean;
-}
-
-export interface McpServer {
-  name: string;
-  transport: string;
-  target: string;
-  enabled: boolean;
-  scope: string;
-  connection: string;
-  tools: string[];
-  toolCount: number;
-  error?: string;
-  envKeys: string[];
-  headerKeys: string[];
-  copyTarget: string[] | null;
-  /** A remote server that signs in with OAuth: whether RustCode holds its token. */
-  auth?: "signed_in" | "signed_out";
-}
-
-/** A browser sign-in waits up to five minutes for the user (the engine's loopback limit). */
-export const SIGN_IN_TIMEOUT = 310_000;
-
-export interface Capabilities {
-  skills: Skill[];
-  mcpServers: McpServer[];
-  configPath?: string;
-}
-
-/** The engine sends `tools` as the tool names; an older mock sent a count. */
-export const parseCapabilities = (v: Json): Capabilities => {
-  const root = obj(v) ?? {};
-  return {
-    configPath: str(root.configPath),
-    skills: arr(root.skills).map((s) => {
-      const o = obj(s) ?? {};
-      return {
-        name: str(o.name) ?? "",
-        description: str(o.description) ?? "",
-        path: str(o.path) ?? "",
-        source: str(o.source) ?? "",
-        readOnly: bool(o.readOnly) ?? false,
-        enabled: bool(o.enabled) ?? false,
-      };
-    }),
-    mcpServers: arr(root.mcpServers).map((s) => {
-      const o = obj(s) ?? {};
-      const tools = Array.isArray(o.tools)
-        ? arr(o.tools)
-            .map((t) => str(t) ?? "")
-            .filter(Boolean)
-        : [];
-      return {
-        name: str(o.name) ?? "",
-        transport: str(o.transport) ?? "",
-        target: str(o.target) ?? "",
-        enabled: bool(o.enabled) ?? false,
-        scope: str(o.scope) ?? "user",
-        connection: str(o.connection) ?? "",
-        tools,
-        toolCount: Array.isArray(o.tools) ? tools.length : (num(o.tools) ?? 0),
-        error: str(o.error),
-        envKeys: arr(o.envKeys).flatMap((key) => (typeof key === "string" ? [key] : [])),
-        headerKeys: arr(o.headerKeys).flatMap((key) => (typeof key === "string" ? [key] : [])),
-        copyTarget: Array.isArray(o.copyTarget)
-          ? arr(o.copyTarget).flatMap((part) => (typeof part === "string" ? [part] : []))
-          : null,
-        auth: o.auth === "signed_in" || o.auth === "signed_out" ? o.auth : undefined,
-      };
-    }),
-  };
-};
+export { type Capabilities, type McpServer, parseCapabilities, SIGN_IN_TIMEOUT, type Skill };
 
 /** A harness's own folder is read, never written. */
 const HARNESS_SKILLS_NOTE = "Read from Claude Code's own folder; RustCode never writes there.";

@@ -19,6 +19,7 @@ import { unavailableReason } from "./harness";
 import { lastAccountFor } from "./harnessActions";
 import { newThreadAccountOn, type SignedOutLogins } from "./logins";
 import { forgetTranscript } from "./machineCache";
+import { clearMachineOrigins, rememberedMachineOrigin, rememberMachineOrigin } from "./machineOrigins";
 import { forgetThreadOutbox } from "./machineOutbox";
 import { type Machine, machineName, selfName, useMachines } from "./machines";
 import { registeredProjects } from "./projectBook";
@@ -69,29 +70,10 @@ function setMoving(threadId: string, toHost: string | null): void {
   });
 }
 
-/**
- * Per-session client memory of folders visited on each machine (`sessionId -> host -> cwd`).
- * Mirrors the engine's persisted `machine_origins` so the Machine picker can preview
- * `"Returns to <folder>"` immediately before the user clicks.
- */
-const originFolders = new Map<string, Map<string, string>>();
-
-export function rememberMachineOrigin(sessionId: string, host: string, cwd: string | undefined): void {
-  if (!sessionId || !cwd || cwd === HOME_FOLDER) return;
-  let perHost = originFolders.get(sessionId);
-  if (!perHost) {
-    perHost = new Map();
-    originFolders.set(sessionId, perHost);
-  }
-  perHost.set(host, cwd);
-}
-
-export function rememberedMachineOrigin(sessionId: string, host: string): string | undefined {
-  return originFolders.get(sessionId)?.get(host);
-}
+export { rememberedMachineOrigin, rememberMachineOrigin };
 
 export function resetMoveMachineForTests(): void {
-  originFolders.clear();
+  clearMachineOrigins();
   useMovingMachineStore.setState({ moving: {} });
 }
 

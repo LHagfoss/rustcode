@@ -4,7 +4,7 @@ import { Method } from "../acp/types";
 import { machineRequest } from "../state/settingsScope";
 import { errorText, toast } from "../state/store";
 import { openSettings } from "../state/viewActions";
-import { type Capabilities, type McpServer, parseCapabilities, SIGN_IN_TIMEOUT } from "./Capabilities";
+import { type Capabilities, type McpServer, parseCapabilities, SIGN_IN_TIMEOUT } from "./capabilitiesData";
 import {
   CONNECTOR_CATEGORIES,
   CONNECTORS,

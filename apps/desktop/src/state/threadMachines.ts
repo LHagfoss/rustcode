@@ -5,6 +5,14 @@ import { resumeLostTurns } from "./lostTurns";
 import { saveTranscript } from "./machineCache";
 import { mirrorTranscript, setMirrorRequest } from "./machineMirror";
 import { mergeMachineLists } from "./machineSync";
+import {
+  machineLinks,
+  machineName,
+  onMachineLinks,
+  onMachineThreadsReady,
+  resetMachinesForTests as resetMachineStoreForTests,
+  useMachines,
+} from "./machines";
 import { MACHINE_LOST_TURN } from "./orchestration";
 import { subscribePullWatches } from "./pullWatch";
 import { connection, handleInbound, useApp } from "./store";
@@ -63,7 +71,6 @@ function watchRemoteTranscripts(next: AppState, prev: AppState): void {
   }
 }
 /** `state/machines.ts` `resetMachinesForTests`, once its module is loaded. */
-let machineReset: (() => void) | null = null;
 
 /** The connection a thread's operations go over: this computer's engine, or that machine's own. */
 export function connectionFor(host: string): AcpConnection | null {
@@ -132,19 +139,14 @@ export function useThreadOffline(key: string | null | undefined): boolean {
  */
 export async function startMachineRouting(): Promise<void> {
   if (machineRouting) return machineRouting;
-  machineRouting = (async () => {
-    // Loaded here, not at the top: state/machines.ts reads this module's `toast` and `askConfirm`.
-    const machines = await import("./machines");
-    machineReset = machines.resetMachinesForTests;
-    machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
-    machines.onMachineThreadsReady((id, conn) => {
+  machineRouting = Promise.resolve().then(() => {
+    onMachineLinks((id, conn) => watchMachineConnection(id, conn));
+    onMachineThreadsReady((id, conn) => {
       void subscribePullWatches(conn, id).catch(() => {});
     });
     const mirror = () => {
-      const state = machines.useMachines.getState();
-      const names = Object.fromEntries(
-        state.machines.map((machine) => [machine.id, machines.machineName(machine)]),
-      );
+      const state = useMachines.getState();
+      const names = Object.fromEntries(state.machines.map((machine) => [machine.id, machineName(machine)]));
       useApp.setState((s) => {
         // A machine that was removed takes its kept harnesses with it, and **Run on** naming it
         // goes back here rather than to a machine that is no longer saved.
@@ -167,13 +169,13 @@ export async function startMachineRouting(): Promise<void> {
       });
       mergeMachineLists(state.sessions);
     };
-    machineMirrorOff = machines.useMachines.subscribe((state, prev) => {
+    machineMirrorOff = useMachines.subscribe((state, prev) => {
       if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
     });
     transcriptKeepOff = useApp.subscribe(watchRemoteTranscripts);
-    for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
+    for (const link of machineLinks()) watchMachineConnection(link.machine.id, link.connection);
     mirror();
-  })();
+  });
   return machineRouting;
 }
 
@@ -192,9 +194,7 @@ export function resetMachinesForTests(): void {
   transcriptKeepOff = null;
   for (const timer of transcriptTimers.values()) clearTimeout(timer);
   transcriptTimers.clear();
-  // Kept once loaded: a later reset has to clear the machines module too, even after a file
-  // attached machines without ever routing through this module (`state/machines.test.ts`).
-  machineReset?.();
+  resetMachineStoreForTests();
   useApp.setState({ connectedHosts: [], machineNames: {}, sessions: [] });
 }
 

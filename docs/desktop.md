@@ -12,6 +12,19 @@ approvals, attachments, link chips, Smart UI views, thread actions, find,
 rewind, subagents, pull requests and plan usage. A few things
 the SwiftUI app had are not ported yet; see [Not yet ported](#not-yet-ported).
 
+## Contents
+
+- [Status and roadmap](#status-and-roadmap) — shipped milestones and direction
+- [Run it](#run-it) — dev server, mock mode, native app and bundle commands
+- [Architecture](#architecture) — Tauri shell, ACP transport, state store and UI layers
+- [Features](#features) — threads, composer, sidebar, settings, multi-machine, orchestration and review
+- [Smart UI](#smart-ui) — sandboxed inline HTML/shorthand views in chat
+- [Native text fields](#native-text-fields) — macOS/WebKit editing and autocorrect suppression
+- [Checks](#checks) — typecheck, Biome lint, unit tests, design lint and E2E
+- [Performance](#performance) — browser/native frame-rate harnesses and budgets
+- [Release](#release) — sidecar bundling, signing, notarization and auto-updater
+- [Not yet ported](#not-yet-ported) — remaining gaps from the retired SwiftUI app
+
 ## Status and roadmap
 
 Where the desktop work stands, so the next session (in any harness) can pick

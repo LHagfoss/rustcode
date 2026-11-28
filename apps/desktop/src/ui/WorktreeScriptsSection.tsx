@@ -51,7 +51,7 @@ export function WorktreeScriptsSection({ cwd }: { cwd: string | undefined }) {
     return () => window.clearInterval(timer);
   }, [cwd, load, polling]);
 
-  if (!cwd || !state || !state.configured) return null;
+  if (!cwd || !state?.configured) return null;
 
   const setTrust = async (trusted: boolean, runSetupAfter = false) => {
     setBusy(trusted ? "trust" : "revoke");

@@ -20,21 +20,21 @@ const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   ...over,
 });
 
-const report = (groupBy: string, rows: UsageRow[], over: Partial<UsageReport> = {}): UsageReport => ({
-  groupBy,
-  rows,
-  totals: rows.reduce(
-    (sum, one) => ({
-      ...sum,
-      turns: sum.turns + one.turns,
-      input: (sum.input ?? 0) + (one.input ?? 0),
-    }),
-    emptyTotals(),
-  ),
-  truncated: false,
-  parentsReported: true,
-  ...over,
-});
+const report = (groupBy: string, rows: UsageRow[], over: Partial<UsageReport> = {}): UsageReport => {
+  const totals = emptyTotals();
+  for (const one of rows) {
+    totals.turns += one.turns;
+    totals.input = (totals.input ?? 0) + (one.input ?? 0);
+  }
+  return {
+    groupBy,
+    rows,
+    totals,
+    truncated: false,
+    parentsReported: true,
+    ...over,
+  };
+};
 
 describe("scopeHosts", () => {
   test("all reads this computer first, then each connected machine", () => {
