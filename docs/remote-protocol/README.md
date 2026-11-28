@@ -371,7 +371,7 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
 The pairing QR code encodes this JSON, as one line:
 
 ```json
-{"protocol_version": 1, "address": "100.92.13.44:17879", "gateway_id": "…", "credential": "…", "host_name": "studio", "alternates": ["192.168.1.20:17879"]}
+{"protocol_version": 1, "address": "100.92.13.44:17879", "gateway_id": "…", "credential": "…", "host_name": "studio", "alternates": ["192.168.1.20:17879"], "sealed_key": "…", "relay": "rustcode-relay://relay.example.com:17880"}
 ```
 
 `address` is `host:port` to dial. `host_name` is optional and cut to 24
@@ -385,6 +385,43 @@ pair with the same `credential` on the first that connects. Every address
 reaches the same gateway, so `gateway_id` is the same whichever answered.
 It is absent when the gateway listens on one specific address, and a client
 that does not know it ignores it.
+
+`relay` is optional: `rustcode-relay://host:port` of the relay the machine is
+registered with when the code was made. A device that reaches neither
+`address` nor an alternate dials the relay's HTTP entry (below) with
+`gateway_id` as the machine id. It is absent while the machine has no relay.
+
+### Through a relay
+
+A machine registered with a relay (`docs/adr/0013-machine-relay-and-nat-traversal.md`)
+is reachable on the relay's port with plain HTTP/1.1 and WebSocket, so a
+client with only `fetch` and `WebSocket` (React Native) can use it:
+
+1. `GET http://host:port/v1/challenge` answers `200` with
+   `{"challenge": "<base64url>", "relay_id": "<relay id>"}`. A challenge is
+   good for one dial within 30 seconds.
+2. Open a WebSocket to
+   `ws://host:port/v1/dial?machine=<gateway_id>&key=<public key>&challenge=<challenge>&signature=<signature>`.
+   `key` is the device's paired Ed25519 public key and `signature` the
+   signature of the bytes below, each unpadded base64url (as in Device keys).
+   Send the `Origin` header the gateway accepts (`rustcode-mobile://app`).
+3. The relay checks the signature, spends the challenge, asks the machine for
+   a pipe and writes the request head into it unchanged. The machine's
+   gateway answers the upgrade itself; from there the WebSocket runs end to
+   end and the relay copies bytes it cannot read.
+
+The signed bytes are, each followed by one zero byte:
+`rustcode-relay-v1`, `client`, the `relay_id`, the `challenge`, the machine
+id. A refusal before the upgrade is a plain HTTP status with
+`{"code": "…", "message": "…"}`: `400 bad_request`, `401 unauthorized`
+(a bad signature, or a challenge that is unknown, spent or expired), `403
+not_allowed` (the machine has not paired this key), `404 machine_offline`,
+`503 busy`, `504 timeout` (the machine opened no pipe in time).
+
+A connection through a relay must be sealed: its first frame is a seal hello
+to the QR code's `sealed_key` (Sealed connections), or it runs TLS pinned to
+the gateway's certificate. A plaintext first frame is answered with an
+`invalid_frame` error and closed, so no token crosses the relay readable.
 
 ### The bare `error` frame
 

@@ -300,3 +300,206 @@ async fn a_registration_from_another_protocol_version_is_refused() {
     let reply: Reply = read_frame(&mut read).await.unwrap().unwrap();
     assert_eq!(code(&reply), Some(ErrorCode::UnsupportedVersion));
 }
+
+mod http_entry {
+    //! The HTTP entry a phone uses: a challenge by `fetch`, then a dial that
+    //! is a WebSocket upgrade the machine answers through the pipe.
+
+    use super::*;
+    use crate::remote_relay::server::http_entry::MAX_HEAD_BYTES;
+    use serde_json::Value;
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(WAIT, future)
+            .await
+            .expect("test step timed out")
+    }
+
+    /// The status and JSON body of a response the relay closes after.
+    async fn response(stream: &mut TcpStream) -> (u16, Value) {
+        let mut bytes = Vec::new();
+        bounded(stream.read_to_end(&mut bytes)).await.unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        let (head, body) = text.split_once("\r\n\r\n").expect("an HTTP response");
+        let status = head
+            .split(' ')
+            .nth(1)
+            .and_then(|status| status.parse().ok())
+            .expect("a status line");
+        (status, serde_json::from_str(body).expect("a JSON body"))
+    }
+
+    async fn get(address: SocketAddr, head: &str) -> TcpStream {
+        let mut stream = bounded(TcpStream::connect(address)).await.unwrap();
+        bounded(stream.write_all(head.as_bytes())).await.unwrap();
+        stream
+    }
+
+    async fn challenge(relay: &Relay, address: SocketAddr) -> String {
+        let mut stream = get(address, "GET /v1/challenge HTTP/1.1\r\nHost: relay\r\n\r\n").await;
+        let (status, body) = response(&mut stream).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["relay_id"], relay.relay_id().as_str(), "{body}");
+        body["challenge"].as_str().unwrap().to_owned()
+    }
+
+    fn dial_head(relay: &Relay, machine_id: &str, key: &Key, challenge: &str) -> String {
+        signed_dial_head(relay, machine_id, key, key, challenge)
+    }
+
+    fn signed_dial_head(
+        relay: &Relay,
+        machine_id: &str,
+        key: &Key,
+        sign_with: &Key,
+        challenge: &str,
+    ) -> String {
+        let signature = sign_with.sign(Role::Client, &relay.relay_id(), challenge, machine_id);
+        format!(
+            "GET /v1/dial?machine={machine_id}&key={}&challenge={challenge}&signature={signature} HTTP/1.1\r\n\
+             Host: relay\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\
+             Origin: rustcode-mobile://app\r\n\
+             \r\n",
+            key.public()
+        )
+    }
+
+    async fn refused(address: SocketAddr, head: &str) -> (u16, Value) {
+        let mut stream = get(address, head).await;
+        response(&mut stream).await
+    }
+
+    #[tokio::test]
+    async fn a_signed_dial_reaches_the_machine_with_its_request_head_unchanged() {
+        let (relay, address) = start(test_limits()).await;
+        let device = Key::new();
+        let mut control = bounded(register(
+            &relay,
+            address,
+            "mac",
+            &Key::new(),
+            &relay.secret(),
+        ))
+        .await
+        .unwrap();
+        bounded(allow(&relay, &mut control, "mac", &device)).await;
+
+        let challenge = challenge(&relay, address).await;
+        let head = dial_head(&relay, "mac", &device, &challenge);
+        let mut phone = get(address, &head).await;
+
+        let Reply::Open { pipe } = bounded(read_frame(&mut control.0)).await.unwrap().unwrap()
+        else {
+            panic!("the member was not asked for a pipe");
+        };
+        let mut member_pipe = bounded(TcpStream::connect(address)).await.unwrap();
+        bounded(write_frame(&mut member_pipe, &Request::Pipe { pipe }))
+            .await
+            .unwrap();
+        let mut heard = vec![0u8; head.len()];
+        bounded(member_pipe.read_exact(&mut heard)).await.unwrap();
+        assert_eq!(heard, head.as_bytes());
+
+        let upgraded = b"HTTP/1.1 101 Switching Protocols\r\n\r\n";
+        bounded(member_pipe.write_all(upgraded)).await.unwrap();
+        let mut answer = vec![0u8; upgraded.len()];
+        bounded(phone.read_exact(&mut answer)).await.unwrap();
+        assert_eq!(answer, upgraded);
+    }
+
+    #[tokio::test]
+    async fn a_challenge_is_spent_by_one_dial() {
+        let (relay, address) = start(test_limits()).await;
+        let device = Key::new();
+        let challenge = challenge(&relay, address).await;
+        let head = dial_head(&relay, "nowhere", &device, &challenge);
+        let (status, body) = refused(address, &head).await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (404, Some("machine_offline"))
+        );
+        let (status, body) = refused(address, &head).await;
+        assert_eq!((status, body["code"].as_str()), (401, Some("unauthorized")));
+    }
+
+    #[tokio::test]
+    async fn a_device_the_machine_does_not_allow_is_forbidden() {
+        let (relay, address) = start(test_limits()).await;
+        let mut control = bounded(register(
+            &relay,
+            address,
+            "mac",
+            &Key::new(),
+            &relay.secret(),
+        ))
+        .await
+        .unwrap();
+        bounded(allow(&relay, &mut control, "mac", &Key::new())).await;
+        let stranger = Key::new();
+        let challenge = challenge(&relay, address).await;
+        let (status, body) =
+            refused(address, &dial_head(&relay, "mac", &stranger, &challenge)).await;
+        assert_eq!((status, body["code"].as_str()), (403, Some("not_allowed")));
+    }
+
+    #[tokio::test]
+    async fn a_dial_to_a_machine_that_is_not_registered_is_not_found() {
+        let (relay, address) = start(test_limits()).await;
+        let device = Key::new();
+        let challenge = challenge(&relay, address).await;
+        let (status, body) =
+            refused(address, &dial_head(&relay, "nowhere", &device, &challenge)).await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (404, Some("machine_offline"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signature_by_another_key_is_unauthorized() {
+        let (relay, address) = start(test_limits()).await;
+        let device = Key::new();
+        let mut control = bounded(register(
+            &relay,
+            address,
+            "mac",
+            &Key::new(),
+            &relay.secret(),
+        ))
+        .await
+        .unwrap();
+        bounded(allow(&relay, &mut control, "mac", &device)).await;
+        let challenge = challenge(&relay, address).await;
+        let forged = signed_dial_head(&relay, "mac", &device, &Key::new(), &challenge);
+        let (status, body) = refused(address, &forged).await;
+        assert_eq!((status, body["code"].as_str()), (401, Some("unauthorized")));
+    }
+
+    #[tokio::test]
+    async fn a_dial_that_is_not_an_upgrade_is_a_bad_request() {
+        let (relay, address) = start(test_limits()).await;
+        let challenge = challenge(&relay, address).await;
+        let head =
+            dial_head(&relay, "mac", &Key::new(), &challenge).replace("Upgrade: websocket\r\n", "");
+        let (status, body) = refused(address, &head).await;
+        assert_eq!((status, body["code"].as_str()), (400, Some("bad_request")));
+    }
+
+    #[tokio::test]
+    async fn an_overlong_request_head_is_a_bad_request() {
+        let (_relay, address) = start(test_limits()).await;
+        let start_line = "GET /v1/challenge HTTP/1.1\r\nX-Padding: ";
+        let head = format!(
+            "{start_line}{}",
+            "a".repeat(MAX_HEAD_BYTES - start_line.len())
+        );
+        let (status, body) = refused(address, &head).await;
+        assert_eq!((status, body["code"].as_str()), (400, Some("bad_request")));
+    }
+}

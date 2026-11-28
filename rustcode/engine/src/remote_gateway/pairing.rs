@@ -102,6 +102,11 @@ pub struct QrPayload {
     /// The gateway's X25519 key for sealed connections, unpadded base64url.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sealed_key: Option<String>,
+    /// `rustcode-relay://host:port` of the relay this machine is registered
+    /// with, for a device that reaches none of the addresses: it dials the
+    /// relay's HTTP entry with `gateway_id` as the machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
 }
 
 /// Longest host name the QR payload carries.
@@ -123,6 +128,7 @@ pub fn qr_payload(
         host_name: host_name.map(|name| name.chars().take(QR_HOST_NAME_CHARS).collect()),
         alternates: alternates.to_vec(),
         sealed_key: None,
+        relay: None,
     })
     .expect("QR payload always serializes")
 }

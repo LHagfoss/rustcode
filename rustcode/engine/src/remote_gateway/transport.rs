@@ -79,7 +79,10 @@ pub(super) async fn serve_connection(
     };
     let first = tokio::select! {
         _ = shared.shutdown.cancelled() => return,
-        first = tokio::time::timeout_at(deadline, first_frame_after_describe(&shared, &mut socket)) => first,
+        first = tokio::time::timeout_at(
+            deadline,
+            first_frame_after_describe(&shared, &mut socket, arrival == Arrival::Relay && !tls),
+        ) => first,
     };
     let mut thread_names = false;
     let admission = match first {
@@ -303,14 +306,24 @@ async fn first_frame(socket: &mut Socket) -> Result<String, Option<HandshakeResp
 /// With the frame comes the challenge the `described` frame carried, which a
 /// device with a key signs in that next frame. It lives only in this socket's
 /// task, so it can be spent once and on this connection only.
+///
+/// With `sealed_only`, the first frame must be a seal hello: a connection a
+/// relay carries in the clear would otherwise show it pairing secrets and
+/// tokens.
 async fn first_frame_after_describe(
     shared: &Shared,
     socket: &mut Socket,
+    sealed_only: bool,
 ) -> Result<(String, Option<String>), Option<HandshakeResponse>> {
     let mut text = first_frame(socket).await?;
     if let Some(hello) = SealHello::parse(&text) {
         seal(shared, socket, &hello).await?;
         text = first_frame(socket).await?;
+    } else if sealed_only {
+        return Err(Some(HandshakeResponse::error(
+            ErrorCode::InvalidFrame,
+            "a connection through a relay must be sealed: open it with a seal hello to the QR code's sealed_key",
+        )));
     }
     if !is_describe(&text) {
         return Ok((text, None));

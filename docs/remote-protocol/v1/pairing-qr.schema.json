@@ -37,6 +37,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "relay": {
+      "description": "`rustcode-relay://host:port` of the relay this machine is registered\nwith, for a device that reaches none of the addresses: it dials the\nrelay's HTTP entry with `gateway_id` as the machine.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "sealed_key": {
       "description": "The gateway's X25519 key for sealed connections, unpadded base64url.",
       "type": [

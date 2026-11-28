@@ -68,18 +68,30 @@ user-installed.**
 8. **No managed relay is required.** A RustCode-operated relay may exist as an opt-in default
    address later; everything works with a self-hosted one or none.
 
+9. **Phones use an HTTP entry on the same port.** React Native has only `fetch` and
+   `WebSocket`, and cannot pin a certificate. The phone fetches a single-use challenge
+   (`GET /v1/challenge`) and opens a WebSocket to `/v1/dial` with the machine id, its device
+   key and its signature in the query. The relay checks them, writes the untouched request
+   head into the machine's pipe and splices; the gateway answers the upgrade. In place of
+   pinned TLS the connection is sealed end to end with Noise NK to the `sealed_key` in the
+   pairing QR code, which now also carries the `relay` route. A gateway refuses a relayed
+   connection whose first frame is not a seal hello (or TLS), so tokens never cross the relay
+   readable. See `docs/remote-protocol/README.md` › Through a relay.
+
 ## What the relay operator can see
 
-Machine ids, which devices connect to which machine, when, and how many bytes. Not prompts,
-transcripts, files, tokens or tool calls. This is stated in remote-security.md where the relay
-is set up.
+Machine ids, which device key connects to which machine, when, and how many bytes. Not
+prompts, transcripts, files, tokens or tool calls: they travel inside the gateway's pinned TLS
+or, for a phone, inside the Noise-sealed WebSocket. This is stated in remote-security.md where
+the relay is set up.
 
 ## Consequences
 
 - Owners with a VPS get private remote access without a VPN or a tunnel provider reading
   traffic.
 - All relay traffic costs VPS bandwidth; no NAT traversal until step 7.
-- The phone needs certificate pinning (already a follow-up) before it can use the relay.
+- The phone reaches the relay without certificate pinning, through the HTTP entry and a
+  sealed connection (decision 9).
 
 ## Follow-up issues (one PR each, in order)
 
@@ -93,8 +105,6 @@ is set up.
 
 ## Unknowns
 
-- Whether React Native's WebSocket stack on iOS accepts a pinned self-signed certificate
-  without a native module (an existing follow-up; blocks phone use of the relay).
 - Real-world bandwidth of a typical session (streaming transcripts are small; screenshots and
   file transfers are not); to be measured with step 1.
 

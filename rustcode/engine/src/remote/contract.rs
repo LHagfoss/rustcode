@@ -555,6 +555,7 @@ pub fn golden_qr_payload() -> QrPayload {
         host_name: Some("studio".to_owned()),
         alternates: vec!["192.168.1.20:17879".to_owned()],
         sealed_key: Some("MeAwP9ZBjS-MDni5HyLoyu0Pvkhlbc9HZ-SDT3Abj2I".to_owned()),
+        relay: Some("rustcode-relay://relay.example.com:17880".to_owned()),
     }
 }
 
