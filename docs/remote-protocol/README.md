@@ -207,6 +207,43 @@ never dials that machine in the clear. A long connect code (`rustcode://connect/
 carries the same `tls_fingerprint`. A client that ignores the field keeps
 plain WebSocket, as before. See `docs/remote-security.md` › Direct TLS.
 
+### Sealed connections
+
+A gateway that lists `sealed` in its `described` capabilities seals a
+connection end to end when the device asks, without TLS: for a client whose
+WebSocket cannot pin a certificate (the phone app) and for frames a relay
+copies. The pairing QR code and every `described` frame carry `sealed_key`,
+the gateway's static X25519 public key as unpadded base64url. Trust the QR
+code's key; a key first learnt from `described` is trusted on first use.
+
+The device's first frame is the initiator's first message of
+`Noise_NK_25519_ChaChaPoly_SHA256` (Noise revision 34), prologue
+`rustcode-remote-sealed-v1`, empty payload:
+
+```json
+{"type":"seal","protocol":"Noise_NK_25519_ChaChaPoly_SHA256","message":"<base64url>"}
+```
+
+The gateway answers with the responder's message, empty payload:
+
+```json
+{"type":"sealed","message":"<base64url>"}
+```
+
+From then on every text frame either way is the unpadded base64url of one
+Noise transport message (the initiator sends with the first key of `Split`).
+Its plaintext is the UTF-8 frame the plain protocol would carry, so
+`describe`, `pair`, `authenticate` and every session frame follow unchanged.
+Pings, pongs and close frames are not sealed; a binary frame or a frame that
+fails to authenticate closes the connection. Transport messages are not
+capped at 65535 bytes; the WebSocket frame carries the length. A handshake to
+another key is answered with an `invalid_frame` error and closed: the device
+holds another install's key and must pair again.
+
+The gateway keeps its key in `remote/sealed.json` (owner-only). The cacophony
+test vector for this protocol name is in `rustcode/engine/src/remote_gateway/noise.rs`;
+an implementation that matches it interoperates.
+
 ### Device keys
 
 A gateway that lists `key_auth` in its `described` capabilities lets a device

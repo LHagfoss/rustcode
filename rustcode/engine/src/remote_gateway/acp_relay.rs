@@ -422,7 +422,7 @@ pub(crate) async fn serve_browser(
         Some(config),
     )
     .await;
-    let (mut writer, mut reader) = socket.split();
+    let (mut writer, mut reader) = super::sealed::Sealed::plain(socket).split();
     let control = Arc::new(ConnectionControl::new(
         tokio_util::sync::CancellationToken::new(),
     ));

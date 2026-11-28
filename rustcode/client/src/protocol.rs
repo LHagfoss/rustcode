@@ -217,6 +217,9 @@ pub enum HandshakeResponse {
         /// answers TLS with: pin it and dial TLS from then on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tls_fingerprint: Option<String>,
+        /// The gateway's X25519 key for sealed connections, unpadded base64url.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sealed_key: Option<String>,
     },
     /// The request is in front of the machine's owner. Wait on the same socket.
     ConnectPending {

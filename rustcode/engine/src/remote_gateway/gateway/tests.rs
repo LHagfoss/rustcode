@@ -2152,3 +2152,122 @@ mod device_keys {
         }
     }
 }
+
+mod sealed {
+    //! Sealed connections: a device that holds the QR code's `sealed_key`
+    //! completes a Noise handshake as its first frame, and every frame after
+    //! it is encrypted end to end.
+
+    use super::*;
+    use crate::remote_gateway::noise::{Initiator, KeyPair, PROLOGUE, PROTOCOL_NAME, Transport};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    fn seal_frame(message: &[u8]) -> Value {
+        json!({
+            "type": "seal",
+            "protocol": PROTOCOL_NAME,
+            "message": URL_SAFE_NO_PAD.encode(message),
+        })
+    }
+
+    async fn sealed_client(addr: SocketAddr, key: &str) -> (Client, Transport) {
+        let public = URL_SAFE_NO_PAD.decode(key).unwrap();
+        let (initiator, first) = Initiator::start(&public, PROLOGUE, &[]).unwrap();
+        let mut client = Client::connect(addr).await;
+        client.send(seal_frame(&first)).await;
+        let answer = client.next_json().await;
+        assert_eq!(answer["type"], "sealed", "{answer}");
+        let message = URL_SAFE_NO_PAD
+            .decode(answer["message"].as_str().unwrap())
+            .unwrap();
+        let (_, transport) = initiator.finish(&message).unwrap();
+        (client, transport)
+    }
+
+    async fn send_sealed(client: &mut Client, transport: &mut Transport, value: Value) {
+        let sealed = transport
+            .send
+            .encrypt(value.to_string().as_bytes())
+            .unwrap();
+        client.send_text(URL_SAFE_NO_PAD.encode(sealed)).await;
+    }
+
+    async fn next_sealed(client: &mut Client, transport: &mut Transport) -> Value {
+        loop {
+            match bounded(client.socket.next()).await {
+                Some(Ok(Message::Text(text))) => {
+                    let sealed = URL_SAFE_NO_PAD.decode(text.as_str()).expect("base64url");
+                    let plain = transport.receive.decrypt(&sealed).expect("a sealed frame");
+                    return serde_json::from_slice(&plain).expect("JSON frame");
+                }
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                other => panic!("expected a sealed frame, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_device_pairs_over_a_connection_sealed_to_the_qr_codes_key() {
+        let harness = Harness::start().await;
+        let offer = harness.offer().await;
+        let qr: QrPayload = serde_json::from_str(offer.qr_payload.expose()).unwrap();
+        let key = qr.sealed_key.expect("the QR code carries the sealed key");
+        let (mut client, mut transport) = sealed_client(harness.addr, &key).await;
+
+        send_sealed(
+            &mut client,
+            &mut transport,
+            json!({"type": "describe", "protocol_version": 1}),
+        )
+        .await;
+        let described = next_sealed(&mut client, &mut transport).await;
+        assert_eq!(described["type"], "described", "{described}");
+        assert_eq!(described["sealed_key"], json!(key), "{described}");
+        assert!(
+            described["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("sealed")),
+            "{described}"
+        );
+
+        send_sealed(
+            &mut client,
+            &mut transport,
+            json!({
+                "type": "pair",
+                "protocol_version": 1,
+                "method": "credential",
+                "secret": offer.credential.expose(),
+                "device_name": "sealed phone",
+            }),
+        )
+        .await;
+        let paired = next_sealed(&mut client, &mut transport).await;
+        assert_eq!(paired["type"], "paired", "{paired}");
+        assert!(paired["token"].as_str().is_some(), "{paired}");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_seal_to_another_key_is_refused_and_closed() {
+        let harness = Harness::start().await;
+        let other = KeyPair::generate();
+        let (_initiator, first) = Initiator::start(other.public(), PROLOGUE, &[]).unwrap();
+        let mut client = Client::connect(harness.addr).await;
+        client.send(seal_frame(&first)).await;
+        let refused = client.next_json().await;
+        assert_eq!(refused["type"], "error", "{refused}");
+        client.expect_closed().await;
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_plain_connection_still_works_beside_sealed_ones() {
+        let harness = Harness::start().await;
+        let (_client, id, _token) = harness.paired_device("plain phone").await;
+        assert!(!id.is_empty());
+        harness.stop().await;
+    }
+}

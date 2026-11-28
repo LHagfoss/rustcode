@@ -339,6 +339,11 @@ impl RemoteLifecycle {
     pub fn tls_path(&self) -> PathBuf {
         self.directory.join("tls.json")
     }
+
+    /// The gateway's static key for sealed connections ([`super::sealed`]).
+    pub fn sealed_path(&self) -> PathBuf {
+        self.directory.join("sealed.json")
+    }
     /// The gateway's durable settings, written whenever one starts.
     pub fn settings_path(&self) -> PathBuf {
         self.directory.join("settings.json")

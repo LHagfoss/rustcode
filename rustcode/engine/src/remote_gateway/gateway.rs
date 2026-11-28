@@ -339,6 +339,7 @@ pub(super) struct Shared {
     pub(super) members: super::hub_link::Members,
     /// The certificate the gateway port answers TLS with ([`super::tls`]).
     pub(super) tls: super::tls::TlsIdentity,
+    pub(super) sealed: super::sealed::SealedIdentity,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -1402,6 +1403,7 @@ impl Shared {
                 .collect(),
             challenge: Some(challenge.to_owned()),
             tls_fingerprint: Some(self.tls.fingerprint().to_owned()),
+            sealed_key: Some(self.sealed.public_key().to_owned()),
         }
     }
 
@@ -1468,6 +1470,10 @@ impl Shared {
             offer,
         );
         details.instance_id = Some(self.instance_id.clone());
+        details.qr_payload = Secret::new(super::sealed::qr_with_sealed_key(
+            details.qr_payload.expose(),
+            self.sealed.public_key(),
+        ));
         details.challenge = state.pairing.last_serial();
         details.locked_for_secs = state.pairing.lockout(now).map(|left| left.as_secs().max(1));
         details
@@ -1688,6 +1694,7 @@ impl Gateway {
         let lock = lifecycle.claim()?;
         let gateway_id = lifecycle.gateway_id(&lock)?;
         let tls = super::tls::TlsIdentity::load_or_create(&lifecycle.tls_path())?;
+        let sealed = super::sealed::SealedIdentity::load_or_create(&lifecycle.sealed_path())?;
         let store = lifecycle.device_store();
         let notes = lifecycle.revocation_notes();
         // Notes a failed revocation write left must be read and applied before
@@ -1782,6 +1789,7 @@ impl Gateway {
             reached_since_challenge: AtomicBool::new(false),
             members: super::hub_link::Members::new(&lifecycle.config_directory()),
             tls,
+            sealed,
         });
         Ok(Self {
             listener,
