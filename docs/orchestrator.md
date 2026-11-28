@@ -1812,9 +1812,11 @@ a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
 
 - Pi: `pi-acp` ignores `mcpServers`, so the engine starts it with
   `PI_ACP_PI_COMMAND` set to a small script that runs `pi --extension`. The
-  extension (`harness/pi_extension.ts`) starts the same server and registers
-  what it lists as `mcp__rustcode__*`, and removes the token from the
-  environment the agent's shell commands inherit.
+  extension (`harness/pi_extension.ts`) starts the same server (deferred, as
+  for every harness but Claude Code) and the workspace's own MCP servers
+  (stdio and Streamable HTTP, with RustCode's saved sign-ins), registers what
+  each lists as `mcp__<server>__*`, and removes the token and the server list
+  from the environment the agent's shell commands inherit.
 
 Each tool call goes to the parent engine over a local unix socket,
 `<config>/run/orchestrator-<pid>.sock` (socket 0600, directory 0700; sockets

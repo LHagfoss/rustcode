@@ -139,11 +139,8 @@ fn launch_env(
     harness: &ResolvedHarness,
     options: &StartOptions,
 ) -> (Vec<(String, String)>, Vec<&'static str>) {
-    let mut env = match (&options.orchestrator, harness.id.as_str()) {
-        (Some(launch), "pi") => match super::config::config_dir() {
-            Ok(config) => super::pi_mcp::environment(launch, &config.join("run").join("pi")),
-            Err(_) => Vec::new(),
-        },
+    let mut env = match harness.id.as_str() {
+        "pi" => super::pi_mcp::thread_environment(options),
         _ => Vec::new(),
     };
     if let Some(launch) = &options.orchestrator {
