@@ -19,7 +19,7 @@ import {
 } from "../state/store";
 import { isLoaded, relativeAge } from "../state/thread";
 import { isRunning } from "../state/turn";
-import { Sparkles, X } from "./icons";
+import { X } from "./icons";
 import { ChromeButton, cx, Pill } from "./primitives";
 
 /** A chat's message count once its history is in, for {@link settleRecaps}. */
@@ -117,7 +117,7 @@ const STATE_TONE: Record<RecapState, string> = {
   running: "text-accent",
   needs: "text-warning",
   failed: "text-danger",
-  done: "text-success",
+  done: "text-fg-muted",
 };
 
 /** The recap of the chat on screen: a row after its last turn (ui/Transcript.tsx). */
@@ -135,23 +135,11 @@ export function ChatRecapCard({ threadId, className }: { threadId: string; class
   );
   if (!open || !recap) return null;
   return (
-    <section
-      aria-label="Recap"
-      className={cx(
-        "flex flex-col gap-2 rounded-xl border border-border bg-fill-subtle px-3 py-2 text-caption rc-in",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <Sparkles size={13} className="shrink-0 text-accent" />
+    <section aria-label="Recap" className={cx("flex flex-col gap-1 px-2 text-caption rc-in", className)}>
+      <div className="flex flex-wrap items-center gap-x-2">
         <span className="font-medium text-fg">Recap</span>
-        <span className="min-w-0 flex-1 truncate text-fg-faint">
-          You were last here {relativeAge(open.since)}
-        </span>
-        <span className={cx("flex shrink-0 items-center gap-1.5", STATE_TONE[recap.state])}>
-          <span aria-hidden className="size-1.5 rounded-full bg-current" />
-          {STATE_LABEL[recap.state]}
-        </span>
+        <span className="flex-1 text-fg-muted">{relativeAge(open.since)}</span>
+        <span className={STATE_TONE[recap.state]}>{STATE_LABEL[recap.state]}</span>
         {recap.state === "failed" && (
           <Pill size="sm" onClick={() => void retryThread(threadId)}>
             Retry
@@ -161,7 +149,7 @@ export function ChatRecapCard({ threadId, className }: { threadId: string; class
           <X size={12} />
         </ChromeButton>
       </div>
-      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
         {recap.asked && <RecapLine label="You asked" text={recap.asked} lines={1} />}
         {recap.reply && <RecapLine label="Last reply" text={recap.reply} lines={2} />}
       </dl>
@@ -172,7 +160,7 @@ export function ChatRecapCard({ threadId, className }: { threadId: string; class
 function RecapLine({ label, text, lines }: { label: string; text: string; lines: 1 | 2 }) {
   return (
     <>
-      <dt className="text-fg-faint">{label}</dt>
+      <dt className="text-fg-muted">{label}</dt>
       <dd title={text} className={cx("m-0 text-fg-muted", lines === 1 ? "truncate" : "line-clamp-2")}>
         {text}
       </dd>
