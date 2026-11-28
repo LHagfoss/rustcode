@@ -1,6 +1,6 @@
 // A paired machine that follows this computer's settings (docs/desktop.md ›
-// Settings on one machine or all). Off by default, one switch per machine on
-// its Settings page. While it is on, this computer's shared server settings are
+// Settings on one machine or all). Off by default: one switch per machine on
+// its Settings page, or one on Settings › Machines for every machine. While it is on, this computer's shared server settings are
 // written to that machine whenever its connection opens, and each change made
 // here is written there too. A value changed on that machine itself is put back
 // to this computer's on the next connection: this computer is the main one.
@@ -13,12 +13,13 @@ import { type JsonObject, obj } from "../acp/jsonrpc";
 import { readStorage, writeStorage } from "../lib/storage";
 import { errorDetail, recordAutoSync } from "./autoSyncStatus";
 import { copyFiles, followedKinds } from "./configFilesFollow";
-import { machineConnection, onMachineLinks } from "./machines";
+import { LOCAL_MACHINE_ID, machineConnection, onMachineLinks, useMachines } from "./machines";
 import { SERVER_SETTING_KEYS } from "./settingsRegistry";
 import { syncStorageKey } from "./storageSync";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STORAGE = "rustcode.settingsFollow";
+const STORAGE_ALL = "rustcode.settingsFollow.all";
 const REQUEST_MS = 10_000;
 /** How often this computer's skills, themes and commands are listed to notice an edit made on disk. */
 const FILES_CHECK_MS = 30_000;
@@ -32,12 +33,49 @@ function readIds(): string[] {
   }
 }
 
-/** The machines that follow this computer's settings, by id. */
-export const useSettingsFollow = create<{ ids: string[] }>(() => ({ ids: readIds() }));
+function readAll(): boolean {
+  return readStorage(STORAGE_ALL) === "true";
+}
+
+type FollowState = { ids: string[]; all: boolean };
+
+/** The machines that follow this computer's settings, by id, or every paired machine when `all` is on. */
+export const useSettingsFollow = create<FollowState>(() => ({ ids: readIds(), all: readAll() }));
 syncStorageKey(STORAGE, () => useSettingsFollow.setState({ ids: readIds() }));
+syncStorageKey(STORAGE_ALL, () => useSettingsFollow.setState({ all: readAll() }));
+
+/** Whether one machine follows: every machine but this computer while `all` is on, else the listed ones. */
+export function follows(state: FollowState, id: string): boolean {
+  if (id === LOCAL_HOST || id === LOCAL_MACHINE_ID) return false;
+  return state.all || state.ids.includes(id);
+}
 
 export function followsThisComputer(id: string): boolean {
-  return useSettingsFollow.getState().ids.includes(id);
+  return follows(useSettingsFollow.getState(), id);
+}
+
+/** The connected machines that follow this computer right now. */
+function connectedFollowers(): string[] {
+  const state = useSettingsFollow.getState();
+  const ids = state.all ? useMachines.getState().machines.map((machine) => machine.id) : state.ids;
+  return ids.filter((id) => follows(state, id) && machineConnection(id) !== null);
+}
+
+function anyFollower(): boolean {
+  const state = useSettingsFollow.getState();
+  return state.all || state.ids.length > 0;
+}
+
+/**
+ * Turn following on or off for every paired machine at once; turning it on copies the settings to
+ * each connected one now and to the rest as they connect. Answers the machines it reached.
+ */
+export async function setFollowAll(on: boolean): Promise<number> {
+  writeStorage(STORAGE_ALL, on ? "true" : "false");
+  useSettingsFollow.setState({ all: on });
+  if (!on) return 0;
+  const results = await Promise.allSettled(connectedFollowers().map((id) => copySettingsTo(id)));
+  return results.filter((result) => result.status === "fulfilled").length;
 }
 
 /** Turn following on or off for one machine; turning it on copies the settings at once. */
@@ -158,9 +196,7 @@ async function copyFilesTo(
  * every connected follower up to date. One that is away catches up when it connects.
  */
 export function followLocalChange(): void {
-  const ids = useSettingsFollow.getState().ids;
-  if (!ids.length) return;
-  for (const id of ids) if (machineConnection(id)) void copySettingsTo(id).catch(() => 0);
+  for (const id of connectedFollowers()) void copySettingsTo(id).catch(() => 0);
 }
 
 let started = false;
@@ -177,7 +213,7 @@ export function compareListing(
 
 /** List this computer's skills, themes and commands; a change since the last look reaches every follower. */
 async function checkLocalFiles(seed = false): Promise<void> {
-  if (!seed && !useSettingsFollow.getState().ids.length) return;
+  if (!seed && !anyFollower()) return;
   const scope = await import("./settingsScope");
   const listing = await scope.machineRequest(LOCAL_HOST, "_rustcode/config/files/list", {}, REQUEST_MS).then(
     (answer) => JSON.stringify(answer),
@@ -193,7 +229,7 @@ export function startSettingsFollow(): void {
   if (started) return;
   started = true;
   onMachineLinks((id, connection) => {
-    if (connection && id !== LOCAL_HOST && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
+    if (connection && followsThisComputer(id)) void copySettingsTo(id).catch(() => 0);
   });
   void checkLocalFiles(true).catch(() => undefined);
   setInterval(() => void checkLocalFiles().catch(() => undefined), FILES_CHECK_MS);

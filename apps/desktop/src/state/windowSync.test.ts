@@ -174,7 +174,7 @@ describe("windowSync", () => {
       expect(useOutbox.getState().byHost).toEqual({ studio: [change] });
     } finally {
       delete scope.localStorage;
-      useSettingsFollow.setState({ ids: [] });
+      useSettingsFollow.setState({ ids: [], all: false });
       useFilesFollowOff.setState({ off: {} });
       useOutbox.setState({ byHost: {} });
     }

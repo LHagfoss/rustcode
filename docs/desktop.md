@@ -204,7 +204,9 @@ its composer keep that thread's machine and folder.
 
 **Settings on one machine or all.** Settings is not synced from a main machine
 unless you ask for it (#3202): each paired machine's Settings page has **Use
-<this computer>'s settings**, off by default (`src/state/settingsFollow.ts`).
+<this computer>'s settings**, off by default (`src/state/settingsFollow.ts`),
+and Settings › Machines has **Same settings everywhere**, one switch that turns
+it on for every paired machine, including ones paired later.
 Turned on, this computer's shared server settings are copied to that machine
 at once, again each time its connection opens, and whenever they change here
 (from the app, the CLI or an agent). A value changed on that machine itself is
