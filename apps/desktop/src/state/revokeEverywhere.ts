@@ -97,6 +97,21 @@ async function ask(connection: AcpConnection, hostId: string): Promise<RevokeOut
   }
 }
 
+/** The notice after Remove: what the machine said about this computer's access there, then this side. */
+export function removedBothWays(name: string, there: string | null, here: RevokeOutcome): string {
+  const first = there || `Removed ${name}.`;
+  if (here === "revoked") return `${first} ${name} can no longer reach this computer.`;
+  if (here === "failed")
+    return `${first} ${name} may still reach this computer: revoke it under Remote access › Paired devices.`;
+  return first;
+}
+
+/** End `hostId`'s own pairings with this computer, so removing a machine ends both directions. */
+export async function revokeHere(hostId: string): Promise<RevokeOutcome> {
+  const local = connectionFor(LOCAL_HOST);
+  return local ? ask(local, hostId) : "failed";
+}
+
 /** Revoke `target` on this computer and every connected machine; remember the offline ones. */
 export async function revokeEverywhere(target: Machine): Promise<RevokeResult[]> {
   const results: RevokeResult[] = [];

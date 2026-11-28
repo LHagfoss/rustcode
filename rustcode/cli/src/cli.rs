@@ -820,11 +820,11 @@ pub enum MachineCommands {
         #[arg(long, default_value_t = 4, value_name = "SECONDS")]
         discover_secs: u64,
     },
-    /// Forget a machine and its token, and end this computer's access there
+    /// Forget a machine and its token, and end the access both ways
     Remove {
         /// Name, host id or a prefix of one
         machine: String,
-        /// Only forget it here; the machine keeps listing this computer
+        /// Do not ask the machine; it keeps listing this computer
         #[arg(long)]
         local: bool,
     },
