@@ -3,23 +3,24 @@
 // an outbound link to it, so outside agents reach them through it with no open
 // port. The shell runs `rc machines hub …` (`state/hub.ts`).
 
-import { useEffect, useState } from "react";
-import { OUTSIDE_SCOPES, type OutsideScope, SCOPE_HELP, SCOPE_LABEL } from "../acp/outside";
+import { useEffect } from "react";
+import { SCOPE_LABEL } from "../acp/outside";
 import { hasShell } from "../lib/shell";
 import { type HubMember, hubChanging, hubError, hubStatus, refreshHub, setHub, useHub } from "../state/hub";
-import { machineName, useMachines } from "../state/machines";
-import { Switch } from "./primitives";
+import { chooseHub, reachableMachines, suggestedHub } from "../state/hubFleet";
+import { LOCAL_MACHINE_ID, machineName, useMachines } from "../state/machines";
 import { Action, Chip, Group, Row, Select } from "./settingsKit";
 
 /** The gateway reports members as it sees links come and go. */
 const POLL_MS = 10_000;
 
-const SCOPE_OPTIONS = OUTSIDE_SCOPES.map((scope) => ({ value: scope, label: SCOPE_LABEL[scope] }));
+const NO_HUB = "";
 
 export function HubGroup() {
   const status = useHub(hubStatus);
   const error = useHub(hubError);
   const busy = useHub(hubChanging);
+  const machines = useMachines((s) => s.machines);
 
   useEffect(() => {
     if (!hasShell()) return;
@@ -30,6 +31,20 @@ export function HubGroup() {
 
   if (!hasShell()) return null;
 
+  const current = status?.hub ? LOCAL_MACHINE_ID : (status?.member?.machine ?? NO_HUB);
+  const reachable = reachableMachines(machines);
+  const suggested = suggestedHub(machines);
+  const options = [
+    { value: NO_HUB, label: "No hub" },
+    { value: LOCAL_MACHINE_ID, label: "This computer" },
+    ...reachable.map((m) => ({
+      value: m.id,
+      label: m.id === suggested?.id ? `${machineName(m)} (suggested)` : machineName(m),
+    })),
+  ];
+  if (status?.member && !options.some((option) => option.value === status.member?.machine))
+    options.push({ value: status.member.machine, label: status.member.name });
+
   return (
     <Group
       title="Hub (optional)"
@@ -39,19 +54,24 @@ export function HubGroup() {
         <Row title="Could not read the hub role" status={<span className="text-warning">{error}</span>} />
       )}
       <Row
-        title="Make this computer the hub"
-        subtitle="Only for a machine that stays on, such as a VPS. The others then link to it."
-        badge={status?.hub ? <Chip tone="ok">Hub</Chip> : undefined}
+        title="Hub"
+        subtitle={
+          suggested && current === NO_HUB
+            ? `Pick a machine that stays on, such as ${machineName(suggested)}. It turns the hub on there, and this computer and every connected machine link to it with full access.`
+            : "Pick a machine that stays on. It turns the hub on there, and this computer and every connected machine link to it with full access."
+        }
+        badge={current !== NO_HUB ? <Chip tone="ok">On</Chip> : undefined}
       >
-        <Switch
-          label="Make this computer the hub"
-          checked={status?.hub === true}
+        <Select
+          label="Hub"
+          value={current}
+          options={options}
           disabled={!status || busy}
-          onChange={(on) => void setHub({ action: on ? "on" : "off" })}
+          onChange={(value) => void chooseHub(value === NO_HUB ? null : value)}
         />
       </Row>
       {status?.hub && <Members members={status.members} />}
-      {status && (status.member ? <Membership /> : <JoinRows />)}
+      {status?.member && <Membership />}
     </Group>
   );
 }
@@ -69,7 +89,7 @@ function Members({ members }: { members: HubMember[] | null }) {
     return (
       <Row
         title="No machine has joined yet"
-        subtitle="On each other machine: pair with this computer, then Link to a hub under Settings › Machines."
+        subtitle="Each machine links when it is connected as you choose the hub; it must be paired with this computer both ways."
       />
     );
   return (
@@ -116,70 +136,5 @@ function Membership() {
         Leave
       </Action>
     </Row>
-  );
-}
-
-function JoinRows() {
-  const machines = useMachines((s) => s.machines);
-  const busy = useHub(hubChanging);
-  const [machine, setMachine] = useState("");
-  const [access, setAccess] = useState<OutsideScope>("admin");
-  const [ask, setAsk] = useState(false);
-  const chosen = machines.some((m) => m.id === machine) ? machine : "";
-
-  if (machines.length === 0)
-    return (
-      <Row
-        title="Link to a hub"
-        subtitle="Pair with the machine that is the hub first; it is then listed here."
-      />
-    );
-
-  return (
-    <>
-      <Row
-        title="Link to a hub"
-        subtitle="Pick the paired machine you made the hub. This computer keeps a link open to it, so the hub can reach it."
-      >
-        <Select
-          label="Hub"
-          value={chosen}
-          options={[
-            { value: "", label: "Choose a machine" },
-            ...machines.map((m) => ({ value: m.id, label: machineName(m) })),
-          ]}
-          onChange={setMachine}
-        />
-      </Row>
-      {chosen && (
-        <>
-          <Row title="What the hub may do here" subtitle={SCOPE_HELP[access]}>
-            <Select
-              label="Access"
-              value={access}
-              options={SCOPE_OPTIONS}
-              onChange={(value) => setAccess(value as OutsideScope)}
-            />
-          </Row>
-          {access !== "read_only" && (
-            <Row
-              title="Ask me before it changes anything"
-              subtitle="Each start or message from the hub waits for your Allow here."
-            >
-              <Switch label="Ask before changes" checked={ask} onChange={setAsk} />
-            </Row>
-          )}
-          <Row title="Link" subtitle="Remote access must stay on here: it holds the link.">
-            <Action
-              prominent
-              disabled={busy}
-              onClick={() => void setHub({ action: "join", machine: chosen, access, ask })}
-            >
-              {busy ? "Linking…" : "Link to hub"}
-            </Action>
-          </Row>
-        </>
-      )}
-    </>
   );
 }
