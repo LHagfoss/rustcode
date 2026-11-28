@@ -6,6 +6,12 @@ remote access itself is in [remote.md](remote.md); the wire format is in
 [remote-protocol](remote-protocol/README.md). This page is the security view
 of both, for issue #2651.
 
+> **Sealed connections** encrypt a phone's traffic end to end on any route,
+> LAN or relay, with a Noise NK session keyed to the gateway's X25519 key in
+> the pairing QR code (`docs/remote-protocol/README.md` › Sealed connections).
+> A phone app that seals is protected from the first frame; one that does not
+> keeps the plain WebSocket described below.
+>
 > **A plain LAN WebSocket is authenticated but not encrypted.** The gateway
 > port also answers its own TLS with a self-signed certificate that clients
 > pin ([Direct TLS](#direct-tls-with-a-pinned-certificate)), and other

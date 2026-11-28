@@ -50,11 +50,16 @@ pub const GATEWAY_CAPABILITY_MACHINE_CODES: &str = "machine_codes";
 /// token. See [`super::device_key`].
 pub const GATEWAY_CAPABILITY_KEY_AUTH: &str = "key_auth";
 
+/// What a gateway lists when it takes a `seal` first frame and seals the
+/// connection end to end (see [`super::sealed`]).
+pub const GATEWAY_CAPABILITY_SEALED: &str = "sealed";
+
 /// Everything a `described` frame lists, in that order.
-pub const GATEWAY_CAPABILITIES: [&str; 3] = [
+pub const GATEWAY_CAPABILITIES: [&str; 4] = [
     GATEWAY_CAPABILITY_DESCRIBE,
     GATEWAY_CAPABILITY_MACHINE_CODES,
     GATEWAY_CAPABILITY_KEY_AUTH,
+    GATEWAY_CAPABILITY_SEALED,
 ];
 
 /// A pairing credential, manual code or device token. Serializes as a plain
@@ -499,6 +504,9 @@ pub enum HandshakeResponse {
         /// never plain `ws://` again (`docs/remote-security.md`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tls_fingerprint: Option<String>,
+        /// The gateway's X25519 key for sealed connections, unpadded base64url.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sealed_key: Option<String>,
     },
     /// The connection request is in front of the host's owner. Wait on the
     /// same socket, sending nothing but pings, for the answer.
@@ -791,6 +799,7 @@ mod tests {
                 .collect(),
             challenge: None,
             tls_fingerprint: None,
+            sealed_key: None,
         };
         assert_eq!(
             described.to_text(),

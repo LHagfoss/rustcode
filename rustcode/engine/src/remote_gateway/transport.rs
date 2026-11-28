@@ -25,6 +25,7 @@ use super::handshake::{
 };
 use super::pairing::CODE_DIGITS;
 use super::router::{FrameQueue, FrameSink};
+use super::sealed::{SealHello, Sealed};
 use super::wire_names;
 use futures_util::{SinkExt, StreamExt, stream::SplitSink, stream::SplitStream};
 use std::sync::Arc;
@@ -46,7 +47,7 @@ use tokio_util::either::Either;
 /// Plain TCP, or the gateway's own TLS ([`super::tls`]) over it.
 pub(super) type Stream = Either<TcpStream, TlsStream<TcpStream>>;
 
-pub(super) type Socket = WebSocketStream<Stream>;
+pub(super) type Socket = Sealed<WebSocketStream<Stream>>;
 
 /// How long a closing connection may spend delivering its last error frame.
 const GOODBYE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -146,7 +147,7 @@ pub(super) async fn serve_connection(
         (Arrival::Tunnel, Some(local)) => connection.set_route(tunnel_route(local)),
         (Arrival::Direct, Some(local)) => {
             let mut route = connection_route(local, &candidate_addresses());
-            if tls {
+            if tls || socket.is_sealed() {
                 route.set_tls();
             }
             connection.set_route(route)
@@ -204,7 +205,7 @@ async fn upgrade(
         Either::Left(socket)
     };
     match accept_hdr_async_with_config(stream, refuse_browsers, Some(config)).await {
-        Ok(socket) => Some((socket, tls)),
+        Ok(socket) => Some((Sealed::plain(socket), tls)),
         Err(WsError::Http(response)) => {
             // The upgrade is refused before any frame, so the device is told
             // nothing. A native app built before it sent the native app origin
@@ -299,7 +300,11 @@ async fn first_frame_after_describe(
     shared: &Shared,
     socket: &mut Socket,
 ) -> Result<(String, Option<String>), Option<HandshakeResponse>> {
-    let text = first_frame(socket).await?;
+    let mut text = first_frame(socket).await?;
+    if let Some(hello) = SealHello::parse(&text) {
+        seal(shared, socket, &hello).await?;
+        text = first_frame(socket).await?;
+    }
     if !is_describe(&text) {
         return Ok((text, None));
     }
@@ -315,6 +320,31 @@ async fn first_frame_after_describe(
         )));
     }
     Ok((text, Some(challenge)))
+}
+
+/// Complete a sealed handshake on `socket` and seal it. A handshake that
+/// fails is a device holding another install's key, or none of this one's.
+async fn seal(
+    shared: &Shared,
+    socket: &mut Socket,
+    hello: &SealHello,
+) -> Result<(), Option<HandshakeResponse>> {
+    let (answer, transport) = shared.sealed.accept(hello).map_err(|_| {
+        Some(HandshakeResponse::error(
+            ErrorCode::InvalidFrame,
+            "the sealed handshake failed: this computer's key is not the one the device holds; pair again",
+        ))
+    })?;
+    let delivered = tokio::time::timeout(
+        shared.limits.write_timeout,
+        socket.send(Message::text(answer)),
+    )
+    .await;
+    if !matches!(delivered, Ok(Ok(()))) {
+        return Err(None);
+    }
+    socket.seal(transport);
+    Ok(())
 }
 
 fn is_describe(text: &str) -> bool {
@@ -522,7 +552,7 @@ async fn send_frame(shared: &Shared, socket: &mut Socket, frame: &HandshakeRespo
 async fn goodbye(socket: &mut Socket, error: &HandshakeResponse) {
     let _ = tokio::time::timeout(GOODBYE_TIMEOUT, async {
         socket.send(Message::text(error.to_text())).await?;
-        socket.close(None).await
+        SinkExt::close(socket).await
     })
     .await;
 }

@@ -307,6 +307,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 tls_fingerprint: Some(
                     "3f6a1c9e0b7d2e45a8c1f0e9d6b3a2715c4e8f9a0b1c2d3e4f5a6b7c8d9e0f1a".to_owned(),
                 ),
+                sealed_key: Some("MeAwP9ZBjS-MDni5HyLoyu0Pvkhlbc9HZ-SDT3Abj2I".to_owned()),
             },
         ),
         (
@@ -553,6 +554,7 @@ pub fn golden_qr_payload() -> QrPayload {
         credential: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
         host_name: Some("studio".to_owned()),
         alternates: vec!["192.168.1.20:17879".to_owned()],
+        sealed_key: Some("MeAwP9ZBjS-MDni5HyLoyu0Pvkhlbc9HZ-SDT3Abj2I".to_owned()),
     }
 }
 

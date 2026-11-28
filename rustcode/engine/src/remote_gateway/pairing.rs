@@ -99,6 +99,9 @@ pub struct QrPayload {
     /// listener is bound to one address.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternates: Vec<String>,
+    /// The gateway's X25519 key for sealed connections, unpadded base64url.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_key: Option<String>,
 }
 
 /// Longest host name the QR payload carries.
@@ -119,6 +122,7 @@ pub fn qr_payload(
         credential: credential.clone(),
         host_name: host_name.map(|name| name.chars().take(QR_HOST_NAME_CHARS).collect()),
         alternates: alternates.to_vec(),
+        sealed_key: None,
     })
     .expect("QR payload always serializes")
 }
