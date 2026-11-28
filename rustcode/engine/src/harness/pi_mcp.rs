@@ -2,7 +2,9 @@
 //! other harnesses get. `pi --extension` is how it gets those tools: `pi-acp`
 //! starts `PI_ACP_PI_COMMAND`, here a small script that adds the extension,
 //! and the extension starts `rustcode mcp-orchestrator` and the workspace's
-//! MCP servers (Settings › MCP) itself.
+//! MCP servers (Settings › MCP) itself. The script also turns Pi's own skill
+//! discovery off, and the extension hands it the skills that are on in
+//! Settings › Skills instead.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +20,9 @@ use crate::orchestration::tool_socket::{
 /// The workspace's MCP servers, as JSON, for the extension to start (it takes the variable out of
 /// the agent's shell, since remote servers' headers carry their sign-in).
 const SERVERS_ENV: &str = "RUSTCODE_PI_MCP_SERVERS";
+/// The skill directories Pi lists, as JSON: the ones on in Settings › Skills and Pi's own user
+/// root, which RustCode does not read.
+const SKILLS_ENV: &str = "RUSTCODE_PI_SKILLS";
 
 const EXTENSION: &str = include_str!("pi_extension.ts");
 /// Keep both script formats testable on every host platform.
@@ -25,12 +30,12 @@ fn wrapper(windows: bool) -> (&'static str, &'static str) {
     if windows {
         (
             "pi-with-thread-tools.cmd",
-            "@echo off\r\npi --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n",
+            "@echo off\r\npi --no-skills --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n",
         )
     } else {
         (
             "pi-with-thread-tools",
-            "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n",
+            "#!/bin/sh\nexec pi --no-skills --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n",
         )
     }
 }
@@ -52,19 +57,35 @@ fn install(dir: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
 }
 
 /// The environment a Pi thread starts with: the extension that gives it the
-/// orchestrator's tools and the workspace's MCP servers, as `StartOptions` names them.
+/// orchestrator's tools, the workspace's MCP servers and the skills that are on, as
+/// `StartOptions` and Settings › Skills name them.
 pub(crate) fn thread_environment(options: &StartOptions) -> Vec<(String, String)> {
-    if options.orchestrator.is_none() && options.mcp.is_empty() {
-        return Vec::new();
-    }
     match super::config::config_dir() {
         Ok(config) => environment(
             options.orchestrator.as_ref(),
             &options.mcp,
+            &skill_dirs(),
             &config.join("run").join("pi"),
         ),
         Err(_) => Vec::new(),
     }
+}
+
+/// Pi's own user root (`PI_CODING_AGENT_DIR`, else `~/.pi/agent`) keeps its skills, since
+/// Settings › Skills has no toggle for them.
+fn skill_dirs() -> Vec<PathBuf> {
+    let mut dirs = crate::skills::enabled_skill_dirs();
+    let agent_dir = crate::shell_env::env_var("PI_CODING_AGENT_DIR")
+        .filter(|dir| !dir.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::home::home_dir().map(|home| home.join(".pi").join("agent")));
+    if let Some(own) = agent_dir
+        .map(|dir| dir.join("skills"))
+        .filter(|dir| dir.is_dir())
+    {
+        dirs.push(own);
+    }
+    dirs
 }
 
 /// The servers the extension starts beside the orchestrator, as JSON: a workspace server
@@ -88,12 +109,13 @@ fn servers_json(launch: Option<&Launch>, servers: &[McpServerConfig]) -> String 
     Value::Array(listed).to_string()
 }
 
-/// The environment that gives a Pi thread the orchestrator's tools and the
-/// workspace's MCP servers. Empty, so the thread runs without them, when the
-/// files cannot be written.
+/// The environment that gives a Pi thread the orchestrator's tools, the
+/// workspace's MCP servers and `skills`. Empty, so the thread runs without
+/// them, when the files cannot be written.
 fn environment(
     launch: Option<&Launch>,
     servers: &[McpServerConfig],
+    skills: &[PathBuf],
     dir: &Path,
 ) -> Vec<(String, String)> {
     let (wrapper, extension) = match install(dir) {
@@ -113,6 +135,10 @@ fn environment(
             extension.to_string_lossy().into_owned(),
         ),
         (SERVERS_ENV.to_owned(), servers_json(launch, servers)),
+        (
+            SKILLS_ENV.to_owned(),
+            serde_json::to_string(skills).unwrap_or_else(|_| "[]".to_owned()),
+        ),
     ];
     let Some(launch) = launch else {
         return env;
@@ -155,7 +181,7 @@ mod tests {
             wrapper(true),
             (
                 "pi-with-thread-tools.cmd",
-                "@echo off\r\npi --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n"
+                "@echo off\r\npi --no-skills --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n"
             )
         );
     }
@@ -166,7 +192,7 @@ mod tests {
             wrapper(false),
             (
                 "pi-with-thread-tools",
-                "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n"
+                "#!/bin/sh\nexec pi --no-skills --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n"
             )
         );
     }
@@ -183,7 +209,7 @@ mod tests {
             defer_tools: true,
             version: crate::orchestration::VERSION,
         };
-        let env = environment(Some(&launch), &[], dir.path());
+        let env = environment(Some(&launch), &[], &[], dir.path());
         let get = |name: &str| {
             env.iter()
                 .find(|(key, _)| key == name)
@@ -231,7 +257,7 @@ mod tests {
             .headers
             .insert("Authorization".into(), "Bearer t".into());
         let servers = [server("rustcode"), server("context7"), remote];
-        let env = environment(Some(&launch), &servers, dir.path());
+        let env = environment(Some(&launch), &servers, &[], dir.path());
         let listed: Value =
             serde_json::from_str(&env.iter().find(|(key, _)| key == SERVERS_ENV).unwrap().1)
                 .unwrap();
@@ -250,10 +276,36 @@ mod tests {
     #[test]
     fn a_thread_without_the_orchestrator_still_gets_its_servers() {
         let dir = tempfile::tempdir().unwrap();
-        let env = environment(None, &[server("context7")], dir.path());
+        let env = environment(None, &[server("context7")], &[], dir.path());
         let get = |name: &str| env.iter().any(|(key, _)| key == name);
         assert!(get("PI_ACP_PI_COMMAND") && get(SERVERS_ENV));
         assert!(!get(ORCHESTRATOR_TOKEN_ENV) && !get("RUSTCODE_PI_MCP_COMMAND"));
-        assert!(thread_environment(&StartOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn pi_lists_only_the_skills_that_are_on() {
+        let home = tempfile::tempdir().unwrap();
+        for name in ["on", "off"] {
+            let skill = home.path().join(".agents/skills").join(name);
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(
+                skill.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\n"),
+            )
+            .unwrap();
+        }
+        let inputs = crate::skills::SkillRootInputs {
+            home: Some(home.path().to_path_buf()),
+            ..Default::default()
+        };
+        let disabled = ["off".to_owned()].into_iter().collect();
+        let skills = crate::skills::enabled_skill_dirs_in(inputs, &disabled);
+        assert_eq!(skills, [home.path().join(".agents/skills/on")]);
+        let dir = tempfile::tempdir().unwrap();
+        let env = environment(None, &[], &skills, dir.path());
+        let listed: Vec<PathBuf> =
+            serde_json::from_str(&env.iter().find(|(key, _)| key == SKILLS_ENV).unwrap().1)
+                .unwrap();
+        assert_eq!(listed, skills);
     }
 }

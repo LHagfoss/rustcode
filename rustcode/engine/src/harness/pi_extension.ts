@@ -158,6 +158,8 @@ export default async function (pi: any) {
   const args: string[] = JSON.parse(take("RUSTCODE_PI_MCP_ARGS") ?? "[]");
   const token = take("RUSTCODE_ORCHESTRATOR_TOKEN");
   const servers: ServerSpec[] = JSON.parse(take("RUSTCODE_PI_MCP_SERVERS") ?? "[]");
+  const skillPaths: string[] = JSON.parse(take("RUSTCODE_PI_SKILLS") ?? "[]");
+  pi.on("resources_discover", async () => ({ skillPaths }));
   const settings = Object.fromEntries(SERVER_SETTINGS.flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])));
 
   const starts: Promise<void>[] = [];
