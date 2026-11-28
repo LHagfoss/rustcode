@@ -133,7 +133,7 @@ the default harness, the theme) answer reads at once and show the thread's
 approval card, with the value before and after, for every change;
 `transfer_session` moves a thread to another harness, account and model. See
 [configuration.md](configuration.md) › Server settings across machines and
-[mcp-outside-agents.md](mcp-outside-agents.md) for the Admin level an outside
+[mcp-outside-agents.md](mcp-outside-agents.md) for the Full level an outside
 agent needs to change anything.
 
 ### From a thread's shell: `rc tools`, `rc secret`, `rc terminal`

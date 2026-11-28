@@ -87,18 +87,18 @@ impl Scope {
     pub fn label(self) -> &'static str {
         match self {
             Self::ReadOnly => "Read-only",
-            Self::Delegate => "Delegate",
+            Self::Delegate => "Threads",
             Self::Manage => "Manage",
-            Self::Admin => "Admin",
+            Self::Admin => "Full",
         }
     }
 
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim().to_lowercase().replace('-', "_").as_str() {
             "read_only" | "readonly" | "read" => Some(Self::ReadOnly),
-            "delegate" => Some(Self::Delegate),
+            "threads" | "delegate" => Some(Self::Delegate),
             "manage" => Some(Self::Manage),
-            "admin" => Some(Self::Admin),
+            "full" | "admin" => Some(Self::Admin),
             _ => None,
         }
     }
@@ -1289,7 +1289,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads, `read_thread` reads one, and `list_jobs` lists jobs. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_job`, `update_job`, `run_job` and `delete_job` manage jobs (once, recurring or webhook) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads, `read_thread` reads one, and `list_jobs` lists jobs. `thread_usage` and `query_data` answer usage questions. With Threads access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_job`, `update_job`, `run_job` and `delete_job` manage jobs (once, recurring or webhook) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Full access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1382,9 +1382,9 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
         }
         if crate::manage::is_tool(&name) {
             let note = if scope >= Scope::Admin {
-                "\n\n[Outside agent: changes need Admin access, which this connection has; the user may be asked to approve them in RustCode.]"
+                "\n\n[Outside agent: changes need Full access, which this connection has; the user may be asked to approve them in RustCode.]"
             } else {
-                "\n\n[Outside agent: reads only; changes need Admin access, which this connection does not have.]"
+                "\n\n[Outside agent: reads only; changes need Full access, which this connection does not have.]"
             };
             if let Some(description) = entry.get("description").and_then(Value::as_str) {
                 entry["description"] = json!(format!("{description}{note}"));
@@ -1609,6 +1609,8 @@ mod tests {
         assert!(Scope::ReadOnly < Scope::Delegate && Scope::Delegate < Scope::Manage);
         assert_eq!(Scope::parse("read-only"), Some(Scope::ReadOnly));
         assert_eq!(Scope::parse(" Delegate "), Some(Scope::Delegate));
+        assert_eq!(Scope::parse("threads"), Some(Scope::Delegate));
+        assert_eq!(Scope::parse("Full"), Some(Scope::Admin));
         assert_eq!(Scope::parse("root"), None);
         assert_eq!(
             required_scope(super::super::MERGE_WHEN_GREEN),
@@ -1686,14 +1688,14 @@ mod tests {
             (
                 super::super::START_SESSION,
                 json!({ "prompt": "go", "project": "/work/app" }),
-                "Delegate",
+                "Threads",
             ),
             (
                 super::super::MESSAGE_SESSION,
                 json!({ "session_id": "t", "message": "hi" }),
-                "Delegate",
+                "Threads",
             ),
-            (super::super::FAN_OUT, json!({}), "Delegate"),
+            (super::super::FAN_OUT, json!({}), "Threads"),
             (
                 super::super::MERGE_WHEN_GREEN,
                 json!({ "session_id": "t" }),
@@ -1725,8 +1727,8 @@ mod tests {
         let named = json!({ "session_id": "t" });
         // Read-only: every tool that changes a thread.
         for (tool, needs) in [
-            (super::super::FAN_OUT, "Delegate"),
-            (super::super::INTERRUPT_SESSION, "Delegate"),
+            (super::super::FAN_OUT, "Threads"),
+            (super::super::INTERRUPT_SESSION, "Threads"),
             (super::super::UPDATE_SESSION, "Manage"),
             (super::super::CONFIGURE_SESSION, "Manage"),
             (super::super::MERGE_WHEN_GREEN, "Manage"),
@@ -1813,7 +1815,7 @@ mod tests {
         let refused = fixture.call(&manage, tool, write.clone()).await;
         assert!(!refused.success);
         assert!(
-            refused.content.contains("needs Admin access"),
+            refused.content.contains("needs Full access"),
             "{}",
             refused.content
         );
@@ -2144,7 +2146,7 @@ mod tests {
         let refused = fixture
             .call(&token, super::super::START_SESSION, args)
             .await;
-        assert!(!refused.success && refused.content.contains("Delegate"));
+        assert!(!refused.success && refused.content.contains("Threads"));
         assert_eq!(fixture.ran(), 1);
     }
 
@@ -2367,7 +2369,7 @@ mod tests {
             start["description"]
                 .as_str()
                 .unwrap()
-                .contains("needs Delegate access")
+                .contains("needs Threads access")
         );
         let grant = Grant {
             expires_at: None,
@@ -2385,7 +2387,7 @@ mod tests {
             oauth_client: None,
         };
         let text = instructions(&grant);
-        assert!(text.contains("Codex") && text.contains("Delegate") && text.contains("whoami"));
+        assert!(text.contains("Codex") && text.contains("Threads") && text.contains("whoami"));
         assert!(text.contains("put to the user"));
     }
 

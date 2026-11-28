@@ -393,7 +393,7 @@ mod tests {
         .await;
         assert!(!start.success);
         assert!(
-            start.content.contains("needs Delegate access")
+            start.content.contains("needs Threads access")
                 && start.content.contains("ChatGPT via the hub vps"),
             "{}",
             start.content

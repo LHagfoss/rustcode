@@ -281,7 +281,7 @@ pub fn scope_points(
         Scope::Manage => (
             "Run work end to end",
             &[
-                "Everything Delegate can",
+                "Everything Threads can",
                 "Merge, clean up, projects and scheduled work",
                 "Threads it starts may run with Full access",
             ],
