@@ -217,7 +217,7 @@ impl Adapter {
         }
         let (child, stdout, stdin) = process::spawn_with(
             &harness.id,
-            &harness.command,
+            &super::npx::with_pi_steering(harness),
             cwd,
             options.log_session.clone(),
             &env,

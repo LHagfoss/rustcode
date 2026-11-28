@@ -561,8 +561,9 @@ What each part does for an external thread:
   input itself, so RustCode writes nothing into that pipe — the child's stdin
   is the ACP channel, and a raw stream-json line there would break it. An
   agent that advertises no steering waits for the next turn instead (Gemini
-  CLI, OpenCode, and `pi-acp` 0.0.34, which queues a prompt sent mid-turn
-  behind the running one even though Pi itself has steering modes). The same
+  CLI and OpenCode). RustCode adds the steering extension to its pinned
+  `pi-acp` adapter at launch and forwards live input through Pi’s native
+  `steer` RPC. The same
   wait applies to the built-in harness for a message with pictures, and to it
   alone while an approval or a question waits on the user: it reads a steer
   between steps only, where Codex and an ACP agent take one with the card up.
