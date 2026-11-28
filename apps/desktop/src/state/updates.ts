@@ -21,7 +21,11 @@ import {
   type UpdateInfo,
   updateChannels,
 } from "../lib/updater";
+import { askConfirm, request, toast, useApp } from "./store";
 import { isRunning, type ThreadTurn } from "./thread";
+import { compareVersions, newerVersion, versionParts } from "./versions";
+
+export { compareVersions, newerVersion };
 
 /** How often the app checks while its window is in front: a HEAD request to the release page. */
 export const UPDATE_CHECK_MS = 30_000;
@@ -165,61 +169,6 @@ export function readAutoInstall(value: string | null): boolean {
 /** Whether a version is a prerelease: a beta, as `1.21.0-beta.2`. */
 export function isPrerelease(version: string): boolean {
   return versionParts(version)[1].length > 0;
-}
-
-/**
- * The version and its prerelease fields: `1.21.0-beta.10` is
- * `[[1,21,0],["beta",10]]`. Build metadata (`1.21.0+build.7`) takes no part in
- * ordering, so it is dropped.
- */
-function versionParts(version: string): [number[], string[]] {
-  const text = version.trim().replace(/^v/, "").split("+")[0] ?? "";
-  const dash = text.indexOf("-");
-  const core = (dash === -1 ? text : text.slice(0, dash)).split(".");
-  const pre =
-    dash === -1
-      ? []
-      : text
-          .slice(dash + 1)
-          .split(".")
-          .filter(Boolean);
-  return [core.map((n) => Number.parseInt(n, 10) || 0), pre];
-}
-
-/** Semver's order for one prerelease field: numbers count as numbers, before text. */
-function compareIdentifier(a: string, b: string): number {
-  const [na, nb] = [/^\d+$/.test(a), /^\d+$/.test(b)];
-  if (na && nb) return Math.sign(Number(a) - Number(b));
-  if (na) return -1;
-  if (nb) return 1;
-  return a === b ? 0 : a < b ? -1 : 1;
-}
-
-/** Semver's order: `1.21.0-beta.2` is older than `1.21.0`, and `.10` newer than `.9`. */
-export function compareVersions(a: string, b: string): number {
-  const [coreA, preA] = versionParts(a);
-  const [coreB, preB] = versionParts(b);
-  for (let i = 0; i < Math.max(coreA.length, coreB.length); i++) {
-    const left = coreA[i] ?? 0;
-    const right = coreB[i] ?? 0;
-    if (left !== right) return left > right ? 1 : -1;
-  }
-  // A release is newer than any prerelease of it.
-  if (preA.length === 0 || preB.length === 0) {
-    return preA.length === preB.length ? 0 : preA.length ? -1 : 1;
-  }
-  // Field by field up to the shorter suffix, then the longer one is newer:
-  // `1.0.0-alpha` is older than `1.0.0-alpha.1`, and the order holds both ways.
-  for (let i = 0; i < Math.min(preA.length, preB.length); i++) {
-    const order = compareIdentifier(preA[i]!, preB[i]!);
-    if (order !== 0) return order;
-  }
-  return Math.sign(preA.length - preB.length);
-}
-
-/** `0.116.0` is newer than `0.115.2`; a beta is older than the release it leads to. */
-export function newerVersion(a: string, b: string): boolean {
-  return compareVersions(a, b) > 0;
 }
 
 /**
@@ -451,7 +400,6 @@ export function installNowLabel(resume: boolean): string {
  * once; off, it asks first, as Update Now does.
  */
 export async function installNow(): Promise<string | null> {
-  const { useApp, askConfirm } = await import("./store");
   if (useApp.getState().resumeAfterRestart) return applyUpdate();
   askConfirm({
     title: "Install the update now?",
@@ -474,7 +422,6 @@ export async function installNow(): Promise<string | null> {
  * method answers an error, which is ignored.
  */
 export async function claimUpdateRequest(): Promise<boolean> {
-  const { request, toast } = await import("./store");
   let requested = false;
   try {
     const answer = await request(Method.machineUpdate, { action: "claim" }, 5_000);
@@ -505,8 +452,6 @@ let autoTimer: ReturnType<typeof setTimeout> | undefined;
 export function maybeAutoInstall() {
   clearTimeout(autoTimer);
   void (async () => {
-    // The store imports this module through the machines list, so it loads on demand.
-    const { useApp, toast } = await import("./store");
     const { info, channel, skipped, install, autoInstall, backoff } = useUpdates.getState();
     const retry = backoff?.version === info?.latest ? backoff : null;
     if (retry && autoRetryDelay(retry.failures) === null) return;
@@ -695,7 +640,6 @@ export const UPDATE_BUSY_MESSAGE =
  * `applyUpdate` does; null while it asks or waits.
  */
 export async function requestUpdate(): Promise<string | null> {
-  const { useApp, askConfirm } = await import("./store");
   const { info, channel } = useUpdates.getState();
   const busy = anyThreadBusy(useApp.getState().threads);
   if (!busy || !info || !offersUpdate(info, channel) || !info.canInstall) return applyUpdate();
@@ -723,7 +667,6 @@ export async function requestUpdate(): Promise<string | null> {
 
 /** An install that failed outside Settings: the toast, with the release page to fall back on. */
 async function announceFailure(failed: string) {
-  const { toast } = await import("./store");
   const page = useUpdates.getState().info?.page;
   toast(`The update did not install: ${failed}`, "error", {
     action: { label: "Release page", run: () => page && openExternal(page) },

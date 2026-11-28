@@ -19,7 +19,7 @@ import { Method } from "../acp/types";
 import { type Machine, machineName, updateAdvice, useMachines } from "./machines";
 import { errorText } from "./store";
 import { connectionFor } from "./threadMachines";
-import { compareVersions } from "./updates";
+import { compareVersions } from "./versions";
 
 /** Where an update of another machine stands, as the row shows it. */
 export type RemoteUpdate =

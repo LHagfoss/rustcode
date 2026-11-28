@@ -735,28 +735,55 @@ describe("smart ui", () => {
 
   /** `CHART_THEME_SCRIPT` against a stub Chart, with a canvas that rejects bad colours. */
   function runChartTheme(options: { vars?: (name: string) => string; reduced?: boolean } = {}) {
+    interface StubDataset {
+      label?: string;
+      data: number[];
+      borderColor?: string;
+      fill?: boolean;
+      backgroundColor?: unknown;
+    }
+    interface StubChart {
+      config: { type: string; options: Record<string, unknown> };
+      data: { labels: string[]; datasets: StubDataset[] };
+      chartArea: { top: number; bottom: number };
+      ctx: { createLinearGradient: () => typeof gradient };
+      width: number;
+      height: number;
+      options: Record<string, unknown>;
+    }
+    interface StubPlugin {
+      id: string;
+      beforeUpdate: (chart: StubChart) => void;
+      afterRender: (chart: { width: number; height: number; resize: () => void }) => void;
+      beforeDatasetsDraw: (chart: unknown, args: unknown, opts: unknown) => void;
+      afterDatasetsDraw: (chart: unknown, args: unknown, opts: unknown) => void;
+    }
     const stops: string[] = [];
-    const defaults: Record<string, any> = {
+    const defaults = {
       color: "",
       borderColor: "#ffffff0f",
       font: { family: "", size: 0 },
       responsive: false,
       maintainAspectRatio: true,
       resizeDelay: 100,
-      animation: { duration: 1000, easing: "easeOutQuart" },
+      animation: { duration: 1000, easing: "easeOutQuart" } as false | { duration: number; easing: string },
       plugins: {
         colors: { enabled: true },
-        tooltip: {},
-        legend: { labels: {}, onHover: null, onLeave: null },
+        tooltip: {} as Record<string, unknown>,
+        legend: { labels: {} as Record<string, unknown>, onHover: null as unknown, onLeave: null as unknown },
       },
       scale: { grid: { color: "" } },
-      elements: { line: {}, point: {}, bar: {} },
+      elements: {
+        line: {} as Record<string, unknown>,
+        point: {} as Record<string, unknown>,
+        bar: {} as Record<string, unknown>,
+      },
     };
-    const registered: any[] = [];
+    const registered: StubPlugin[] = [];
     const Chart = {
       defaults,
       instances: {} as Record<string, unknown>,
-      register: (...plugins: unknown[]) => registered.push(...plugins),
+      register: (...plugins: StubPlugin[]) => registered.push(...plugins),
     };
     const gradient = {
       addColorStop: (_at: number, colour: string) => {
@@ -783,22 +810,22 @@ describe("smart ui", () => {
       undefined,
       Chart,
     );
-    const chart = (type: string, labels: string[], datasets: any[]) => ({
-      config: { type, options: {} as Record<string, any> },
+    const chart = (type: string, labels: string[], datasets: StubDataset[]): StubChart => ({
+      config: { type, options: {} },
       data: { labels, datasets },
       chartArea: { top: 0, bottom: 100 },
       ctx: { createLinearGradient: () => gradient },
       width: 100,
       height: 100,
-      options: {} as Record<string, any>,
+      options: {},
     });
     return {
       defaults,
       stops,
       gradient,
       chart,
-      plugin: registered.find((p) => p.id === "rcSeries"),
-      marks: registered.find((p) => p.id === "rcMarks"),
+      plugin: registered.find((p) => p.id === "rcSeries")!,
+      marks: registered.find((p) => p.id === "rcMarks")!,
     };
   }
 
@@ -826,11 +853,15 @@ describe("smart ui", () => {
     // A line is filled with a gradient of its own colour, from colour to nothing.
     const line = chart("line", ["Mon", "Tue"], [{ label: "Runs", data: [1, 2] }]);
     plugin.beforeUpdate(line);
-    const lineSet = line.data.datasets[0] as any;
+    const lineSet = line.data.datasets[0]!;
     expect(lineSet.borderColor).toBe("#0a84ff");
     expect(lineSet.fill).toBe(true);
     expect(typeof lineSet.backgroundColor).toBe("function");
-    expect(lineSet.backgroundColor({ chart: line, dataset: lineSet })).toBe(gradient);
+    const lineBg = lineSet.backgroundColor as (ctx: {
+      chart: typeof line;
+      dataset: typeof lineSet;
+    }) => unknown;
+    expect(lineBg({ chart: line, dataset: lineSet })).toBe(gradient);
     expect(stops).toEqual(["rgba(10, 132, 255, 0.3)", "rgba(10, 132, 255, 0)"]);
     // The view's own interaction wins; otherwise ours answers along the axis.
     expect(line.config.options.interaction).toEqual({ mode: "index", intersect: false });
@@ -838,24 +869,28 @@ describe("smart ui", () => {
     // A donut gets one series colour per slice, and answers to the pointer.
     const donut = chart("doughnut", ["a", "b"], [{ data: [1, 2] }]);
     plugin.beforeUpdate(donut);
-    expect((donut.data.datasets[0] as any).backgroundColor).toEqual(["#0a84ff", "#ff9f0a"]);
+    expect(donut.data.datasets[0]!.backgroundColor).toEqual(["#0a84ff", "#ff9f0a"]);
     expect(donut.config.options.interaction).toEqual({ mode: "nearest", intersect: true });
 
     // A dataset the view coloured itself is left exactly as it is.
     const own = chart("bar", ["a"], [{ data: [1], backgroundColor: "red", borderColor: "blue" }]);
     plugin.beforeUpdate(own);
-    expect((own.data.datasets[0] as any).backgroundColor).toBe("red");
-    expect((own.data.datasets[0] as any).borderColor).toBe("blue");
+    expect(own.data.datasets[0]!.backgroundColor).toBe("red");
+    expect(own.data.datasets[0]!.borderColor).toBe("blue");
   });
 
   test("a missing series variable never hands a canvas an unparseable colour", () => {
     const { stops, chart, plugin } = runChartTheme();
     const line = chart("line", ["a"], [{ data: [1] }]);
     expect(() => plugin.beforeUpdate(line)).not.toThrow();
-    const dataset = line.data.datasets[0] as any;
+    const dataset = line.data.datasets[0]!;
     // Falls back to the themed border, so the line is still there rather than invisible.
     expect(dataset.borderColor).toBe("#8e8e93");
-    expect(() => dataset.backgroundColor({ chart: line, dataset })).not.toThrow();
+    const datasetBg = dataset.backgroundColor as (ctx: {
+      chart: typeof line;
+      dataset: typeof dataset;
+    }) => unknown;
+    expect(() => datasetBg({ chart: line, dataset })).not.toThrow();
     // Still a real colour, so the chart is drawn rather than aborting the frame.
     expect(stops).toEqual(["rgba(142, 142, 147, 0.3)", "rgba(142, 142, 147, 0)"]);
   });
@@ -866,9 +901,25 @@ describe("smart ui", () => {
   });
 
   test("the presets draw with the real Chart.js", async () => {
+    interface LiveChart {
+      attached: boolean;
+      canvas: unknown;
+      chartArea?: { width: number };
+      scales: {
+        x: { options: { grid: { display: boolean } } };
+        y: { options: { border: { display: boolean } } };
+      };
+      resize: (w: number, h: number) => void;
+      update: () => void;
+      destroy: () => void;
+    }
+    interface LiveChartCtor {
+      new (canvas: unknown, config: unknown): LiveChart;
+      instances: Record<string, LiveChart>;
+    }
     // The page's own globals, borrowed for one test: the library is the bundled
     // build, a canvas is a stub, and the animation frames are pumped by hand.
-    const g = globalThis as any;
+    const g = globalThis as unknown as Record<string, unknown>;
     const saved = new Map<string, unknown>();
     for (const key of [
       "window",
@@ -903,7 +954,7 @@ describe("smart ui", () => {
       ),
     };
     const makeCanvas = () => {
-      const ctx: any = {
+      const ctx: Record<string, unknown> = {
         canvas: null,
         createLinearGradient: () => ({
           addColorStop: (_at: number, colour: string) => {
@@ -957,7 +1008,7 @@ describe("smart ui", () => {
         addEventListener: () => undefined,
         removeEventListener: () => undefined,
       };
-      const canvas: any = {
+      const canvas: Record<string, unknown> = {
         width: 300,
         height: 150,
         style: {},
@@ -1027,7 +1078,7 @@ describe("smart ui", () => {
         new URL("../../node_modules/chart.js/dist/chart.umd.js", import.meta.url),
       ).text();
       new Function(library)();
-      const Chart = g.Chart;
+      const Chart = g.Chart as LiveChartCtor;
       expect(typeof Chart).toBe("function");
 
       new Function(
@@ -1040,11 +1091,11 @@ describe("smart ui", () => {
         CHART_THEME_SCRIPT,
       )(g, g.document, g.getComputedStyle, g.matchMedia, g.requestAnimationFrame, Chart);
 
-      const line: any = new Chart(canvases[0], {
+      const line = new Chart(canvases[0], {
         type: "line",
         data: { labels: ["Mon", "Tue", "Wed"], datasets: [{ label: "Runs", data: [1, 2, 3] }] },
       });
-      const donut: any = new Chart(canvases[1], {
+      const donut = new Chart(canvases[1], {
         type: "doughnut",
         data: { labels: ["a", "b"], datasets: [{ data: [1, 2] }] },
       });
@@ -1078,8 +1129,8 @@ describe("smart ui", () => {
       const scripts = [...(part?.source ?? "").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBe(1);
       for (const code of scripts) new Function("Chart", "document", code)(Chart, g.document);
-      const dash = Object.values(Chart.instances as Record<string, any>).filter((c) =>
-        [canvases[2], canvases[3]].includes(c.canvas),
+      const dash = Object.values(Chart.instances).filter((c) =>
+        (canvases.slice(2, 4) as unknown[]).includes(c.canvas),
       );
       expect(dash.length).toBe(2);
       for (const chart of dash) {
@@ -1096,7 +1147,7 @@ describe("smart ui", () => {
       expect(texts).toContain("normal");
       expect(texts.some((t) => /^\d{3}$/.test(t))).toBe(true);
       // Quiet axes: no vertical rules on the category axis, no axis line.
-      const hours = dash.find((c) => c.canvas === canvases[2]);
+      const hours = dash.find((c) => c.canvas === canvases[2])!;
       expect(hours.scales.x.options.grid.display).toBe(false);
       expect(hours.scales.y.options.border.display).toBe(false);
       for (const chart of dash) chart.destroy();

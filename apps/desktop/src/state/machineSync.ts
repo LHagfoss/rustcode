@@ -6,6 +6,7 @@ import type { AcpConnection } from "../acp/jsonrpc";
 import { byActivity, type SessionSummary } from "../acp/types";
 import { type ThreadStatus, V2Method } from "../acp/v2";
 import { changesFor, type OutboxChange, pendingStatus, removeChange, resolveChange } from "./machineOutbox";
+import { useMachines } from "./machines";
 import {
   type AppState,
   connectionForThread,
@@ -188,7 +189,6 @@ export async function flushMachineOutbox(
  * the change stops covering it, until the machine's next list says the same.
  */
 async function keepSent(host: string, sessionId: string, change: OutboxChange): Promise<void> {
-  const { useMachines } = await import("./machines");
   useMachines.setState((state) => {
     const rows = state.sessions[host];
     if (!rows?.some((row) => row.id === sessionId)) return {};

@@ -5,6 +5,11 @@
 //   owner's passkey; ACP over the hub's `/app/acp` socket.
 // - Mock: an in-process fake engine (`mock.ts`) for tests and screenshots.
 
+import { activeTransport, shellCall } from "../lib/shell";
+import { isTauri } from "./isTauri";
+
+export { isTauri };
+
 export type TransportEvent =
   | { type: "line"; line: string }
   /** Several stdout lines read together (the shell batches what is already buffered). */
@@ -110,8 +115,6 @@ export class MachineTransport implements Transport {
       await invoke("machine_connect", { id: this.machineId, onEvent: channel });
       return;
     }
-    // Loaded here, not at the top: lib/shell.ts reads isTauri from this module.
-    const { activeTransport, shellCall } = await import("../lib/shell");
     const answer = await shellCall<{ connected?: boolean } | null>("machine_connect", {
       id: this.machineId,
     });
@@ -320,10 +323,6 @@ export function signOutOfHub() {
   form.action = "/logout";
   document.body.appendChild(form);
   form.submit();
-}
-
-export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 /** Picks the transport: Tauri inside the app, else `?transport=` / `VITE_TRANSPORT`, else the bridge. */

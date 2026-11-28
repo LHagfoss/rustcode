@@ -18,6 +18,7 @@ import { arr, type Json, type JsonObject, obj } from "../acp/jsonrpc";
 import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
+import { setAutoCompactMode, setAutoCompactThreshold } from "./autoCompactRun";
 import { rememberConfigIssues } from "./configIssues";
 import { useMachines } from "./machines";
 import { readProjectBook, updateProjectEntry } from "./projectBook";
@@ -44,7 +45,28 @@ import {
   scopeValuesMixed,
   serverSetting,
 } from "./settingsRegistry";
-import { connectionFor, errorText, type NewThreadChoice, toast, useApp } from "./store";
+import {
+  clearNewThreadDraft,
+  connectionFor,
+  errorText,
+  type NewThreadChoice,
+  setContinueAfterLimit,
+  setDefaultHarness,
+  setDefaultPermissionMode,
+  setHarnessEnabled,
+  setLimitFallback,
+  setLimitFallbackMap,
+  setOrchestration,
+  setProjectPermissionMode,
+  setReadAcrossProjects,
+  setResumeAfterRestart,
+  setThreadLimit,
+  setTotalLimit,
+  setTrustDelegateAccounts,
+  setWakeBatchSeconds,
+  toast,
+  useApp,
+} from "./store";
 import { LOCAL_HOST } from "./threadKeys";
 import { whenPrimaryWindow } from "./windowSync";
 
@@ -337,47 +359,44 @@ export async function loadScopeSettings(machines: ScopeMachine[]): Promise<void>
 }
 
 /** Apply a server's values to the local app, so its behaviour follows them. */
-function applyLocalSettings(values: Record<string, Json | undefined>): Promise<void> {
-  return Promise.all([import("./store"), import("./autoCompactRun")]).then(([store, autoCompact]) => {
-    const text = (key: ServerSettingKey) => {
-      const value = values[key];
-      return typeof value === "string" ? value : undefined;
-    };
-    const bool = (key: ServerSettingKey) => {
-      const value = values[key];
-      return typeof value === "boolean" ? value : undefined;
-    };
-    const number = (key: ServerSettingKey) => {
-      const value = values[key];
-      return typeof value === "number" ? value : undefined;
-    };
-    const mode = text("default-permission-mode");
-    if (mode === "ask" || mode === "edits" || mode === "full") store.setDefaultPermissionMode(mode);
-    const resume = bool("resume-after-restart");
-    if (resume !== undefined) store.setResumeAfterRestart(resume);
-    const limit = bool("continue-after-limit");
-    if (limit !== undefined) store.setContinueAfterLimit(limit);
-    const compact = text("auto-compact-mode");
-    if (compact === "off" || compact === "size" || compact === "cache")
-      autoCompact.setAutoCompactMode(compact);
-    const threshold = number("auto-compact-threshold");
-    if (threshold !== undefined) autoCompact.setAutoCompactThreshold(threshold);
-    const orchestration = bool("orchestration");
-    if (orchestration !== undefined) store.setOrchestration(orchestration);
-    const total = number("delegates-total");
-    if (total !== undefined) store.setTotalLimit(total);
-    const perThread = number("delegates-per-thread");
-    if (perThread !== undefined) store.setThreadLimit(perThread);
-    const trust = bool("trust-delegate-accounts");
-    if (trust !== undefined) store.setTrustDelegateAccounts(trust);
-    const readAcross = bool("read-across-projects");
-    if (readAcross !== undefined) store.setReadAcrossProjects(readAcross);
-    const fallback = bool("limit-fallback");
-    if (fallback !== undefined) store.setLimitFallback(fallback);
-    if (Array.isArray(values["limit-fallback-map"])) store.setLimitFallbackMap(values["limit-fallback-map"]);
-    const batch = number("wake-batch-seconds");
-    if (batch !== undefined) store.setWakeBatchSeconds(batch);
-  });
+function applyLocalSettings(values: Record<string, Json | undefined>): void {
+  const text = (key: ServerSettingKey) => {
+    const value = values[key];
+    return typeof value === "string" ? value : undefined;
+  };
+  const bool = (key: ServerSettingKey) => {
+    const value = values[key];
+    return typeof value === "boolean" ? value : undefined;
+  };
+  const number = (key: ServerSettingKey) => {
+    const value = values[key];
+    return typeof value === "number" ? value : undefined;
+  };
+  const mode = text("default-permission-mode");
+  if (mode === "ask" || mode === "edits" || mode === "full") setDefaultPermissionMode(mode);
+  const resume = bool("resume-after-restart");
+  if (resume !== undefined) setResumeAfterRestart(resume);
+  const limit = bool("continue-after-limit");
+  if (limit !== undefined) setContinueAfterLimit(limit);
+  const compact = text("auto-compact-mode");
+  if (compact === "off" || compact === "size" || compact === "cache") setAutoCompactMode(compact);
+  const threshold = number("auto-compact-threshold");
+  if (threshold !== undefined) setAutoCompactThreshold(threshold);
+  const orchestration = bool("orchestration");
+  if (orchestration !== undefined) setOrchestration(orchestration);
+  const total = number("delegates-total");
+  if (total !== undefined) setTotalLimit(total);
+  const perThread = number("delegates-per-thread");
+  if (perThread !== undefined) setThreadLimit(perThread);
+  const trust = bool("trust-delegate-accounts");
+  if (trust !== undefined) setTrustDelegateAccounts(trust);
+  const readAcross = bool("read-across-projects");
+  if (readAcross !== undefined) setReadAcrossProjects(readAcross);
+  const fallback = bool("limit-fallback");
+  if (fallback !== undefined) setLimitFallback(fallback);
+  if (Array.isArray(values["limit-fallback-map"])) setLimitFallbackMap(values["limit-fallback-map"]);
+  const batch = number("wake-batch-seconds");
+  if (batch !== undefined) setWakeBatchSeconds(batch);
 }
 
 /**
@@ -401,7 +420,7 @@ export function onServerSettingsChanged(host: string, params: JsonObject): void 
   settingsRevision.set(host, (settingsRevision.get(host) ?? 0) + 1);
   remember(host, settled);
   if (host === LOCAL_HOST) {
-    void applyLocalSettings(settled);
+    applyLocalSettings(settled);
     // A machine that follows this computer's settings gets the change too (state/settingsFollow.ts).
     void import("./settingsFollow").then((follow) => follow.followLocalChange());
   }
@@ -432,7 +451,7 @@ export function hydrateLocalServerSettings(): Promise<void> {
       if (!values) return;
       remember(LOCAL_HOST, values);
       // Applied before hydration counts as done, so nothing set after it is overwritten late.
-      await applyLocalSettings(values);
+      applyLocalSettings(values);
       await seedLocalProjectOverrides(useApp.getState().projectPermissionModes).catch(() => undefined);
     } catch {
       // An older server: nothing to apply.
@@ -521,12 +540,10 @@ function rememberProject(host: string, path: string, answer: Json): void {
  * and the approval answers read: Settings › Permissions › Projects and the project's harness.
  */
 function mirrorLocalProject(path: string, overrides: Record<string, Json>): void {
-  void import("./store").then((store) => {
-    const mode = overrides["default-permission-mode"];
-    const current = store.useApp.getState().projectPermissionModes[path];
-    const next = mode === "ask" || mode === "edits" || mode === "full" ? mode : null;
-    if ((current ?? null) !== next) store.setProjectPermissionMode(path, next, { fromServer: true });
-  });
+  const mode = overrides["default-permission-mode"];
+  const current = useApp.getState().projectPermissionModes[path];
+  const next = mode === "ask" || mode === "edits" || mode === "full" ? mode : null;
+  if ((current ?? null) !== next) setProjectPermissionMode(path, next, { fromServer: true });
   const harness = obj(overrides["default-harness"]);
   if (harness && typeof harness.harness === "string")
     updateProjectEntry(path, {
@@ -944,7 +961,6 @@ export function useMachineHarnessList(hosts: string[]): {
 /** Enable or disable one harness on one machine; answers with the machine's fresh snapshot. */
 export async function writeHarnessEnabled(host: string, id: string, enabled: boolean): Promise<void> {
   if (host === LOCAL_HOST) {
-    const { setHarnessEnabled } = await import("./store");
     await setHarnessEnabled(id, enabled);
     return;
   }
@@ -954,14 +970,12 @@ export async function writeHarnessEnabled(host: string, id: string, enabled: boo
   useMachineHarnesses.setState((state) => ({
     byHost: { ...state.byHost, [host]: snapshot },
   }));
-  const { clearNewThreadDraft } = await import("./store");
   clearNewThreadDraft(host);
 }
 
 /** Set the default harness, model and effort on one machine. */
 export async function writeDefaultHarness(host: string, choice: NewThreadChoice): Promise<void> {
   if (host === LOCAL_HOST) {
-    const { setDefaultHarness } = await import("./store");
     await setDefaultHarness(choice);
     return;
   }
@@ -976,7 +990,6 @@ export async function writeDefaultHarness(host: string, choice: NewThreadChoice)
   useMachineHarnesses.setState((state) => ({
     byHost: { ...state.byHost, [host]: snapshot },
   }));
-  const { clearNewThreadDraft } = await import("./store");
   clearNewThreadDraft(host);
 }
 

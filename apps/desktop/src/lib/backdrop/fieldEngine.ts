@@ -327,7 +327,7 @@ export class FieldEngine {
 
   private judge(late: number, cost: number, interval: number) {
     this.winN++;
-    this.winLate += late > 0 ? late : 0;
+    this.winLate += Math.max(late, 0);
     this.winCost += cost;
     const now = performance.now();
     if (now - this.winStart < 1000) return;

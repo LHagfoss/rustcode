@@ -639,7 +639,7 @@ export function DitherField({
       if (!pointerRef.current || !moving || !rect.width || !rect.height) return;
       const x = (e.clientX - rect.left) / rect.width - 0.5;
       const y = (e.clientY - rect.top) / rect.height - 0.5;
-      aim = [x < -0.5 ? -0.5 : x > 0.5 ? 0.5 : x, y < -0.5 ? -0.5 : y > 0.5 ? 0.5 : y];
+      aim = [Math.max(-0.5, Math.min(0.5, x)), Math.max(-0.5, Math.min(0.5, y))];
       if (pending) return;
       const wait = POINTER_MS - (performance.now() - lastSent);
       if (wait <= 0) flush();

@@ -640,10 +640,9 @@ the default arrow on static text; the text cursor only in fields and
 ## Icons
 
 Hugeicons' free stroke-rounded set at stroke 1.5 (2.5 for chevrons at 10–12px),
-imported from `ui/icons.tsx` under the Lucide names, with Lucide's props; never
-import `lucide-react` directly. The four shapes the set has no match for (the
-raised hand, `CircleDot`, `SunMoon`, `GitBranchPlus`) are Lucide drawn at the
-same weight in that file. Sizes, and no others
+imported from `ui/icons.tsx` under the existing icon names. The four shapes the
+set has no match for (the raised hand, `CircleDot`, `SunMoon`, `GitBranchPlus`)
+are inlined at the same weight in that file. Sizes, and no others
 (`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
 status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool

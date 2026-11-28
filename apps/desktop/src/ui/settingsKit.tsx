@@ -573,7 +573,6 @@ export function withCode(text: string): ReactNode {
     <span>
       {text.split(/(`[^`]+`)/g).map((part, i) =>
         part.length > 2 && part.startsWith("`") && part.endsWith("`") ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one fixed sentence
           <code key={i} className="selectable rounded-xs bg-fill px-1 py-px font-mono">
             {part.slice(1, -1)}
           </code>
