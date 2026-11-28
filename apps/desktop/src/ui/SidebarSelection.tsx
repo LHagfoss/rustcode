@@ -19,7 +19,10 @@ export function SidebarSelection({ hover = false }: { hover?: boolean }) {
         : list.querySelector<HTMLElement>("[data-sidebar-current]");
       const target = row && list.contains(row) && !row.closest('[data-fold="closed"]') ? row : null;
       pill.hidden = !target;
-      if (hover) pill.style.opacity = target?.querySelector("[data-sidebar-current]") ? "0" : "";
+      if (hover) {
+        const current = "[data-sidebar-current]";
+        pill.style.opacity = target?.matches(current) || target?.querySelector(current) ? "0" : "";
+      }
       if (!target) {
         previous = null;
         return;
@@ -42,7 +45,12 @@ export function SidebarSelection({ hover = false }: { hover?: boolean }) {
       const next = event.type === "pointerout" ? event.relatedTarget : event.target;
       const row = next instanceof Element ? next.closest<HTMLElement>("[data-sidebar-hover]") : null;
       if (row === hovered) return;
-      if (!row && next instanceof Element && next.closest("[data-sidebar-scroll]") && next.contains(hovered))
+      if (
+        !row &&
+        next instanceof Element &&
+        next.closest("[data-sidebar-scroll], [data-sidebar-hover-group]") &&
+        next.contains(hovered)
+      )
         return;
       hovered = row && list.contains(row) ? row : null;
       measure();
