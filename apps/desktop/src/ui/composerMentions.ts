@@ -12,8 +12,11 @@ import type { CachedPlan } from "../state/store";
 /** How long a project's file list is used before `@` lists it again. */
 export const FILES_FRESH_MS = 30_000;
 
-/** A row of the composer's drawer: a command, or one of the `@` drawer's own rows. */
-export type DrawerEntry = { kind: "command"; command: SlashCommand } | MentionEntry;
+/** A row of the composer's drawer: a command, an emoji, or a mention. */
+export type DrawerEntry =
+  | { kind: "command"; command: SlashCommand }
+  | { kind: "emoji"; glyph: string; name: string }
+  | MentionEntry;
 
 /**
  * A row of the drawer as it is drawn: a section's heading, a harness under it, or a bound row the

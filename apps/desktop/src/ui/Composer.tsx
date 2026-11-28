@@ -94,6 +94,7 @@ import {
   PlusMenu,
   WorktreeToggle,
 } from "./ComposerFooter";
+import { emojiMatches, emojiToken } from "./composerEmoji";
 import {
   ALL_MATCHES,
   type DrawerEntry,
@@ -200,6 +201,7 @@ export const Composer = memo(function Composer({
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
+  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [files, setFiles] = useState<{ cwd: string; at: number; paths: string[] } | null>(null);
   const [dropping, setDropping] = useState(false);
   // The send-later dialog: opened from the + menu, with the draft it is scheduling.
@@ -257,6 +259,9 @@ export const Composer = memo(function Composer({
   // `#`: the threads this message can point at. It opens like `/` and `@` do, and never inside a
   // word, a heading or code (state/compose.ts `hashToken`).
   const hash = dismissed === draft || slash || at ? null : hashToken(draft, caret);
+  const emoji =
+    dismissed === draft || selectionEnd !== caret || slash || hash ? null : emojiToken(draft, caret);
+  const emojiQuery = emoji?.query;
   // What is typed after the trigger, and the group the trigger narrowed to (`#` narrows to threads).
   const mentionQuery = hash?.query ?? at?.query ?? "";
   const scope: MentionScope | null = hash ? "threads" : (at?.scope ?? null);
@@ -317,6 +322,13 @@ export const Composer = memo(function Composer({
     if (slash) {
       return list.map((command, index) => ({ kind: "row", entry: { kind: "command", command }, index }));
     }
+    if (emojiQuery !== undefined) {
+      return emojiMatches(emojiQuery).map(({ glyph, name }, index) => ({
+        kind: "row",
+        entry: { kind: "emoji", glyph, name },
+        index,
+      }));
+    }
     const rows: DrawerRowItem[] = [];
     let index = 0;
     for (const node of mention) {
@@ -327,7 +339,7 @@ export const Composer = memo(function Composer({
       else rows.push(node);
     }
     return rows;
-  }, [slash, list, mention]);
+  }, [slash, list, mention, emojiQuery]);
   // What the arrows walk: a row that points at something, or a section's own open/close row.
   const picks = useMemo(
     (): DrawerPick[] =>
@@ -341,9 +353,9 @@ export const Composer = memo(function Composer({
   );
   // What is left to offer at all: an empty drawer says so where the field is about to be typed.
   const anyRows = picks.length > 0;
-  // What the drawer is: `/`'s commands, or `@` and `#`'s agents, threads and files.
-  const drawer = slash ? "commands" : hash || at ? "mentions" : null;
-  const drawerQuery = mentionQuery;
+  // The active completion drawer follows the token at the caret.
+  const drawer = slash ? "commands" : emoji ? (anyRows ? "emoji" : null) : hash || at ? "mentions" : null;
+  const drawerQuery = emojiQuery ?? mentionQuery;
   const harness = threadHarness(thread);
   const harnessName = harness?.name ?? "This harness";
   // Who the message goes to: the thread's harness, or for a new thread the one it will start on.
@@ -369,7 +381,6 @@ export const Composer = memo(function Composer({
     setCaret(caret);
     requestAnimationFrame(() => field.current?.setSelectionRange(caret, caret));
   };
-  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const highlightedDraft = useMemo(
     () =>
       draftMirror(
@@ -746,6 +757,17 @@ export const Composer = memo(function Composer({
   // own keys only ever write a token.
   const accept = (entry: DrawerEntry, run: boolean) => {
     switch (entry.kind) {
+      case "emoji": {
+        if (!emoji) return;
+        const after = draft.slice(emoji.end);
+        const inserted = entry.glyph + (after ? "" : " ");
+        const caret = emoji.start + inserted.length;
+        update(draft.slice(0, emoji.start) + inserted + after);
+        setCaret(caret);
+        setSelectionEnd(caret);
+        requestAnimationFrame(() => field.current?.setSelectionRange(caret, caret));
+        return;
+      }
       case "command":
         complete(entry.command, run);
         return;
@@ -1007,7 +1029,8 @@ export const Composer = memo(function Composer({
   // The drawer over the box: the commands `/` is looking for, the threads `#` is, or the agents and
   // files `@` is. A token that matches nothing still opens it and says so, where the field is about
   // to be typed in. It rises from the box's top edge, so it never covers the line being typed on.
-  const drawerLabel = drawer === "commands" ? "Commands" : "Agents, threads and files";
+  const drawerLabel =
+    drawer === "emoji" ? "Emoji" : drawer === "commands" ? "Commands" : "Agents, threads and files";
   // What the drawer says when nothing answers what is typed, by what was asked for.
   const emptyText =
     drawer === "commands"

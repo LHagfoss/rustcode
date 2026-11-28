@@ -115,6 +115,17 @@ export function ComposerDrawer({
   const drawerRow = (entry: DrawerEntry, i: number) => {
     const row = drawerRowProps(i);
     switch (entry.kind) {
+      case "emoji":
+        return (
+          <button key={`emoji:${entry.name}`} {...row} onClick={() => accept(entry, false)}>
+            <span aria-hidden="true" className="w-4 shrink-0 text-center">
+              {entry.glyph}
+            </span>
+            <span className={DRAWER_NAME}>
+              <Marked text={`:${entry.name}:`} query={drawerQuery} />
+            </span>
+          </button>
+        );
       case "command":
         return (
           <button key={`c:${entry.command.name}`} {...row} onClick={() => complete(entry.command, true)}>
