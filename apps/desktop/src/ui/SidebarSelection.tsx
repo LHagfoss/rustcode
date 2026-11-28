@@ -5,17 +5,21 @@ import { SIDEBAR_ROW_CURRENT, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
  * The fill of the open row: one layer over the nav rows and the thread list that slides between
  * them, follows the list as it scrolls and is clipped to it.
  */
-export function SidebarSelection() {
+export function SidebarSelection({ hover = false }: { hover?: boolean }) {
   const highlight = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const pill = highlight.current;
     const list = pill?.parentElement;
     if (!pill || !list) return;
+    let hovered: HTMLElement | null = null;
     let previous: HTMLElement | null = null;
     const measure = (scrolling = false) => {
-      const row = list.querySelector<HTMLElement>("[data-sidebar-current]");
-      const target = row?.closest('[data-fold="closed"]') ? null : row;
+      const row = hover
+        ? hovered?.closest<HTMLElement>("[data-sidebar-hover]")
+        : list.querySelector<HTMLElement>("[data-sidebar-current]");
+      const target = row && list.contains(row) && !row.closest('[data-fold="closed"]') ? row : null;
       pill.hidden = !target;
+      if (hover) pill.style.opacity = target?.querySelector("[data-sidebar-current]") ? "0" : "";
       if (!target) {
         previous = null;
         return;
@@ -32,6 +36,16 @@ export function SidebarSelection() {
       pill.style.height = `${bounds.height}px`;
       pill.style.transform = `translate(${bounds.left - origin.left}px, ${bounds.top - origin.top}px)`;
       previous = target;
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      const next = event.type === "pointerout" ? event.relatedTarget : event.target;
+      const row = next instanceof Element ? next.closest<HTMLElement>("[data-sidebar-hover]") : null;
+      if (row === hovered) return;
+      if (!row && next instanceof Element && next.closest("[data-sidebar-scroll]") && next.contains(hovered))
+        return;
+      hovered = row && list.contains(row) ? row : null;
+      measure();
     };
     const resize = new ResizeObserver(() => measure());
     const onScroll = () => measure(true);
@@ -60,23 +74,31 @@ export function SidebarSelection() {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["data-sidebar-current", "data-fold"],
+      attributeFilter: ["data-sidebar-current", "data-sidebar-hover", "data-fold"],
     });
     list.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    if (hover) {
+      list.addEventListener("pointerover", onPointer);
+      list.addEventListener("pointerout", onPointer);
+    }
     observe();
     return () => {
       list.removeEventListener("scroll", onScroll, { capture: true });
+      if (hover) {
+        list.removeEventListener("pointerover", onPointer);
+        list.removeEventListener("pointerout", onPointer);
+      }
       resize.disconnect();
       mutations.disconnect();
     };
-  }, []);
+  }, [hover]);
 
   return (
     <span
       ref={highlight}
       hidden
       aria-hidden
-      className={`pointer-events-none absolute top-0 left-0 ${SIDEBAR_ROW_RADIUS} ${SIDEBAR_ROW_CURRENT} motion-safe:data-[sliding=true]:transition-transform duration-200 ease-snappy`}
+      className={`pointer-events-none absolute top-0 left-0 ${SIDEBAR_ROW_RADIUS} ${hover ? "bg-fill glass-filter" : SIDEBAR_ROW_CURRENT} motion-safe:data-[sliding=true]:transition-transform duration-200 ease-snappy`}
     />
   );
 }

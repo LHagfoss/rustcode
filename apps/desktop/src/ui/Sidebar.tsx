@@ -1265,6 +1265,7 @@ export function Sidebar() {
             className={cx("relative flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
             inert={settingsOpen}
           >
+            <SidebarSelection hover />
             <SidebarSelection />
             <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
             {toolbarOn && <SidebarToolbar />}

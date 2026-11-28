@@ -126,12 +126,7 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
-import {
-  SIDEBAR_ROW_CURRENT,
-  SIDEBAR_ROW_GROUP_HOVER,
-  SIDEBAR_ROW_LIFTED,
-  SIDEBAR_ROW_RADIUS,
-} from "./sidebarRowStyle";
+import { SIDEBAR_ROW_CURRENT, SIDEBAR_ROW_LIFTED, SIDEBAR_ROW_RADIUS } from "./sidebarRowStyle";
 import { ThreadHoverCard } from "./ThreadHoverCard";
 import { ThreadQuickActions } from "./ThreadQuickActions";
 
@@ -643,11 +638,7 @@ function RowFill({ selected, picked, lifted }: { selected: boolean; picked?: boo
         "pointer-events-none absolute inset-0",
         SIDEBAR_ROW_RADIUS,
         lifted && SIDEBAR_ROW_LIFTED,
-        picked
-          ? "bg-accent/12"
-          : selected
-            ? SIDEBAR_ROW_CURRENT
-            : cx("bg-transparent", SIDEBAR_ROW_GROUP_HOVER),
+        picked ? "bg-accent/12" : selected ? SIDEBAR_ROW_CURRENT : "group-active:bg-fill-strong",
       )}
     />
   );
@@ -925,7 +916,10 @@ export const ThreadRow = memo(function ThreadRow({
       }}
     >
       <ContextMenu.Trigger asChild>
-        <div className={cx("group relative", dragging && "cursor-grabbing")}>
+        <div
+          data-sidebar-hover={!dragging && !picked ? "" : undefined}
+          className={cx("group relative", dragging && "cursor-grabbing")}
+        >
           {/* A moment's hover says what the row has no room for: its project, harness and model,
               what it is doing, its branch and folder, and the last thing said in it. */}
           <ThreadHoverCard
@@ -1151,7 +1145,7 @@ export const PendingRow = memo(function PendingRow({
   const project = projectName(pending.worktree?.repo || pending.cwd);
   const failure = pending.failure;
   return (
-    <div className="group relative">
+    <div className="group relative" data-sidebar-hover>
       <Tooltip label={failure ? `${pending.title} · ${failure.text}` : pending.title}>
         <button
           type="button"
