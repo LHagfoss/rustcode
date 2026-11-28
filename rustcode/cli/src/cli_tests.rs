@@ -435,6 +435,24 @@ fn parses_remote_gateway_commands() {
             }
         }) if advertise == "100.64.0.7"
     ));
+    let cli = Cli::try_parse_from([
+        "rustcode",
+        "remote",
+        "relay",
+        "--advertise",
+        "relay.example.com",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Remote {
+            command: RemoteCommands::Relay {
+                ref bind,
+                port: 17880,
+                advertise: Some(ref advertise),
+            }
+        }) if bind == "0.0.0.0" && advertise == "relay.example.com"
+    ));
     for action in ["pair", "devices", "status", "stop"] {
         let cli = Cli::try_parse_from(["rustcode", "remote", action]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Remote { .. })));

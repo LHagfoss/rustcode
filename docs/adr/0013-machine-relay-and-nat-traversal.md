@@ -1,6 +1,7 @@
 # 0013: Machines reach each other through a blind, self-hostable relay
 
-Status: proposed, 2026-11-26 (#4390). Code today: `rustcode/client/src/routes.rs`,
+Status: accepted, 2026-11-28; proposed 2026-11-26 (#4390). The relay server is
+`rustcode/engine/src/remote_relay/` (`rc remote relay`). Code today: `rustcode/client/src/routes.rs`,
 `rustcode/client/src/machine.rs` (route race), `rustcode/client/src/registry.rs`
 (`RouteKind`, `is_encrypted`, `may_send_secrets`), `rustcode/engine/src/remote_gateway/tls.rs`
 and `transport.rs` (pinned gateway TLS, one port), `remote_gateway/device_key.rs` and
@@ -82,7 +83,7 @@ is set up.
 
 ## Follow-up issues (one PR each, in order)
 
-1. `feat(remote): add rc relay serve with device-key registration and blind pipes`
+1. `feat(remote): add rc remote relay with device-key registration and blind pipes` (done)
 2. `feat(client): add the Relay route kind with pinned TLS and race placement`
 3. `feat(remote): let a machine register with a relay from Settings and rc machines`
 4. `feat(remote): re-race relay connections and switch to a better route when idle`

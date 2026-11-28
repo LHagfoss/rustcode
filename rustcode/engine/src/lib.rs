@@ -93,6 +93,7 @@ mod worktrees;
 // Declared apart from the list above so it cannot collide with `remote`, the
 // protocol module of issue #1907; fold it into that tree once both have landed.
 pub mod remote_gateway;
+pub mod remote_relay;
 
 /// The one history record of a finished background task (#2232). It answers
 /// the call that started the task, the card the client already shows, or the

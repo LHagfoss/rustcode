@@ -1449,6 +1449,54 @@ phone's [remote protocol](remote-protocol/README.md): after `hub_join` and
 `hub_joined`, the hub sends `hub_call {call_id, tool, arguments, caller}` and
 the member answers `hub_result {call_id, success, content}`.
 
+## The relay
+
+A relay lets a phone or computer reach a machine when they share no LAN and
+no overlay network, without a tunnel provider that can read the traffic. It
+runs on any always-on host with a public address (a VPS) and only copies
+bytes: the gateway's pinned TLS and the device-key challenge run end to end
+through it ([ADR 0013](adr/0013-machine-relay-and-nat-traversal.md)).
+
+On the VPS:
+
+```sh
+rc remote relay --advertise relay.example.com   # default port 17880
+```
+
+It prints a join link, `rustcode-relay://relay.example.com:17880?fp=…&secret=…`.
+The fingerprint pins the relay's own certificate (`relay/tls.json`); the
+secret admits machines (`relay/relay.json`). Keep the link private. Open TCP
+`17880` in the VPS firewall.
+
+How a connection is made:
+
+1. A machine keeps one control connection to the relay, over TLS pinned to
+   the fingerprint, and registers its machine id with the secret and a
+   signature of the relay's challenge by its Ed25519 key. The first key a
+   machine id registers with is kept; another key under the same id is
+   refused.
+2. The machine tells the relay which paired devices' public keys may dial it.
+3. A device dials the relay in the clear for the machine id and signs the
+   relay's challenge with its device key. A key the machine did not list gets
+   no pipe.
+4. The relay asks the machine for a pipe; the machine opens a fresh
+   connection naming it, and the relay splices the two. From then on the
+   device speaks the gateway's TLS, pinned to the machine's certificate, and
+   the relay reads none of it.
+
+What the relay operator can see: machine ids, which device keys reach which
+machine, when, and how many bytes. Not prompts, transcripts, files, tokens or
+tool calls.
+
+Limits: 32 pipes per machine, 256 connections still handshaking, ten seconds
+to register or dial, ten seconds for the machine to open a pipe, and a pipe
+quiet for fifteen minutes is closed. A machine heard from neither frame nor
+pong for 80 seconds is dropped.
+
+Registering a machine from Settings or `rc machines`, and the relay route on
+devices, are follow-ups listed in the ADR; until they land the relay serves
+only what speaks its protocol directly.
+
 ## Not covered yet
 
 - No TLS in the phone app yet; see the warning at the top.
