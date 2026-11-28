@@ -16,7 +16,7 @@ import { isLoaded } from "../state/thread";
 //
 // This computer's row also says whether the RustCode server is installed as a background service —
 // the server that keeps this computer reachable with the app closed, and that Settings › Remote
-// access installs when network access is turned on. Threads this app runs stay in the app and end
+// access installs when remote access is turned on. Threads this app runs stay in the app and end
 // with it. A row of another machine says which RustCode version it runs, so an old one is a
 // sentence with a command, not a silent connection failure.
 

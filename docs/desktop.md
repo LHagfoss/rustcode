@@ -1089,7 +1089,8 @@ composer's keys stay outside the table.
   over it; the swatches in Settings keep moving. On a light theme the field is drawn as ink below the pane colour
   instead of light above it.
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
-  machine's switch: **Network access** turned on starts the remote gateway
+  machine's switch: **Pair device** turns remote access on (the switch is the
+  **Remote access** row at the bottom of the page) and starts the remote gateway
   (or uses the one the RustCode server runs, which keeps this computer
   reachable when the app closes) and
   lets paired devices reach every thread on this computer, across all
