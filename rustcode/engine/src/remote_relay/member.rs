@@ -48,6 +48,11 @@ pub struct RelayLink {
     /// The relay binds the machine id to it on first registration, so it is
     /// kept when the machine joins another relay.
     key: String,
+    /// The hub (its host id) that handed this machine the link, when it came
+    /// over the hub link rather than from `rc machines relay join`. The hub
+    /// replaces or drops a link it gave; one the owner joined stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<String>,
 }
 
 impl RelayLink {
@@ -73,6 +78,40 @@ impl RelayLink {
     /// Save `link` as the relay to register with, keeping the key of an
     /// earlier registration.
     pub fn join(config_dir: &Path, link: &JoinLink) -> Result<Self> {
+        Self::save(config_dir, link, None)
+    }
+
+    /// Follow the relay the hub `hub` runs: save its link, or drop the one it
+    /// gave when it runs none. True when the registration changed. A link the
+    /// owner joined is kept either way.
+    pub fn follow_hub(config_dir: &Path, hub: &str, link: Option<&str>) -> Result<bool> {
+        let saved = Self::load(config_dir)?;
+        if saved.as_ref().is_some_and(|saved| saved.hub.is_none()) {
+            return Ok(false);
+        }
+        let Some(text) = link else {
+            return Self::forget_hub(config_dir);
+        };
+        let link = JoinLink::parse(text)?;
+        if saved.as_ref().is_some_and(|saved| {
+            saved.hub.as_deref() == Some(hub) && saved.join_link().ok().as_ref() == Some(&link)
+        }) {
+            return Ok(false);
+        }
+        Self::save(config_dir, &link, Some(hub.to_owned()))?;
+        Ok(true)
+    }
+
+    /// Drop a link a hub gave, once this machine is in no hub. True when one
+    /// was dropped.
+    pub fn forget_hub(config_dir: &Path) -> Result<bool> {
+        match Self::load(config_dir)? {
+            Some(saved) if saved.hub.is_some() => Self::leave(config_dir),
+            _ => Ok(false),
+        }
+    }
+
+    fn save(config_dir: &Path, link: &JoinLink, hub: Option<String>) -> Result<Self> {
         let key = match Self::load(config_dir)? {
             Some(saved) => saved.key,
             None => {
@@ -86,6 +125,7 @@ impl RelayLink {
         let saved = Self {
             link: link.to_string(),
             key,
+            hub,
         };
         publish_private_json(&Self::path(config_dir), &saved)?;
         Ok(saved)

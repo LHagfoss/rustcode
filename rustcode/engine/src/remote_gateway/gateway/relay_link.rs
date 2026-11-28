@@ -91,13 +91,15 @@ impl Host for GatewayHost {
     }
 }
 
-/// Keep this gateway registered with its relay, if it has one, until the
-/// gateway shuts down.
+/// Keep this gateway registered with its relay, if it has one, and run the
+/// relay a hub offers its members, until the gateway shuts down.
 pub(super) async fn run(shared: Arc<Shared>) {
     let config_dir = shared.lifecycle.config_directory();
     let machine_id = shared.gateway_id.clone();
     let stop = shared.shutdown.clone();
-    member::run(config_dir, machine_id, Arc::new(GatewayHost(shared)), stop).await;
+    let hub_relay = super::hub_relay::run(Arc::clone(&shared));
+    let member = member::run(config_dir, machine_id, Arc::new(GatewayHost(shared)), stop);
+    tokio::join!(hub_relay, member);
 }
 
 #[cfg(test)]

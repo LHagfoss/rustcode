@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use rustcode::remote_gateway::hub_link::{HubConfig, HubMember, Membership, Scope};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+use rustcode::remote_relay::DEFAULT_PORT;
+use rustcode::remote_relay::member::RelayLink;
 use rustcode_client::{MachineRegistry, TokenStore};
 
 use crate::cli::HubCommands;
@@ -78,6 +80,7 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
         HubCommands::Leave => match config.member.take() {
             Some(membership) => {
                 config.save(config_dir)?;
+                RelayLink::forget_hub(config_dir)?;
                 println!(
                     "Left the hub {}. The link closes within a minute.",
                     membership.name
@@ -85,6 +88,30 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
             }
             None => println!("This machine is in no hub."),
         },
+        HubCommands::Relay { state, host } => {
+            config.relay = state == "on";
+            if let Some(host) = host {
+                let host = host.trim();
+                config.relay_host = (!host.is_empty()).then(|| host.to_owned());
+            }
+            config.save(config_dir)?;
+            if !config.relay {
+                println!(
+                    "This hub no longer runs a relay. Members that registered with it let go within a minute."
+                );
+            } else {
+                println!(
+                    "This hub runs a relay on port {DEFAULT_PORT} while its remote gateway runs, \
+                     and every member registers with it on its own. Paired devices then reach \
+                     those machines from any network; the relay sees which device reaches which \
+                     machine and how many bytes, never what they say. Let TCP port \
+                     {DEFAULT_PORT} through to this machine."
+                );
+                if !config.hub {
+                    println!("It starts once this machine is the hub (`rc machines hub on`).");
+                }
+            }
+        }
         HubCommands::Status { json } => {
             let members = if config.hub {
                 RemoteLifecycle::new(config_dir)
@@ -100,6 +127,8 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "hub": config.hub,
+                        "relay": config.relay,
+                        "relay_host": config.relay_host,
                         "member": config.member,
                         "members": members,
                     }))?
@@ -132,6 +161,16 @@ fn format_status(config: &HubConfig, members: Option<&[HubMember]>) -> String {
         return out;
     }
     out.push_str("This machine is the fleet's hub.\n");
+    if config.relay {
+        out.push_str(&format!(
+            "It runs a relay on port {DEFAULT_PORT}{}, and members register with it.\n",
+            config
+                .relay_host
+                .as_deref()
+                .map(|host| format!(" at {host}"))
+                .unwrap_or_default()
+        ));
+    }
     match members {
         None => out.push_str(
             "Its remote gateway is not running, so no machine can link to it. Start it with `rc remote start`.\n",
@@ -187,6 +226,7 @@ mod tests {
         let config = HubConfig {
             hub: true,
             member: None,
+            ..Default::default()
         };
         assert!(format_status(&config, None).contains("gateway is not running"));
         let seen = chrono::DateTime::parse_from_rfc3339("2026-11-18T21:04:00Z")
@@ -239,6 +279,7 @@ mod tests {
                 access: Scope::Delegate,
                 ask: false,
             }),
+            ..Default::default()
         };
         let text = format_status(&member, None);
         assert!(text.contains("Member of the hub vps at Threads access, without asking"));

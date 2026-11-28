@@ -33,6 +33,7 @@ use super::pairing::{PairingError, PairingState};
 use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, FrameSink};
 use super::session_registry::{HubIdentity, SessionHub};
 use super::transport;
+mod hub_relay;
 mod relay_link;
 use crate::daemon::private_files::remove_if_exists;
 use crate::daemon::protocol::{read_async_frame, write_async_frame};

@@ -301,6 +301,37 @@ async fn a_registration_from_another_protocol_version_is_refused() {
     assert_eq!(code(&reply), Some(ErrorCode::UnsupportedVersion));
 }
 
+#[test]
+fn a_hub_link_follows_the_hub_and_never_replaces_the_owners_own() {
+    use super::member::RelayLink;
+    use super::protocol::JoinLink;
+    let dir = tempfile::tempdir().unwrap();
+    let link = |host: &str| JoinLink {
+        host: host.to_owned(),
+        port: 17880,
+        fingerprint: "ab".repeat(32),
+        secret: "s3cret".into(),
+    };
+    let hub = link("hub.example.com").to_string();
+    assert!(RelayLink::follow_hub(dir.path(), "hub-id", Some(&hub)).unwrap());
+    let saved = RelayLink::load(dir.path()).unwrap().unwrap();
+    assert_eq!(saved.hub.as_deref(), Some("hub-id"));
+    assert!(!RelayLink::follow_hub(dir.path(), "hub-id", Some(&hub)).unwrap());
+
+    let moved = link("203.0.113.9").to_string();
+    assert!(RelayLink::follow_hub(dir.path(), "hub-id", Some(&moved)).unwrap());
+    assert_eq!(RelayLink::load(dir.path()).unwrap().unwrap().link, moved);
+    assert!(RelayLink::follow_hub(dir.path(), "hub-id", None).unwrap());
+    assert!(RelayLink::load(dir.path()).unwrap().is_none());
+
+    RelayLink::join(dir.path(), &link("own.example.com")).unwrap();
+    assert!(!RelayLink::follow_hub(dir.path(), "hub-id", Some(&hub)).unwrap());
+    assert!(!RelayLink::follow_hub(dir.path(), "hub-id", None).unwrap());
+    assert!(!RelayLink::forget_hub(dir.path()).unwrap());
+    let own = RelayLink::load(dir.path()).unwrap().unwrap();
+    assert!(own.hub.is_none() && own.link.contains("own.example.com"));
+}
+
 mod http_entry {
     //! The HTTP entry a phone uses: a challenge by `fetch`, then a dial that
     //! is a WebSocket upgrade the machine answers through the pipe.
