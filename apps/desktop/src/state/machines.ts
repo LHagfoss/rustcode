@@ -1352,7 +1352,7 @@ export function removeMachine(machine: Machine, onRemoved?: () => void): void {
     title: `Remove ${name}?`,
     message:
       `${name} is forgotten on this computer: its pairing token and routes are deleted, and its threads are no longer listed here. ` +
-      "This computer's access there ends too when it can be reached; otherwise revoke it there.",
+      `Access ends both ways: ${name} can no longer reach this computer, and this computer's access there ends when it can be reached.`,
     action: "Remove",
     destructive: true,
     run: () => {
@@ -1372,8 +1372,11 @@ export async function forgetMachine(machine: Machine): Promise<string> {
   const message = await shellCall<string | null>("machines_remove", { id: machine.id });
   detach(machine.id);
   void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
+  const revoke = await import("./revokeEverywhere");
+  const here = await revoke.revokeHere(machine.id);
+  void import("./remoteAccess").then((remote) => remote.refreshRemote().catch(() => null));
   await refreshMachines();
-  return message || `Removed ${machineName(machine)}.`;
+  return revoke.removedBothWays(machineName(machine), message, here);
 }
 
 /** A probe in words: `Reachable · 4 ms`, `Refused · 2 ms`, `Timed out`, `Not tested`. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addPending, answerOutcome, pendingFor, revokeSummary } from "./revokeEverywhere";
+import { addPending, answerOutcome, pendingFor, removedBothWays, revokeSummary } from "./revokeEverywhere";
 
 describe("revoke everywhere", () => {
   test("an answer is revoked, not paired, or failed", () => {
@@ -31,5 +31,15 @@ describe("revoke everywhere", () => {
     expect(pendingFor(list, "gw-pi").map((item) => item.name)).toEqual(["Laptop"]);
     expect(pendingFor(list, "gw-studio")).toEqual([]);
     expect(addPending([], "gw-laptop", "Laptop", [])).toEqual([]);
+  });
+
+  test("removing a machine says both directions ended", () => {
+    const there = "Removed Studio and ended this computer's access there.";
+    expect(removedBothWays("Studio", there, "revoked")).toBe(
+      `${there} Studio can no longer reach this computer.`,
+    );
+    expect(removedBothWays("Studio", there, "notPaired")).toBe(there);
+    expect(removedBothWays("Studio", null, "notPaired")).toBe("Removed Studio.");
+    expect(removedBothWays("Studio", there, "failed")).toContain("may still reach this computer");
   });
 });

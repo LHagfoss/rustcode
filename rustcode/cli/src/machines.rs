@@ -1070,7 +1070,33 @@ pub(crate) async fn remove(
         "{}",
         rustcode_client::removal_message(&machine.name, unpaired)
     );
+    if let Some(line) = end_access_here(config_dir, &machine).await {
+        println!("{line}");
+    }
     Ok(())
+}
+
+/// Removing a machine ends both directions: its own pairings with this computer go too.
+async fn end_access_here(
+    config_dir: &std::path::Path,
+    machine: &rustcode_client::Machine,
+) -> Option<String> {
+    let name = machine.display_name.as_deref().unwrap_or(&machine.name);
+    match rustcode::remote_gateway::lifecycle::RemoteLifecycle::new(config_dir)
+        .revoke_host(&machine.host_id)
+        .await
+    {
+        Ok((revoked, errors)) if errors.is_empty() => {
+            (!revoked.is_empty()).then(|| format!("{name} can no longer reach this computer."))
+        }
+        Ok((_, errors)) => Some(format!(
+            "warning: {name} may still reach this computer: {}. Run `rc remote revoke` here.",
+            errors.join("; ")
+        )),
+        Err(error) => Some(format!(
+            "warning: {name} may still reach this computer: {error:#}. Run `rc remote revoke` here."
+        )),
+    }
 }
 
 #[cfg(test)]

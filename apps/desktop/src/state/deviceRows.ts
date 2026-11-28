@@ -216,10 +216,10 @@ export function machineAccess(
     inbound,
     label,
     outboundText: outbound
-      ? `This computer can see and run threads on ${name}. Remove machine ends this access.`
+      ? `This computer can see and run threads on ${name}. Remove machine ends the access both ways.`
       : `This computer's pairing with ${name} ended, so it cannot reach it. Pair it again.`,
     inboundText: inbound
-      ? `${name} ${accessSentence(inbound.access ?? "full")} Revoke it under Remote access › Paired devices.`
+      ? `${name} ${accessSentence(inbound.access ?? "full")} Revoke ends only this direction; Remove machine ends both.`
       : `${name} cannot reach this computer. Allow pairs it back over the connection this computer already has.`,
   };
 }
