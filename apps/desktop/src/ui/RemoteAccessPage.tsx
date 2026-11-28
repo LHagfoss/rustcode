@@ -442,6 +442,8 @@ function routeLabel(route: RemoteRoute): string {
       return "Host name";
     case "public":
       return "Public";
+    case "relay":
+      return "Relay";
     default:
       return "Address";
   }
@@ -461,6 +463,8 @@ function routeHint(route: RemoteRoute): string {
       return "A name that follows this computer when its address changes.";
     case "public":
       return "Reachable from the internet. Plain LAN traffic is not encrypted: avoid it.";
+    case "relay":
+      return "A relay this computer is registered with, reachable from any network. Encrypted by RustCode; the relay cannot read it.";
     default:
       return "An address the gateway reports.";
   }

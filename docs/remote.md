@@ -1502,9 +1502,25 @@ to register or dial, ten seconds for the machine to open a pipe, and a pipe
 quiet for fifteen minutes is closed. A machine heard from neither frame nor
 pong for 80 seconds is dropped.
 
-Registering a machine from Settings or `rc machines`, and the relay route on
-devices, are follow-ups listed in the ADR; until they land the relay serves
-only what speaks its protocol directly.
+On each machine that should be reachable through it:
+
+```sh
+rc machines relay join 'rustcode-relay://relay.example.com:17880?fp=…&secret=…'
+rc machines relay status     # the relay it registers with
+rc machines relay leave
+```
+
+The link and a relay key of the machine's own are kept in `relay-link.json`
+(private: it holds the secret). The gateway registers within a minute while
+remote access is on, reconnects with a backoff while the relay is down, and
+reports `rustcode-relay://relay.example.com:17880` to every device that
+connects, next to its other addresses. A device that already pinned the
+machine's certificate and signs in with its device key then tries the relay
+after the LAN and overlay routes, labelled **Relay**; a device without either
+skips it, so the first connection still needs another route. In the
+machine's device list the connection shows as **Relay · Encrypted**.
+
+Registering from Settings is a follow-up listed in the ADR.
 
 ## Not covered yet
 

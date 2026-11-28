@@ -217,7 +217,7 @@ pub struct DeviceRecord {
     /// A record with a key has no token: it signs in only by signing its
     /// socket's challenge ([`super::device_key`]), and never expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_key: Option<String>,
+    pub(super) public_key: Option<String>,
 }
 
 /// One device's rotating credentials: digests only.

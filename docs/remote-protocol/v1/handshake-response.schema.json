@@ -143,6 +143,11 @@
           "const": "public",
           "description": "A public address or name. Plain LAN traffic is unencrypted, so a\nclient should prefer the other kinds.",
           "type": "string"
+        },
+        {
+          "const": "relay",
+          "description": "`rustcode-relay://host:port`, a relay this machine is registered with\n([`crate::remote_relay`]). A device dials it with the machine's TLS pin\nand its own device key, so the relay carries bytes it cannot read.",
+          "type": "string"
         }
       ]
     },

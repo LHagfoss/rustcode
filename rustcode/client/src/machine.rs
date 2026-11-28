@@ -924,14 +924,9 @@ impl Connector {
             // An SSH route is dialled through a bridge on this computer's
             // loopback (`crate::tunnel`); it lives until this attempt ends,
             // and the connection it carried keeps its own `ssh`.
-            let bridge = match &route.ssh {
-                Some(ssh) => Some(
-                    crate::tunnel::Bridge::open(ssh)
-                        .await
-                        .map_err(|error| DialFailure::unreachable(format!("{error:#}")))?,
-                ),
-                None => None,
-            };
+            let bridge = crate::relay::RouteBridge::open(&route, machine, tokens)
+                .await
+                .map_err(|error| DialFailure::unreachable(format!("{error:#}")))?;
             let address = bridge.as_ref().map_or_else(
                 || route.address.clone(),
                 |bridge| bridge.address().to_owned(),
@@ -1231,7 +1226,11 @@ impl Connector {
         if let Some(ssh) = &route.ssh {
             return self.probe_ssh_route(probe, ssh).await;
         }
-        let Ok(target) = crate::transport::dial_target(&route.address) else {
+        let target = match crate::relay::route_target(&route.address) {
+            Some(relay) => Ok(relay.to_owned()),
+            None => crate::transport::dial_target(&route.address),
+        };
+        let Ok(target) = target else {
             probe.detail = Some("not an address this client can dial".to_owned());
             return probe;
         };

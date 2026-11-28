@@ -131,6 +131,7 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             discover(Duration::from_secs(*secs), *json).await
         }
         MachineCommands::Hub { command } => crate::hub_command::run(&config_dir, command).await,
+        MachineCommands::Relay { command } => crate::relay_command::run(&config_dir, command),
     }
 }
 
@@ -324,6 +325,7 @@ fn connection_route(route: &Route, pinned: bool) -> ConnectionRoute {
         RouteKind::Public if route.is_tls() => (ConnectionPath::Tunnel, None),
         RouteKind::Public => (ConnectionPath::Other, None),
         RouteKind::Ssh => (ConnectionPath::Loopback, None),
+        RouteKind::Relay => (ConnectionPath::Relay, None),
     };
     let mut connection = ConnectionRoute {
         path,
