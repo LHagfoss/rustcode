@@ -760,6 +760,20 @@ pub enum RemoteCommands {
         #[arg(long)]
         prefer_interface: Option<String>,
     },
+    /// Run a blind relay in the foreground (on a VPS) so machines and paired
+    /// devices on different networks can reach each other; it prints the
+    /// link a machine registers with
+    Relay {
+        /// Address to listen on
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        /// TCP port of the relay
+        #[arg(long, default_value_t = rustcode::remote_relay::DEFAULT_PORT)]
+        port: u16,
+        /// Public name or IP machines and devices should dial, when it differs from --bind
+        #[arg(long)]
+        advertise: Option<String>,
+    },
     /// Create a pairing challenge on the running gateway and show it
     Pair,
     /// List paired devices

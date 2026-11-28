@@ -226,6 +226,11 @@ async fn run_remote_command(
             )
             .await?
         }
+        RemoteCommands::Relay {
+            bind,
+            port,
+            advertise,
+        } => rustcode::remote_relay::serve(&config_dir, bind, *port, advertise.as_deref()).await?,
         RemoteCommands::Pair => {
             let (_, _, config) = rustcode::config::load_config();
             let launcher = rustcode::remote_gateway::owner_client::Launcher {
