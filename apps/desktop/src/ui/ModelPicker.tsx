@@ -330,6 +330,7 @@ function TraitsColumn({
   levels,
   effort,
   effortReason,
+  effortIsRequested,
   fast,
   fastOn,
   accounts,
@@ -345,6 +346,7 @@ function TraitsColumn({
   levels: string[];
   effort?: string | null;
   effortReason?: string;
+  effortIsRequested: boolean;
   fast: boolean;
   fastOn: boolean;
   accounts: AccountChip[];
@@ -395,7 +397,7 @@ function TraitsColumn({
       <div className="scroll-stable min-h-0 flex-1 overscroll-contain p-3">
         {(showLevels || effortReason) && (
           <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
-            <span>Effort</span>
+            <span>{effortIsRequested ? "Requested effort" : "Effort"}</span>
             <span className="min-w-0 truncate text-fg-muted">{model}</span>
           </div>
         )}
@@ -403,6 +405,11 @@ function TraitsColumn({
           <p data-menu-static className="flex items-start gap-1.5 px-2 pb-1 text-caption text-fg-faint">
             <Lock size={10} className="mt-[2px] shrink-0" />
             <span>{effortReason}</span>
+          </p>
+        )}
+        {showLevels && effortIsRequested && (
+          <p data-menu-static className="px-2 pb-1 text-caption text-fg-muted">
+            Your model and provider determine which levels apply. Some models still think with Off selected.
           </p>
         )}
         {showLevels &&
@@ -1330,6 +1337,7 @@ export function ModelPicker({ thread }: { thread?: ThreadState }) {
             levels={efforts}
             effort={effort}
             effortReason={effortReason}
+            effortIsRequested={(isNew ? effective.harness : thread?.harness?.id) === "pi"}
             fast={!!fast}
             fastOn={!!fast?.currentBool}
             accounts={allAccounts}
