@@ -25,6 +25,27 @@ pub(crate) fn online_retry(command: &[String], error: &str) -> Option<Vec<String
     )
 }
 
+pub(crate) fn with_pi_steering(harness: &super::ResolvedHarness) -> std::borrow::Cow<'_, [String]> {
+    use base64::Engine as _;
+    use std::borrow::Cow;
+
+    match harness.command.as_slice() {
+        [program, .., package]
+            if harness.id == "pi" && program == "npx" && package == super::PI_ACP =>
+        {
+            let loader =
+                base64::engine::general_purpose::STANDARD.encode(include_str!("pi_steering.mjs"));
+            let mut command = harness.command.clone();
+            command.insert(
+                1,
+                format!("--node-options=--import=data:text/javascript;base64,{loader}"),
+            );
+            Cow::Owned(command)
+        }
+        command => Cow::Borrowed(command),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
