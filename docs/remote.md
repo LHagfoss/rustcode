@@ -1433,11 +1433,19 @@ rc machines hub join vps --access threads
   The hub keeps the last 20 deliveries per member with their outcome
   (ran, or refused and why). Anything else for an offline member fails at
   once, naming it and when it was last seen.
-- **In the app**, Settings › Machines › *Hub* does the same: a switch makes
-  this computer the hub and lists its members (linked or offline, their
-  ceiling, calls waiting), and on a member *Link to a hub* picks the paired hub,
-  its access and whether to ask, with *Leave* to undo. The app runs these
-  commands (`apps/desktop/src-tauri/src/hub.rs`).
+- **In the app**, Settings › Machines › *Hub* picks the hub for the whole
+  fleet in one place: *No hub*, *This computer*, or any connected machine
+  (a Linux one is marked *suggested*, since a server usually stays on). The
+  app turns the hub on there (`rc machines hub on`, over
+  `_rustcode/machine/exec` for another machine), and this computer and every
+  connected machine join it at Full access without asking: they are your own
+  machines. A machine that was offline keeps its old role until you pick the
+  hub again; the toast names any that did not change and why. On the hub the
+  group lists its members (linked or offline, their ceiling, calls waiting),
+  and on a member *Leave* unlinks just that computer. A narrower ceiling or
+  asking before each change stays a CLI choice (`rc machines hub join
+  --access … --ask true`). The app runs these commands
+  (`apps/desktop/src-tauri/src/hub.rs`, `apps/desktop/src/state/hubFleet.ts`).
 - `rc machines hub status` shows the role and, on the hub, each member
   with its state, ceiling, waiting calls and its last three deliveries, for
   example `delivered message_session 2026-11-18 21:04 UTC: refused (approval
