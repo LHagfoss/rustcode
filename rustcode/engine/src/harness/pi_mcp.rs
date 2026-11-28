@@ -202,10 +202,9 @@ mod tests {
         let (name, script) = wrapper(cfg!(windows));
         assert_eq!(installed_wrapper.file_name().unwrap(), name);
         assert_eq!(std::fs::read_to_string(installed_wrapper).unwrap(), script);
-        assert!(
-            std::fs::read_to_string(get("RUSTCODE_PI_EXTENSION").unwrap())
-                .unwrap()
-                .contains("mcp__rustcode__")
+        assert_eq!(
+            std::fs::read_to_string(get("RUSTCODE_PI_EXTENSION").unwrap()).unwrap(),
+            EXTENSION
         );
     }
 
